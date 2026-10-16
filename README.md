@@ -23,7 +23,11 @@ node src/cli.js --cwd ./mon-projet --model qwen2.5:14b "tâche"   # mode headles
 - **Barrière de test** : l'agent ne peut pas conclure tant qu'il a du code modifié non exécuté
   avec succès. Si une *commande de test* est configurée, elle est lancée automatiquement et doit passer.
 - **Arrêt anticipé** de la génération dès qu'une action nécessite un résultat (pas de résultats inventés).
-- **Gestion du contexte** : sorties tronquées, anciens résultats compactés, `num_ctx` réglable (Ollama natif).
+- **Gestion du contexte** : sorties d'outils bornées, `num_ctx` réglable (Ollama natif), et **compactage** :
+  à 80 % du budget, les anciens messages sont remplacés par un résumé (généré par le modèle, validé, avec repli)
+  plus des faits extraits mécaniquement (fichiers modifiés, dernières commandes). Compacter rarement mais beaucoup
+  garde le début du prompt stable, donc le cache du serveur reste utilisable. L'estimation des tokens est
+  calibrée sur les comptes réels renvoyés par le serveur.
 - Détection de boucles, relance si le modèle colle du code au lieu de l'écrire.
 - Notes de projet lues depuis `AGENTS.md` / `LOCAL_CODEX.md` / `CLAUDE.md`.
 
@@ -36,6 +40,8 @@ node src/cli.js --cwd ./mon-projet --model qwen2.5:14b "tâche"   # mode headles
   disparaît du prompt système (prompt plus court) et est refusé si le modèle l'utilise quand même.
 - **Prompt système éditable par conversation** (bouton « Prompt système ») : on voit le prompt généré, on peut le
   modifier, il est enregistré avec la conversation. Un badge « modifié » signale un prompt personnalisé.
+- **Jauge de contexte** sous la saisie (le trait marque le seuil de compactage) ; un clic compacte à la demande.
+  Les résumés apparaissent dans le fil, dépliables.
 - **Visualiseur** avec coloration syntaxique et aperçu d'images ; les chemins dans les actions de l'agent sont cliquables.
 
 ## Structure

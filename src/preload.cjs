@@ -22,6 +22,9 @@ contextBridge.exposeInMainWorld('api', {
   getSystemPrompt: () => ipcRenderer.invoke('prompt:get'),
   setSystemPrompt: (text) => ipcRenderer.invoke('prompt:set', text),
 
+  getContext: () => ipcRenderer.invoke('context:get'),
+  compactContext: () => ipcRenderer.invoke('context:compact'),
+
   listFiles: (rel) => ipcRenderer.invoke('files:list', rel),
   readFile: (rel) => ipcRenderer.invoke('files:read', rel),
   openFileExternal: (rel) => ipcRenderer.invoke('files:openExternal', rel),

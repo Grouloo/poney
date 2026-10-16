@@ -6,7 +6,7 @@ import crypto from 'node:crypto';
 
 const MAX_STORED_OUTPUT = 20000;
 // Streaming events are redundant with assistant_end / action_end.
-const SKIPPED_EVENTS = new Set(['delta', 'action_output', 'turn_start']);
+const SKIPPED_EVENTS = new Set(['delta', 'action_output', 'turn_start', 'context', 'compaction_start']);
 
 export class ConversationStore {
   constructor(dir) {

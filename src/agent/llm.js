@@ -34,7 +34,8 @@ async function checkResponse(res) {
 }
 
 /**
- * Yields {type: 'text' | 'thinking', text} chunks.
+ * Yields {type: 'text' | 'thinking', text} chunks, and at the end (if the
+ * server reports it) {type: 'usage', promptTokens, outputTokens}.
  */
 export async function* streamChat({ provider, baseUrl, apiKey, model, messages, numCtx, temperature, maxTokens, signal }) {
   if (!model) throw new Error('No model selected.');
@@ -58,7 +59,10 @@ export async function* streamChat({ provider, baseUrl, apiKey, model, messages, 
       const m = data.message || {};
       if (m.thinking) yield { type: 'thinking', text: m.thinking };
       if (m.content) yield { type: 'text', text: m.content };
-      if (data.done) return;
+      if (data.done) {
+        if (data.prompt_eval_count) yield { type: 'usage', promptTokens: data.prompt_eval_count, outputTokens: data.eval_count || 0 };
+        return;
+      }
     }
     return;
   }
@@ -69,7 +73,7 @@ export async function* streamChat({ provider, baseUrl, apiKey, model, messages, 
     method: 'POST',
     headers,
     signal,
-    body: JSON.stringify({ model, messages, stream: true, temperature, max_tokens: maxTokens }),
+    body: JSON.stringify({ model, messages, stream: true, stream_options: { include_usage: true }, temperature, max_tokens: maxTokens }),
   });
   await checkResponse(res);
   for await (const line of readLines(res.body)) {
@@ -78,11 +82,25 @@ export async function* streamChat({ provider, baseUrl, apiKey, model, messages, 
     if (payload === '[DONE]') return;
     let data;
     try { data = JSON.parse(payload); } catch { continue; }
+    if (data.usage?.prompt_tokens) {
+      yield { type: 'usage', promptTokens: data.usage.prompt_tokens, outputTokens: data.usage.completion_tokens || 0 };
+    }
     const delta = data.choices?.[0]?.delta || {};
     const thinking = delta.reasoning_content || delta.reasoning;
     if (thinking) yield { type: 'thinking', text: thinking };
     if (delta.content) yield { type: 'text', text: delta.content };
   }
+}
+
+/** Non-streaming convenience: returns the full text (thinking excluded) and usage. */
+export async function complete(opts) {
+  let text = '';
+  let usage = null;
+  for await (const chunk of streamChat(opts)) {
+    if (chunk.type === 'text') text += chunk.text;
+    else if (chunk.type === 'usage') usage = chunk;
+  }
+  return { text, usage };
 }
 
 export async function listModels({ provider, baseUrl, apiKey }) {

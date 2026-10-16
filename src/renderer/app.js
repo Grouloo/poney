@@ -123,6 +123,7 @@ form.addEventListener('change', async (e) => {
   }
   settings = await window.api.setConfig(patch);
   renderSettings();
+  refreshGauge();
   if (['provider', 'baseUrl', 'apiKey'].includes(el.name)) refreshModels();
   if (el.name === 'model') refreshModels();
 });
@@ -157,6 +158,7 @@ $('newBtn').onclick = async () => {
   clearTranscript();
   refreshConversations();
   refreshPromptBadge();
+  refreshGauge();
 };
 
 function onWorkspaceChanged() {
@@ -166,6 +168,7 @@ function onWorkspaceChanged() {
   refreshConversations();
   refreshTree();
   refreshPromptBadge();
+  refreshGauge();
 }
 
 function clearTranscript() {
@@ -361,6 +364,22 @@ function onEvent(ev) {
     case 'notice':
       add(div('notice', esc(ev.text)));
       break;
+    case 'context':
+      if (!replaying) renderGauge(ev);
+      break;
+    case 'compaction_start':
+      document.querySelector('.compaction.pending')?.remove();
+      add(div('compaction pending', '<span class="spin">◌</span> Compactage du contexte : résumé des anciens messages…'));
+      break;
+    case 'compaction': {
+      document.querySelector('.compaction.pending')?.remove();
+      const d = document.createElement('details');
+      d.className = 'compaction';
+      d.innerHTML = `<summary>🗜 Contexte compacté : ${fmtTokens(ev.before)} → ${fmtTokens(ev.after)} tokens (${ev.removed} messages résumés)</summary><pre></pre>`;
+      d.querySelector('pre').textContent = ev.summary;
+      add(d);
+      break;
+    }
     case 'error':
       add(div('error', esc(ev.message)));
       break;
@@ -476,6 +495,7 @@ async function openConversation(id) {
   transcript.scrollTop = transcript.scrollHeight;
   refreshConversations();
   refreshPromptBadge();
+  refreshGauge();
   input.focus();
 }
 
@@ -685,6 +705,58 @@ $('promptSave').onclick = async () => {
   }
   $('promptBadge').classList.toggle('hidden', !promptInfo.custom);
   promptDialog.close();
+  refreshGauge();
+};
+
+// ---------- context gauge ----------
+const fmtTokens = (n) => (n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n));
+
+function renderGauge(c) {
+  const g = $('ctxGauge');
+  if (!c) {
+    g.querySelector('.gauge-text').textContent = 'contexte';
+    g.querySelector('.gauge-fill').style.width = '0';
+    g.title = '';
+    return;
+  }
+  const pct = Math.min(100, (c.used / c.numCtx) * 100);
+  g.querySelector('.gauge-fill').style.width = `${pct}%`;
+  g.querySelector('.gauge-mark').style.left = `${(c.compactAt / c.numCtx) * 100}%`;
+  g.querySelector('.gauge-text').textContent = `${fmtTokens(c.used)} / ${fmtTokens(c.numCtx)}`;
+  g.classList.toggle('warn', c.used >= c.compactAt * 0.85);
+  g.classList.toggle('full', c.used >= c.limit);
+  g.title = [
+    `Contexte utilisé (estimé) : ${c.used} tokens sur ${c.numCtx}`,
+    `Compactage automatique à ${c.compactAt} tokens (trait vertical)`,
+    c.measured ? `Dernière mesure du serveur : ${c.measured} tokens` : '',
+    'Cliquer pour compacter maintenant',
+  ].filter(Boolean).join('\n');
+}
+
+async function refreshGauge() {
+  try {
+    renderGauge(await window.api.getContext());
+  } catch {
+    renderGauge(null);
+  }
+}
+
+$('ctxGauge').onclick = async () => {
+  if (running) return;
+  if (!confirm('Compacter maintenant ? Les anciens messages seront remplacés par un résumé (le fil affiché reste intact).')) return;
+  setRunning(true);
+  $('status').textContent = 'Compactage…';
+  try {
+    const r = await window.api.compactContext();
+    if (!r.compacted) $('status').textContent = r.reason || 'Rien à compacter.';
+  } catch (e) {
+    document.querySelector('.compaction.pending')?.remove();
+    add(div('error', esc(errorText(e))));
+  } finally {
+    setRunning(false);
+    if ($('status').textContent === 'L’agent travaille…') $('status').textContent = '';
+    refreshGauge();
+  }
 };
 
 // ---------- init ----------
@@ -694,4 +766,5 @@ refreshModels();
 refreshConversations();
 refreshTree();
 refreshPromptBadge();
+refreshGauge();
 input.focus();

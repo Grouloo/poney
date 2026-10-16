@@ -178,6 +178,19 @@ ipcMain.handle('prompt:set', async (_, text) => {
   return { default: def, custom: a.systemPrompt, running: a.running };
 });
 
+ipcMain.handle('context:get', async () => {
+  if (!settings.workspace) return null;
+  return getAgent().contextStats();
+});
+ipcMain.handle('context:compact', async () => {
+  const a = getAgent();
+  if (a.running) throw new Error('L’agent est en cours d’exécution.');
+  if (!a.messages.length) return { compacted: false, reason: 'La conversation est vide.' };
+  const r = await a.compact();
+  saveConversation();
+  return r;
+});
+
 ipcMain.handle('files:list', (_, rel) => listDir(settings.workspace, rel));
 ipcMain.handle('files:read', (_, rel) => readFileForViewer(settings.workspace, rel));
 ipcMain.handle('files:openExternal', (_, rel) => shell.openPath(path.join(settings.workspace, rel)));

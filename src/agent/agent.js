@@ -2,9 +2,14 @@ import { EventEmitter } from 'node:events';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { streamChat } from './llm.js';
+import { streamChat, complete } from './llm.js';
 import { TOOLS, buildSystemPrompt, parseActions, splitThinking, formatResult, isToolEnabled } from './protocol.js';
 import { executeAction, runShell, truncateMiddle } from './tools.js';
+import {
+  COMPACT_AT, KEEP_RECENT, SUMMARY_MAX_TOKENS, DEFAULT_CHARS_PER_TOKEN,
+  makeEstimator, historyBudget, historyTokens, splitForCompaction, extractFacts, buildSummaryRequest, cleanSummary,
+  buildSummaryMessage, calibrate, SUMMARY_MARKER,
+} from './context.js';
 
 export const DEFAULT_CONFIG = {
   provider: 'ollama', // 'ollama' | 'openai'
@@ -24,7 +29,13 @@ export const DEFAULT_CONFIG = {
 };
 
 const PROJECT_NOTE_FILES = ['AGENTS.md', 'LOCAL_CODEX.md', 'CLAUDE.md'];
-const estimateTokens = (s) => Math.ceil(s.length / 3.2);
+/** The user request carried by a message (unwraps a compaction summary). */
+function taskFromMessage(content) {
+  if (!content.startsWith(SUMMARY_MARKER)) return content;
+  const m = content.match(/\[CURRENT TASK\]\n([\s\S]*?)\n\nContinue the task from here\./);
+  return m ? m[1] : null;
+}
+
 let nextId = Date.now(); // unique across restarts, since saved conversations are replayed by id
 
 export class Agent extends EventEmitter {
@@ -38,6 +49,18 @@ export class Agent extends EventEmitter {
     this.running = false;
     this.abort = null;
     this.systemPrompt = null; // custom prompt for this conversation; null = generated default
+    this.charsPerToken = DEFAULT_CHARS_PER_TOKEN; // calibrated from real token counts
+    this.calibratedFor = null;
+    this.lastUsage = null; // last token counts reported by the server
+  }
+
+  /** Token estimator for the current model (calibration is reset when the model changes). */
+  get est() {
+    if (this.calibratedFor !== this.config.model) {
+      this.calibratedFor = this.config.model;
+      this.charsPerToken = DEFAULT_CHARS_PER_TOKEN;
+    }
+    return makeEstimator(this.charsPerToken);
   }
 
   /** The generated prompt, which follows the settings (tool toggles, test command, project notes). */
@@ -61,6 +84,8 @@ export class Agent extends EventEmitter {
     this.messages = [];
     this.untested = false;
     this.systemPrompt = null;
+    this.lastUsage = null;
+    this.currentTask = null;
   }
 
   stop() {
@@ -81,10 +106,12 @@ export class Agent extends EventEmitter {
 
   /** Builds the message list sent to the model, compacting old turns to fit num_ctx. */
   buildPrompt(system) {
+    // Normally maybeCompact() keeps the history within budget; the passes below
+    // are a safety net (e.g. a single huge message, or a failed compaction).
+    const est = this.est;
     const msgs = this.messages.map((m) => ({ ...m }));
-    const reserve = Math.min(this.config.maxTokens, Math.floor(this.config.numCtx / 3));
-    const budget = this.config.numCtx - reserve - estimateTokens(system) - 200;
-    const total = () => msgs.reduce((n, m) => n + estimateTokens(m.content) + 4, 0);
+    const budget = historyBudget(this.config, est(system));
+    const total = () => historyTokens(msgs, est);
     if (total() <= budget) return [{ role: 'system', content: system }, ...msgs];
 
     // Pass 1: shrink old tool results and old file bodies, oldest first, keeping the last 4 messages intact.
@@ -122,6 +149,92 @@ export class Agent extends EventEmitter {
     return [{ role: 'system', content: system }, ...merged];
   }
 
+  // ----- context gauge & compaction -----
+
+  /** Current context usage, for the UI gauge. */
+  async contextStats(system) {
+    system ??= this.systemPrompt ?? await this.defaultSystemPrompt();
+    const est = this.est;
+    const systemTokens = est(system);
+    const budget = historyBudget(this.config, systemTokens);
+    return {
+      type: 'context',
+      used: systemTokens + historyTokens(this.messages, est),
+      numCtx: this.config.numCtx,
+      compactAt: systemTokens + Math.floor(budget * COMPACT_AT),
+      limit: systemTokens + budget,
+      measured: this.lastUsage ? this.lastUsage.promptTokens + this.lastUsage.outputTokens : null,
+    };
+  }
+
+  async emitContext(system) {
+    this.emit('event', await this.contextStats(system));
+  }
+
+  /**
+   * Replaces the oldest messages with a summary when the history passes
+   * COMPACT_AT of its budget (or always, with force). Returns a result object.
+   */
+  async maybeCompact(system, signal, { force = false } = {}) {
+    const est = this.est;
+    const budget = historyBudget(this.config, est(system));
+    const before = historyTokens(this.messages, est);
+    if (!force && before <= budget * COMPACT_AT) return { compacted: false };
+
+    const { old, recent } = splitForCompaction(this.messages, Math.floor(budget * KEEP_RECENT), est);
+    if (old.length < 2) return { compacted: false, reason: 'Pas assez de messages anciens à résumer.' };
+
+    this.emit('event', { type: 'compaction_start' });
+    const turnStart = this.turnStartIndex ?? this.messages.length;
+    // The request of the current task, if it is about to be summarized. After a
+    // previous compaction the first message is a summary: take the request it carries.
+    const task = turnStart < old.length ? (this.currentTask ?? taskFromMessage(this.messages[turnStart].content)) : null;
+
+    // The summarizer sees the old part only; leave room for its own answer.
+    const maxChars = Math.max(4000, Math.floor((this.config.numCtx - SUMMARY_MAX_TOKENS - 600) * this.charsPerToken * 0.85));
+    // Two attempts; if the model still copies the transcript or ignores the
+    // format, keep only the mechanical facts (files changed, commands).
+    let summary = null;
+    for (let attempt = 0; attempt < 2 && !summary; attempt++) {
+      try {
+        const r = await complete({
+          ...this.config,
+          maxTokens: SUMMARY_MAX_TOKENS,
+          temperature: attempt === 0 ? 0.1 : 0.4,
+          signal,
+          messages: buildSummaryRequest(old, maxChars),
+        });
+        summary = cleanSummary(r.text);
+      } catch (e) {
+        if (signal?.aborted) throw e;
+        break;
+      }
+    }
+    summary ??= '(automatic summary unavailable: see the facts below)';
+
+    const content = buildSummaryMessage({ summary, facts: extractFacts(old), task });
+    this.messages = [{ role: 'user', content }, ...recent];
+    this.turnStartIndex = task ? 0 : turnStart - old.length + 1;
+    const after = historyTokens(this.messages, est);
+    this.emit('event', { type: 'compaction', before, after, removed: old.length, summary: content });
+    await this.emitContext(system);
+    return { compacted: true, before, after };
+  }
+
+  /** Manual compaction, from the UI. */
+  async compact() {
+    if (this.running) throw new Error('Agent is running.');
+    this.running = true;
+    this.abort = new AbortController();
+    try {
+      const system = this.systemPrompt ?? await this.defaultSystemPrompt();
+      return await this.maybeCompact(system, this.abort.signal, { force: true });
+    } finally {
+      this.running = false;
+      this.abort = null;
+    }
+  }
+
   // ----- generation -----
 
   async generate(system, signal) {
@@ -133,12 +246,19 @@ export class Agent extends EventEmitter {
     let text = '';
     let thinking = '';
     let cutAt = -1;
+    const prompt = this.buildPrompt(system);
+    const promptChars = prompt.reduce((n, m) => n + m.content.length, 0);
     try {
       for await (const chunk of streamChat({
         ...this.config,
-        messages: this.buildPrompt(system),
+        messages: prompt,
         signal: ctrl.signal,
       })) {
+        if (chunk.type === 'usage') {
+          this.lastUsage = chunk;
+          this.charsPerToken = calibrate(this.charsPerToken, promptChars, chunk.promptTokens);
+          continue;
+        }
         if (chunk.type === 'thinking') {
           thinking += chunk.text;
           this.emit('event', { type: 'delta', id, kind: 'thinking', text: chunk.text });
@@ -179,6 +299,7 @@ export class Agent extends EventEmitter {
     const { signal } = this.abort;
     const config = this.config;
     this.turnStartIndex = this.messages.length;
+    this.currentTask = userText;
     this.messages.push({ role: 'user', content: userText });
     this.emit('event', { type: 'turn_start' });
 
@@ -202,6 +323,8 @@ export class Agent extends EventEmitter {
           notice(`Limite de ${config.maxSteps} étapes atteinte. Envoyez "continue" pour poursuivre.`);
           break;
         }
+        const c = await this.maybeCompact(system, signal);
+        if (!c.compacted) await this.emitContext(system);
         const gen = await this.generate(system, signal);
         const { actions, text: prose } = parseActions(gen.text);
         this.emit('event', { type: 'assistant_end', id: gen.id, text: prose, thinking: gen.thinking, hasActions: actions.length > 0 });
@@ -333,6 +456,7 @@ export class Agent extends EventEmitter {
     } finally {
       this.running = false;
       this.abort = null;
+      await this.emitContext(system).catch(() => {});
       this.emit('event', { type: 'turn_end', reason });
     }
   }

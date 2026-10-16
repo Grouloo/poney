@@ -55,7 +55,13 @@
       <button id="sendBtn" class="primary">Envoyer</button>
     </div>
     <div class="statusline">
-      <span id="status"></span>
+      <div class="status-left">
+        <button id="ctxGauge" class="gauge" type="button">
+          <span class="gauge-bar"><span class="gauge-fill"></span><span class="gauge-mark"></span></span>
+          <span class="gauge-text">contexte</span>
+        </button>
+        <span id="status"></span>
+      </div>
       <div class="toggles">
         <label class="toggle" title="Autoriser l’agent à chercher sur le web et lire des pages">
           <input type="checkbox" id="webEnabled"> Web
