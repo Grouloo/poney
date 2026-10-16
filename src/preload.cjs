@@ -19,6 +19,9 @@ contextBridge.exposeInMainWorld('api', {
   deleteConversation: (id) => ipcRenderer.invoke('conversations:delete', id),
   onConversationsChanged: (fn) => ipcRenderer.on('conversations:changed', (_, id) => fn(id)),
 
+  getSystemPrompt: () => ipcRenderer.invoke('prompt:get'),
+  setSystemPrompt: (text) => ipcRenderer.invoke('prompt:set', text),
+
   listFiles: (rel) => ipcRenderer.invoke('files:list', rel),
   readFile: (rel) => ipcRenderer.invoke('files:read', rel),
   openFileExternal: (rel) => ipcRenderer.invoke('files:openExternal', rel),

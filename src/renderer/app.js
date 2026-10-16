@@ -156,6 +156,7 @@ $('newBtn').onclick = async () => {
   await window.api.reset();
   clearTranscript();
   refreshConversations();
+  refreshPromptBadge();
 };
 
 function onWorkspaceChanged() {
@@ -164,6 +165,7 @@ function onWorkspaceChanged() {
   expanded.clear();
   refreshConversations();
   refreshTree();
+  refreshPromptBadge();
 }
 
 function clearTranscript() {
@@ -473,6 +475,7 @@ async function openConversation(id) {
   }
   transcript.scrollTop = transcript.scrollHeight;
   refreshConversations();
+  refreshPromptBadge();
   input.focus();
 }
 
@@ -623,10 +626,72 @@ $('viewerReload').onclick = () => openPath && openFile(openPath, { keepScroll: t
 $('viewerOpen').onclick = () => openPath && window.api.openFileExternal(openPath);
 $('viewerReveal').onclick = () => openPath && window.api.revealFile(openPath);
 
+// ---------- system prompt ----------
+const promptDialog = $('promptDialog');
+let promptInfo = null;
+
+const errorText = (e) => e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+
+async function refreshPromptBadge() {
+  try {
+    promptInfo = await window.api.getSystemPrompt();
+  } catch {
+    promptInfo = null;
+  }
+  $('promptBadge').classList.toggle('hidden', !promptInfo?.custom);
+}
+
+function updatePromptMeta() {
+  const text = $('promptText').value;
+  const custom = text.trim() !== promptInfo.default.trim();
+  $('promptState').textContent = custom ? 'personnalisé' : 'par défaut';
+  $('promptState').classList.toggle('custom', custom);
+  $('promptTokens').textContent = `≈ ${Math.ceil(text.length / 3.2)} tokens`;
+  $('promptReset').disabled = !custom;
+}
+
+$('promptBtn').onclick = async () => {
+  try {
+    promptInfo = await window.api.getSystemPrompt();
+  } catch (e) {
+    $('status').textContent = errorText(e);
+    return;
+  }
+  $('promptText').value = promptInfo.custom ?? promptInfo.default;
+  $('promptNote').textContent = [
+    'Ce prompt s’applique uniquement à la conversation en cours et est enregistré avec elle.',
+    'Un prompt personnalisé est utilisé tel quel : il ne suit plus les interrupteurs Web / Terminal ni la commande de test (les outils désactivés restent bloqués).',
+    promptInfo.running ? 'L’agent travaille : la modification s’appliquera au prochain message.' : '',
+  ].filter(Boolean).join(' ');
+  updatePromptMeta();
+  promptDialog.showModal();
+  $('promptText').focus();
+  $('promptText').setSelectionRange(0, 0);
+  $('promptText').scrollTop = 0;
+};
+$('promptText').addEventListener('input', updatePromptMeta);
+$('promptReset').onclick = () => {
+  $('promptText').value = promptInfo.default;
+  updatePromptMeta();
+};
+$('promptCancel').onclick = () => promptDialog.close();
+$('promptCloseX').onclick = () => promptDialog.close();
+$('promptSave').onclick = async () => {
+  try {
+    promptInfo = await window.api.setSystemPrompt($('promptText').value);
+  } catch (e) {
+    $('promptNote').textContent = errorText(e);
+    return;
+  }
+  $('promptBadge').classList.toggle('hidden', !promptInfo.custom);
+  promptDialog.close();
+};
+
 // ---------- init ----------
 settings = await window.api.getSettings();
 renderSettings();
 refreshModels();
 refreshConversations();
 refreshTree();
+refreshPromptBadge();
 input.focus();

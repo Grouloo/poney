@@ -37,6 +37,19 @@ export class Agent extends EventEmitter {
     this.untested = false; // files changed since the last successful command
     this.running = false;
     this.abort = null;
+    this.systemPrompt = null; // custom prompt for this conversation; null = generated default
+  }
+
+  /** The generated prompt, which follows the settings (tool toggles, test command, project notes). */
+  async defaultSystemPrompt() {
+    return buildSystemPrompt({
+      cwd: this.cwd,
+      platform: `${os.platform()} ${os.arch()}`,
+      projectNotes: await this.loadProjectNotes(),
+      testCommand: this.config.testCommand,
+      shell: this.config.shellEnabled !== false,
+      web: this.config.webEnabled !== false,
+    });
   }
 
   get maxResultChars() {
@@ -47,6 +60,7 @@ export class Agent extends EventEmitter {
     this.stop();
     this.messages = [];
     this.untested = false;
+    this.systemPrompt = null;
   }
 
   stop() {
@@ -168,14 +182,7 @@ export class Agent extends EventEmitter {
     this.messages.push({ role: 'user', content: userText });
     this.emit('event', { type: 'turn_start' });
 
-    const system = buildSystemPrompt({
-      cwd: this.cwd,
-      platform: `${os.platform()} ${os.arch()}`,
-      projectNotes: await this.loadProjectNotes(),
-      testCommand: config.testCommand,
-      shell: config.shellEnabled !== false,
-      web: config.webEnabled !== false,
-    });
+    const system = this.systemPrompt ?? await this.defaultSystemPrompt();
     const shellOn = config.shellEnabled !== false;
 
     let changedThisTurn = false;

@@ -223,3 +223,27 @@ body.no-sidebar #sidebar { display: none; }
 .viewer-body img { max-width: 100%; display: block; margin: 16px auto; background: repeating-conic-gradient(#8883 0 25%, transparent 0 50%) 0 0 / 16px 16px; }
 .card .summary.link { cursor: pointer; }
 .card .summary.link:hover { color: var(--accent); text-decoration: underline; }
+
+/* ---------- system prompt editor ---------- */
+.badge {
+  margin-left: 6px; font-size: 10.5px; padding: 1px 6px; border-radius: 6px;
+  background: color-mix(in srgb, var(--warn) 22%, transparent); color: var(--warn);
+}
+.prompt-dialog {
+  width: min(900px, 92vw); height: min(780px, 88vh); padding: 0; border: 1px solid var(--border);
+  border-radius: 12px; background: var(--panel); color: var(--text); box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+}
+.prompt-dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
+.prompt-form { display: flex; flex-direction: column; height: 100%; }
+.prompt-head { display: flex; align-items: center; gap: 8px; padding: 12px 14px 4px 18px; }
+.prompt-head h2 { margin: 0; font-size: 16px; }
+.prompt-head .spacer, .prompt-foot .spacer { flex: 1; }
+.prompt-head .tag { font-size: 11px; color: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 0 6px; }
+.prompt-head .tag.custom { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 50%, var(--border)); }
+.prompt-note { margin: 4px 18px 10px; color: var(--muted); font-size: 12.5px; }
+#promptText {
+  flex: 1; margin: 0 18px; resize: none; background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  padding: 12px 14px; font: 12.5px/1.55 var(--mono); outline: none; color: var(--text);
+}
+#promptText:focus { border-color: var(--accent-2); }
+.prompt-foot { display: flex; align-items: center; gap: 8px; padding: 12px 18px 16px; }

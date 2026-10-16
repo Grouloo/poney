@@ -34,6 +34,8 @@ node src/cli.js --cwd ./mon-projet --model qwen2.5:14b "tâche"   # mode headles
 - **Navigateur de fichiers** qui se met à jour quand l'agent écrit, et révèle le fichier modifié.
 - **Interrupteurs Web / Terminal** sous la zone de saisie (et `--no-web` / `--no-shell` en CLI) : un outil désactivé
   disparaît du prompt système (prompt plus court) et est refusé si le modèle l'utilise quand même.
+- **Prompt système éditable par conversation** (bouton « Prompt système ») : on voit le prompt généré, on peut le
+  modifier, il est enregistré avec la conversation. Un badge « modifié » signale un prompt personnalisé.
 - **Visualiseur** avec coloration syntaxique et aperçu d'images ; les chemins dans les actions de l'agent sont cliquables.
 
 ## Structure

@@ -75,6 +75,7 @@ function saveConversation() {
   if (!conv || !agent) return;
   conv.messages = agent.messages;
   conv.untested = agent.untested;
+  conv.systemPrompt = agent.systemPrompt;
   store.save(conv);
   send('conversations:changed', conv.id);
 }
@@ -121,7 +122,10 @@ ipcMain.handle('models:list', async (_, cfg) => listModels({ ...settings.config,
 ipcMain.handle('agent:send', async (_, text) => {
   const a = getAgent();
   if (a.running) throw new Error('L’agent est déjà en cours d’exécution.');
-  if (!conv) conv = store.create(settings.workspace, text);
+  if (!conv) {
+    conv = store.create(settings.workspace, text);
+    conv.systemPrompt = a.systemPrompt; // edited before the first message
+  }
   store.record(conv, { type: 'user_message', text });
   store.save(conv);
   send('conversations:changed', conv.id);
@@ -147,6 +151,7 @@ ipcMain.handle('conversations:open', (_, id) => {
   a.reset();
   a.messages = loaded.messages;
   a.untested = loaded.untested;
+  a.systemPrompt = loaded.systemPrompt ?? null;
   conv = loaded;
   return { events: loaded.events, settings };
 });
@@ -156,6 +161,21 @@ ipcMain.handle('conversations:delete', (_, id) => {
     startNewConversation();
   }
   store.delete(id);
+});
+
+ipcMain.handle('prompt:get', async () => {
+  const a = getAgent();
+  return { default: await a.defaultSystemPrompt(), custom: a.systemPrompt, running: a.running };
+});
+ipcMain.handle('prompt:set', async (_, text) => {
+  const a = getAgent();
+  const def = await a.defaultSystemPrompt();
+  a.systemPrompt = text == null || text.trim() === def.trim() ? null : text;
+  if (conv) {
+    conv.systemPrompt = a.systemPrompt;
+    store.save(conv);
+  }
+  return { default: def, custom: a.systemPrompt, running: a.running };
 });
 
 ipcMain.handle('files:list', (_, rel) => listDir(settings.workspace, rel));

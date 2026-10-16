@@ -17,6 +17,7 @@
     </button>
     <select id="modelSelect" class="chip" title="Modèle"></select>
     <div class="spacer"></div>
+    <button id="promptBtn" class="ghost" title="Voir et modifier le prompt système de cette conversation">Prompt système<span id="promptBadge" class="badge hidden">modifié</span></button>
     <button id="settingsBtn" class="ghost icon" title="Réglages">⚙︎</button>
   </header>
 
@@ -82,6 +83,26 @@
     <div id="viewerBody" class="viewer-body"></div>
   </section>
   </div>
+
+  <dialog id="promptDialog" class="prompt-dialog">
+    <form method="dialog" class="prompt-form">
+      <div class="prompt-head">
+        <h2>Prompt système</h2>
+        <span id="promptState" class="tag"></span>
+        <span id="promptTokens" class="tag"></span>
+        <div class="spacer"></div>
+        <button type="button" id="promptCloseX" class="ghost icon" title="Fermer">✕</button>
+      </div>
+      <p id="promptNote" class="prompt-note"></p>
+      <textarea id="promptText" spellcheck="false"></textarea>
+      <div class="prompt-foot">
+        <button type="button" id="promptReset" class="ghost">Rétablir le prompt par défaut</button>
+        <div class="spacer"></div>
+        <button type="button" id="promptCancel" class="ghost">Annuler</button>
+        <button type="button" id="promptSave" class="primary">Enregistrer pour cette conversation</button>
+      </div>
+    </form>
+  </dialog>
 
   <aside id="settings" class="drawer hidden">
     <div class="drawer-head">
