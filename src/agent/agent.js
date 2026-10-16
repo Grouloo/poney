@@ -6,8 +6,8 @@ import { streamChat, complete } from './llm.js';
 import { TOOLS, buildSystemPrompt, parseActions, splitThinking, formatResult, isToolEnabled } from './protocol.js';
 import { executeAction, runShell, truncateMiddle } from './tools.js';
 import {
-  COMPACT_AT, KEEP_RECENT, SUMMARY_MAX_TOKENS, DEFAULT_CHARS_PER_TOKEN,
-  makeEstimator, historyBudget, historyTokens, splitForCompaction, extractFacts, buildSummaryRequest, cleanSummary,
+  SUMMARY_MAX_TOKENS, DEFAULT_CHARS_PER_TOKEN,
+  makeEstimator, contextPlan, answerTokens, isValidSample, historyTokens, splitForCompaction, extractFacts, buildSummaryRequest, cleanSummary,
   buildSummaryMessage, calibrate, SUMMARY_MARKER, filesInContext,
 } from './context.js';
 
@@ -51,6 +51,7 @@ export class Agent extends EventEmitter {
     this.systemPrompt = null; // custom prompt for this conversation; null = generated default
     this.charsPerToken = DEFAULT_CHARS_PER_TOKEN; // calibrated from real token counts
     this.calibratedFor = null;
+    this.calibrated = false; // true once a real token count has been used
     this.lastUsage = null; // last token counts reported by the server
   }
 
@@ -59,8 +60,15 @@ export class Agent extends EventEmitter {
     if (this.calibratedFor !== this.config.model) {
       this.calibratedFor = this.config.model;
       this.charsPerToken = DEFAULT_CHARS_PER_TOKEN;
+      this.calibrated = false;
     }
     return makeEstimator(this.charsPerToken);
+  }
+
+  /** How the window is shared for this system prompt (see contextPlan). */
+  plan(system) {
+    const est = this.est;
+    return contextPlan(this.config, est(system), this.calibrated);
   }
 
   /** The generated prompt, which follows the settings (tool toggles, test command, project notes). */
@@ -110,7 +118,7 @@ export class Agent extends EventEmitter {
     // are a safety net (e.g. a single huge message, or a failed compaction).
     const est = this.est;
     const msgs = this.messages.map((m) => ({ ...m }));
-    const budget = historyBudget(this.config, est(system));
+    const { budget } = this.plan(system);
     const total = () => historyTokens(msgs, est);
     if (total() <= budget) return [{ role: 'system', content: system }, ...msgs];
 
@@ -156,13 +164,14 @@ export class Agent extends EventEmitter {
     system ??= this.systemPrompt ?? await this.defaultSystemPrompt();
     const est = this.est;
     const systemTokens = est(system);
-    const budget = historyBudget(this.config, systemTokens);
+    const { budget } = this.plan(system);
     return {
       type: 'context',
       used: systemTokens + historyTokens(this.messages, est),
       numCtx: this.config.numCtx,
-      compactAt: systemTokens + Math.floor(budget * COMPACT_AT),
+      compactAt: systemTokens + budget,
       limit: systemTokens + budget,
+      calibrated: this.calibrated,
       measured: this.lastUsage ? this.lastUsage.promptTokens + this.lastUsage.outputTokens : null,
     };
   }
@@ -172,16 +181,16 @@ export class Agent extends EventEmitter {
   }
 
   /**
-   * Replaces the oldest messages with a summary when the history passes
-   * COMPACT_AT of its budget (or always, with force). Returns a result object.
+   * Replaces the oldest messages with a summary as late as possible: only when
+   * the next call would no longer fit (or always, with force).
    */
   async maybeCompact(system, signal, { force = false } = {}) {
     const est = this.est;
-    const budget = historyBudget(this.config, est(system));
+    const { budget, keep } = this.plan(system);
     const before = historyTokens(this.messages, est);
-    if (!force && before <= budget * COMPACT_AT) return { compacted: false };
+    if (!force && before <= budget) return { compacted: false };
 
-    const { old, recent } = splitForCompaction(this.messages, Math.floor(budget * KEEP_RECENT), est);
+    const { old, recent } = splitForCompaction(this.messages, keep, est);
     if (old.length < 2) return { compacted: false, reason: 'Pas assez de messages anciens à résumer.' };
 
     this.emit('event', { type: 'compaction_start' });
@@ -246,17 +255,26 @@ export class Agent extends EventEmitter {
     let text = '';
     let thinking = '';
     let cutAt = -1;
+    let doneReason = null;
     const prompt = this.buildPrompt(system);
     const promptChars = prompt.reduce((n, m) => n + m.content.length, 0);
+    // Ask for as long an answer as fits: never more than the window, so the
+    // server never has to drop the start of the prompt to make room.
+    const maxTokens = answerTokens(this.config, this.plan(system), historyTokens(prompt, this.est));
     try {
       for await (const chunk of streamChat({
         ...this.config,
+        maxTokens,
         messages: prompt,
         signal: ctrl.signal,
       })) {
+        if (chunk.type === 'done') { doneReason = chunk.reason; continue; }
         if (chunk.type === 'usage') {
           this.lastUsage = chunk;
-          this.charsPerToken = calibrate(this.charsPerToken, promptChars, chunk.promptTokens);
+          if (isValidSample(this.charsPerToken, promptChars, chunk.promptTokens)) {
+            this.charsPerToken = calibrate(this.charsPerToken, promptChars, chunk.promptTokens);
+            this.calibrated = true;
+          }
           continue;
         }
         if (chunk.type === 'thinking') {
@@ -287,7 +305,9 @@ export class Agent extends EventEmitter {
     let visible = split.text;
     if (cutAt >= 0) visible = visible.slice(0, cutAt);
     thinking += split.thinking;
-    return { id, text: visible, thinking };
+    // Cut by the length limit (not by us): the end of the answer is missing.
+    const truncated = cutAt < 0 && doneReason === 'length';
+    return { id, text: visible, thinking, truncated, contextLimited: truncated && maxTokens < this.config.maxTokens };
   }
 
   // ----- main loop -----
@@ -325,9 +345,33 @@ export class Agent extends EventEmitter {
         }
         const c = await this.maybeCompact(system, signal);
         if (!c.compacted) await this.emitContext(system);
-        const gen = await this.generate(system, signal);
-        const { actions, text: prose } = parseActions(gen.text);
+        let gen = await this.generate(system, signal);
+        // Cut because the window was full: compact now and redo this step once.
+        if (gen.contextLimited) {
+          this.emit('event', { type: 'assistant_end', id: gen.id, text: '', thinking: '', hasActions: false });
+          notice('Réponse coupée faute de place : compactage du contexte puis nouvelle tentative.');
+          await this.maybeCompact(system, signal, { force: true });
+          gen = await this.generate(system, signal);
+        }
+        // An answer cut by the length limit may end with an unfinished action
+        // (e.g. half a file in <write>): never execute those.
+        const parsed = parseActions(gen.text, { final: !gen.truncated });
+        const prose = parsed.text;
+        const actions = parsed.actions.filter((a) => a.complete);
+        const unfinished = parsed.actions.find((a) => !a.complete);
+        let cutNote = '';
+        if (gen.truncated) {
+          cutNote = unfinished
+            ? `Your message was cut at the length limit: the last <${unfinished.tool}> was unfinished and was NOT executed. Work in smaller pieces (use <edit>, or split big files).`
+            : 'Your message was cut at the length limit. Continue from where it stopped, more briefly.';
+          notice(unfinished ? `Réponse coupée (limite de longueur) : <${unfinished.tool}> incomplet, non exécuté.` : 'Réponse coupée (limite de longueur).');
+        }
         this.emit('event', { type: 'assistant_end', id: gen.id, text: prose, thinking: gen.thinking, hasActions: actions.length > 0 });
+        if (gen.truncated && !actions.length) {
+          this.messages.push({ role: 'assistant', content: gen.text.slice(0, unfinished?.start ?? gen.text.length).trim() || '(cut)' });
+          this.messages.push({ role: 'user', content: cutNote });
+          continue;
+        }
 
         // ---------- no action: the model thinks it's done ----------
         if (!actions.length) {
@@ -445,6 +489,7 @@ export class Agent extends EventEmitter {
         const skipped = actions.length - results.length;
         let content = results.join('\n');
         if (skipped > 0) content += `\n(${skipped} later action(s) were NOT run. Look at the result above first, then continue.)`;
+        if (cutNote) content += `\n${cutNote}`;
         this.messages.push({ role: 'user', content });
       }
     } catch (e) {

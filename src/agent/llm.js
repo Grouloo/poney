@@ -35,7 +35,8 @@ async function checkResponse(res) {
 
 /**
  * Yields {type: 'text' | 'thinking', text} chunks, and at the end (if the
- * server reports it) {type: 'usage', promptTokens, outputTokens}.
+ * server reports them) {type: 'usage', promptTokens, outputTokens} and
+ * {type: 'done', reason} where reason 'length' means the answer was cut.
  */
 export async function* streamChat({ provider, baseUrl, apiKey, model, messages, numCtx, temperature, maxTokens, signal }) {
   if (!model) throw new Error('No model selected.');
@@ -61,6 +62,7 @@ export async function* streamChat({ provider, baseUrl, apiKey, model, messages, 
       if (m.content) yield { type: 'text', text: m.content };
       if (data.done) {
         if (data.prompt_eval_count) yield { type: 'usage', promptTokens: data.prompt_eval_count, outputTokens: data.eval_count || 0 };
+        yield { type: 'done', reason: data.done_reason || 'stop' };
         return;
       }
     }
@@ -85,6 +87,8 @@ export async function* streamChat({ provider, baseUrl, apiKey, model, messages, 
     if (data.usage?.prompt_tokens) {
       yield { type: 'usage', promptTokens: data.usage.prompt_tokens, outputTokens: data.usage.completion_tokens || 0 };
     }
+    const finish = data.choices?.[0]?.finish_reason;
+    if (finish) yield { type: 'done', reason: finish };
     const delta = data.choices?.[0]?.delta || {};
     const thinking = delta.reasoning_content || delta.reasoning;
     if (thinking) yield { type: 'thinking', text: thinking };

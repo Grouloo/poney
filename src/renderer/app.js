@@ -727,7 +727,8 @@ function renderGauge(c) {
   g.classList.toggle('full', c.used >= c.limit);
   g.title = [
     `Contexte utilisé (estimé) : ${c.used} tokens sur ${c.numCtx}`,
-    `Compactage automatique à ${c.compactAt} tokens (trait vertical)`,
+    `Compactage automatique seulement quand l’appel suivant ne tiendrait plus : vers ${c.compactAt} tokens (trait vertical)`,
+    c.calibrated ? 'Estimation calibrée sur les comptes du serveur (marge 4 %)' : 'Estimation pas encore calibrée (marge 8 %)',
     c.measured ? `Dernière mesure du serveur : ${c.measured} tokens` : '',
     'Cliquer pour compacter maintenant',
   ].filter(Boolean).join('\n');

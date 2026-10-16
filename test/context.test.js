@@ -5,7 +5,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  makeEstimator, splitForCompaction, extractFacts, renderTranscript, calibrate, buildSummaryMessage, SUMMARY_MARKER,
+  contextPlan, answerTokens, makeEstimator, splitForCompaction, extractFacts, renderTranscript, calibrate, buildSummaryMessage, SUMMARY_MARKER,
 } from '../src/agent/context.js';
 import { Agent } from '../src/agent/agent.js';
 
@@ -63,8 +63,8 @@ function fakeOllama(handler) {
     req.on('end', () => {
       const data = JSON.parse(body);
       requests.push(data);
-      const { content, promptTokens } = handler(data, requests.length);
-      res.end(`${JSON.stringify({ message: { content }, done: false })}\n${JSON.stringify({ message: { content: '' }, done: true, prompt_eval_count: promptTokens, eval_count: 10 })}\n`);
+      const { content, promptTokens, doneReason = 'stop' } = handler(data, requests.length);
+      res.end(`${JSON.stringify({ message: { content }, done: false })}\n${JSON.stringify({ message: { content: '' }, done: true, done_reason: doneReason, prompt_eval_count: promptTokens, eval_count: 10 })}\n`);
     });
   });
   return new Promise((resolve) => server.listen(0, () => resolve({ server, requests, url: `http://localhost:${server.address().port}` })));
@@ -186,4 +186,79 @@ test('a bad summary is retried, then replaced by the facts only', async () => {
   assert.match(fake.requests[0].messages[1].content, /<\/conversation>\n\nNow write the summary/);
   assert.match(agent.messages[0].content, /summary unavailable/);
   assert.match(agent.messages[0].content, /w0\.py \(written\)/);
+});
+
+
+// ---------- just-in-time compaction ----------
+
+test('contextPlan compacts late: ~80% of a 16k window, more once calibrated', () => {
+  const cfg = { numCtx: 16384, maxTokens: 4096 };
+  const raw = contextPlan(cfg, 500, false);
+  const cal = contextPlan(cfg, 500, true);
+  assert.ok((500 + raw.budget) / 16384 > 0.78, `uncalibrated ${(500 + raw.budget) / 16384}`);
+  assert.ok((500 + cal.budget) / 16384 > 0.82, `calibrated ${(500 + cal.budget) / 16384}`);
+  assert.equal(raw.minOutput, 2048);
+  // Small window: answer room capped at a quarter of it.
+  assert.equal(contextPlan({ numCtx: 4096, maxTokens: 4096 }, 400).minOutput, 1024);
+  // Answer size: as much as fits, between minOutput and maxTokens.
+  assert.equal(answerTokens(cfg, raw, 1000), 4096);
+  assert.equal(answerTokens(cfg, raw, 13500), Math.max(2048, 16384 - 13500 - raw.margin));
+});
+
+function bigHistory(agent, pairs, words) {
+  for (let i = 0; i < pairs; i++) {
+    agent.messages.push(msg('user', `<result tool="read" path="f${i}.py" lines="1-9">\n${'data '.repeat(words)}\n</result>`));
+    agent.messages.push(msg('assistant', `<read path="f${i + 1}.py" />`));
+  }
+}
+
+test('no compaction at 70% of the window; the answer size fits the window', async () => {
+  const fake = await fakeOllama(() => ({ content: 'Done.', promptTokens: 0 }));
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-ctx-'));
+  const agent = new Agent({ cwd, config: { baseUrl: fake.url, model: 'fake', numCtx: 16384, maxTokens: 4096 } });
+  bigHistory(agent, 20, 340); // ~11k tokens: the old trigger (60%) would have compacted
+  const events = [];
+  agent.on('event', (e) => events.push(e));
+  await agent.send('next');
+  fake.server.close();
+  assert.equal(events.filter((e) => e.type === 'compaction').length, 0);
+  assert.equal(fake.requests.length, 1);
+  const req = fake.requests[0];
+  const promptTokens = req.messages.reduce((n, m) => n + Math.ceil(m.content.length / 3.2) + 4, 0);
+  assert.ok(promptTokens + req.options.num_predict <= 16384, `${promptTokens} + ${req.options.num_predict}`);
+  assert.ok(req.options.num_predict >= 2048);
+});
+
+test('an unfinished <write> cut by the length limit is not executed', async () => {
+  let n = 0;
+  const fake = await fakeOllama(() => (++n === 1
+    ? { content: 'Writing it.\n<write path="a.py">\nprint(1', promptTokens: 0, doneReason: 'length' }
+    : { content: 'Done.', promptTokens: 0 }));
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-ctx-'));
+  const agent = new Agent({ cwd, config: { baseUrl: fake.url, model: 'fake', shellEnabled: false } });
+  await agent.send('create a.py');
+  fake.server.close();
+  await assert.rejects(fs.access(path.join(cwd, 'a.py')));
+  assert.match(fake.requests[1].messages.at(-1).content, /unfinished and was NOT executed/);
+});
+
+test('an answer cut because the window is full triggers compaction and a retry', async () => {
+  const isSummary = (d) => d.messages[0].content.startsWith('You summarize');
+  let main = 0;
+  const fake = await fakeOllama((d) => {
+    if (isSummary(d)) return { content: 'Goal: g\nNext step: s', promptTokens: 0 };
+    return ++main === 1 ? { content: 'A very long answer that', promptTokens: 0, doneReason: 'length' } : { content: 'Done.', promptTokens: 0 };
+  });
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-ctx-'));
+  const agent = new Agent({ cwd, config: { baseUrl: fake.url, model: 'fake', numCtx: 8192, maxTokens: 4096 } });
+  bigHistory(agent, 10, 270); // just under the budget: no compaction up front, but a short answer room
+  const events = [];
+  agent.on('event', (e) => events.push(e));
+  await agent.send('go');
+  fake.server.close();
+  assert.ok(fake.requests[0].options.num_predict < 4096, 'answer limited by the window');
+  assert.deepEqual(fake.requests.map((d) => (isSummary(d) ? 'summary' : 'main')), ['main', 'summary', 'main']);
+  assert.equal(events.filter((e) => e.type === 'compaction').length, 1);
+  assert.equal(events.filter((e) => e.type === 'final').pop().text, 'Done.');
+  assert.ok(fake.requests[2].options.num_predict > fake.requests[0].options.num_predict);
 });

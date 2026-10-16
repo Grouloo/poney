@@ -1,14 +1,15 @@
 // Context window bookkeeping and compaction helpers (pure functions, no I/O).
 //
-// Strategy: let the history grow untouched until it reaches COMPACT_AT of the
-// budget, then replace the oldest part with one summary message so it drops to
-// about KEEP_RECENT. Compacting rarely but a lot keeps the prompt prefix stable
-// between compactions, so the model server can reuse its KV cache instead of
-// re-reading the whole prompt at every step (which is slow on local hardware).
+// Strategy: let the history grow untouched for as long as the next call still
+// fits in the window (with room for an answer and a safety margin), then replace
+// the oldest part with one summary message so it drops to about KEEP_RECENT of
+// the budget. Compacting rarely but a lot keeps the prompt prefix stable between
+// compactions, so the model server can reuse its KV cache instead of re-reading
+// the whole prompt at every step (which is slow on local hardware).
 import { parseActions } from './protocol.js';
 
-export const COMPACT_AT = 0.8; // fraction of the history budget that triggers compaction
-export const KEEP_RECENT = 0.3; // fraction of the budget kept verbatim (most recent messages)
+export const KEEP_RECENT = 0.5; // fraction of the budget kept verbatim (most recent messages)
+export const MIN_OUTPUT = 2048; // answer room guaranteed before compacting (capped by maxTokens and numCtx/4)
 export const SUMMARY_MAX_TOKENS = 700;
 export const SUMMARY_MARKER = '[CONTEXT SUMMARY';
 
@@ -18,10 +19,22 @@ export function makeEstimator(charsPerToken = DEFAULT_CHARS_PER_TOKEN) {
   return (s) => Math.ceil((s?.length || 0) / charsPerToken);
 }
 
-/** Tokens available for the conversation history (window minus answer reserve and system prompt). */
-export function historyBudget(config, systemTokens) {
-  const reserve = Math.min(config.maxTokens, Math.floor(config.numCtx / 3));
-  return config.numCtx - reserve - systemTokens - 200;
+/**
+ * How the window is shared. The history may grow up to `budget`; past that the
+ * next call would not leave `minOutput` tokens for the answer plus a `margin`
+ * for estimation errors (smaller once the estimate is calibrated on real counts).
+ */
+export function contextPlan(config, systemTokens, calibrated = false) {
+  const margin = Math.max(256, Math.floor(config.numCtx * (calibrated ? 0.04 : 0.08)));
+  const minOutput = Math.min(config.maxTokens, MIN_OUTPUT, Math.floor(config.numCtx / 4));
+  const budget = config.numCtx - systemTokens - minOutput - margin;
+  return { margin, minOutput, budget, keep: Math.floor(budget * KEEP_RECENT) };
+}
+
+/** Answer size for a prompt: as much as fits, between minOutput and maxTokens. */
+export function answerTokens(config, plan, promptTokens) {
+  const room = config.numCtx - promptTokens - plan.margin;
+  return Math.max(plan.minOutput, Math.min(config.maxTokens, room));
 }
 
 export function historyTokens(messages, est) {
@@ -171,10 +184,14 @@ export function buildSummaryMessage({ summary, facts, task }) {
  * Updates the chars-per-token ratio from a real prompt token count.
  * Ignores samples that look reduced by the server's prompt cache.
  */
-export function calibrate(current, promptChars, promptTokens) {
-  if (!promptTokens || promptChars < 2000) return current;
-  if (promptTokens < 0.6 * (promptChars / current)) return current; // probably a cache-reduced count
+export function isValidSample(current, promptChars, promptTokens) {
+  if (!promptTokens || promptChars < 2000) return false;
+  if (promptTokens < 0.6 * (promptChars / current)) return false; // probably a cache-reduced count
   const ratio = promptChars / promptTokens;
-  if (ratio < 1.8 || ratio > 5) return current;
-  return current * 0.6 + ratio * 0.4;
+  return ratio >= 1.8 && ratio <= 5;
+}
+
+export function calibrate(current, promptChars, promptTokens) {
+  if (!isValidSample(current, promptChars, promptTokens)) return current;
+  return current * 0.6 + (promptChars / promptTokens) * 0.4;
 }
