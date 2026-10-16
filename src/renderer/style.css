@@ -184,9 +184,15 @@ body.no-sidebar #sidebar { display: none; }
 .list li.active { background: color-mix(in srgb, var(--accent-2) 22%, var(--panel)); }
 .list .title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .list .when { color: var(--muted); font-size: 11px; flex-shrink: 0; }
-.list .del { visibility: hidden; background: none; border: none; color: var(--muted); padding: 0 2px; }
-.list li:hover .del { visibility: visible; }
+.list .del, .list .ren { visibility: hidden; background: none; border: none; color: var(--muted); padding: 0 2px; }
+.list li:hover .del, .list li:hover .ren { visibility: visible; }
 .list .del:hover { color: var(--err); }
+.list .ren:hover { color: var(--accent); }
+.list li.editing .when, .list li.editing .del, .list li.editing .ren { display: none; }
+.list input.rename {
+  flex: 1; min-width: 0; font-size: 13px; padding: 2px 6px; border-radius: 5px;
+  background: var(--bg); border: 1px solid var(--accent-2); color: var(--text); outline: none;
+}
 .list .empty-note { color: var(--muted); font-size: 12.5px; cursor: default; }
 
 .files-head { display: flex; align-items: center; justify-content: space-between; font-size: 12px; padding: 0 2px 4px; }

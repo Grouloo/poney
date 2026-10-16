@@ -24,7 +24,7 @@ export class ConversationStore {
     return {
       id: `${now.toString(36)}-${crypto.randomBytes(3).toString('hex')}`,
       workspace,
-      title: title.replace(/\s+/g, ' ').trim().slice(0, 80) || 'Sans titre',
+      title: ConversationStore.cleanTitle(title) || 'Sans titre',
       createdAt: now,
       updatedAt: now,
       messages: [],
@@ -42,8 +42,8 @@ export class ConversationStore {
     conv.events.push(ev);
   }
 
-  save(conv) {
-    conv.updatedAt = Date.now();
+  save(conv, { touch = true } = {}) {
+    if (touch) conv.updatedAt = Date.now();
     const target = this.file(conv.id);
     const tmp = `${target}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify(conv));
@@ -52,6 +52,18 @@ export class ConversationStore {
 
   load(id) {
     return JSON.parse(fs.readFileSync(this.file(id), 'utf8'));
+  }
+
+  static cleanTitle(title) {
+    return String(title ?? '').replace(/\s+/g, ' ').trim().slice(0, 80);
+  }
+
+  /** Renames a conversation on disk without changing its place in the list. */
+  rename(id, title) {
+    const conv = this.load(id);
+    conv.title = ConversationStore.cleanTitle(title) || conv.title;
+    this.save(conv, { touch: false });
+    return conv.title;
   }
 
   delete(id) {

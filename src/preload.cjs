@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('api', {
 
   listConversations: () => ipcRenderer.invoke('conversations:list'),
   openConversation: (id) => ipcRenderer.invoke('conversations:open', id),
+  renameConversation: (id, title) => ipcRenderer.invoke('conversations:rename', id, title),
   deleteConversation: (id) => ipcRenderer.invoke('conversations:delete', id),
   onConversationsChanged: (fn) => ipcRenderer.on('conversations:changed', (_, id) => fn(id)),
 

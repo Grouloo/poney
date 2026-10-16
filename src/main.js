@@ -155,6 +155,17 @@ ipcMain.handle('conversations:open', (_, id) => {
   conv = loaded;
   return { events: loaded.events, settings };
 });
+ipcMain.handle('conversations:rename', (_, id, title) => {
+  // The open conversation is held in memory and saved after each turn: rename
+  // it there too, or the next save would bring the old title back.
+  if (conv?.id === id) {
+    const clean = ConversationStore.cleanTitle(title);
+    if (clean) conv.title = clean;
+    store.save(conv, { touch: false });
+    return conv.title;
+  }
+  return store.rename(id, title);
+});
 ipcMain.handle('conversations:delete', (_, id) => {
   if (conv?.id === id) {
     if (agent?.running) throw new Error('L’agent est en cours d’exécution.');

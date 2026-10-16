@@ -440,7 +440,10 @@ function relativeTime(ts) {
   return new Date(ts).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
 }
 
+let renaming = false; // a title is being edited: don't rebuild the list under the cursor
+
 async function refreshConversations() {
+  if (renaming) return;
   const { current, items } = await window.api.listConversations();
   currentConversation = current;
   const list = $('convList');
@@ -452,11 +455,13 @@ async function refreshConversations() {
   for (const c of items) {
     const li = document.createElement('li');
     li.classList.toggle('active', c.id === current);
-    li.innerHTML = '<span class="title"></span><span class="when"></span><button class="del" title="Supprimer">✕</button>';
+    li.innerHTML = '<span class="title"></span><span class="when"></span><button class="ren" title="Renommer">✎</button><button class="del" title="Supprimer">✕</button>';
     li.querySelector('.title').textContent = c.title;
     li.querySelector('.title').title = c.title;
     li.querySelector('.when').textContent = relativeTime(c.updatedAt);
     li.onclick = () => openConversation(c.id);
+    li.querySelector('.ren').onclick = (e) => { e.stopPropagation(); startRename(li, c); };
+    li.querySelector('.title').ondblclick = (e) => { e.stopPropagation(); startRename(li, c); };
     li.querySelector('.del').onclick = async (e) => {
       e.stopPropagation();
       if (!confirm(`Supprimer la conversation « ${c.title} » ?`)) return;
@@ -471,6 +476,42 @@ async function refreshConversations() {
     };
     list.appendChild(li);
   }
+}
+
+function startRename(li, c) {
+  if (renaming) return;
+  renaming = true;
+  const span = li.querySelector('.title');
+  const inp = document.createElement('input');
+  inp.className = 'rename';
+  inp.value = c.title;
+  inp.maxLength = 80;
+  span.replaceWith(inp);
+  li.classList.add('editing');
+  inp.focus();
+  inp.select();
+  let done = false;
+  const finish = async (save) => {
+    if (done) return;
+    done = true;
+    const title = inp.value.trim();
+    if (save && title && title !== c.title) {
+      try {
+        await window.api.renameConversation(c.id, title);
+      } catch (e) {
+        $('status').textContent = errorText(e);
+      }
+    }
+    renaming = false;
+    refreshConversations();
+  };
+  inp.onclick = (e) => e.stopPropagation();
+  inp.ondblclick = (e) => e.stopPropagation();
+  inp.onkeydown = (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+  };
+  inp.onblur = () => finish(true);
 }
 
 async function openConversation(id) {
