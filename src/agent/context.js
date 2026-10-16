@@ -82,6 +82,26 @@ export function extractFacts(messages) {
   return lines.join('\n');
 }
 
+/**
+ * Files whose content is actually visible in the history: successfully read
+ * (the result has a line range) or written by the model. Results removed by a
+ * compaction no longer count, since the model can no longer see that content.
+ */
+export function filesInContext(messages) {
+  const seen = new Set();
+  for (const m of messages) {
+    if (m.role !== 'user') continue;
+    const re = /<result tool="(read|write)" path="([^"]*)"([^>]*)>\n([^\n]*)/g;
+    let r;
+    while ((r = re.exec(m.content))) {
+      const [, tool, file, rest, firstLine] = r;
+      if (tool === 'read' && / lines="/.test(rest)) seen.add(file);
+      if (tool === 'write' && /^(Created|Overwrote) /.test(firstLine)) seen.add(file);
+    }
+  }
+  return seen;
+}
+
 /** Renders messages as a compact transcript for the summarizer. */
 export function renderTranscript(messages, maxChars) {
   const parts = messages.map((m) => {

@@ -8,7 +8,7 @@ import { executeAction, runShell, truncateMiddle } from './tools.js';
 import {
   COMPACT_AT, KEEP_RECENT, SUMMARY_MAX_TOKENS, DEFAULT_CHARS_PER_TOKEN,
   makeEstimator, historyBudget, historyTokens, splitForCompaction, extractFacts, buildSummaryRequest, cleanSummary,
-  buildSummaryMessage, calibrate, SUMMARY_MARKER,
+  buildSummaryMessage, calibrate, SUMMARY_MARKER, filesInContext,
 } from './context.js';
 
 export const DEFAULT_CONFIG = {
@@ -343,7 +343,9 @@ export class Agent extends EventEmitter {
           if (!codeDumpNudged && /```[\w-]*\n[\s\S]{80,}?```/.test(gen.text) && /\b(create|write|fix|implement|add|update|modify|refactor|cré|écri|ajout|modifi|corrig|implémen)/i.test(userText)) {
             codeDumpNudged = true;
             notice('Code non écrit dans un fichier : relance du modèle.');
-            this.messages.push({ role: 'user', content: `You showed code in your message but did not save it. Save it with <write path="...">...</write>${shellOn ? ', then test it with <run>' : ''}.` });
+            this.messages.push({ role: 'user', content: 'You showed code in your message but did not save it. ' +
+              'For a NEW file use <write path="...">...</write>. For an EXISTING file use <edit>, or <read> it first and then <write> the COMPLETE file (never drop existing code)' +
+              `${shellOn ? '. Then test it with <run>' : ''}.` });
             continue;
           }
 
@@ -385,6 +387,8 @@ export class Agent extends EventEmitter {
 
         const results = [];
         let stopBatch = false;
+        // Files the model can see the content of (the current message has no results yet).
+        const seenFiles = filesInContext(this.messages);
         for (const action of toRun) {
           if (stopBatch) break;
           const actId = nextId++;
@@ -411,9 +415,11 @@ export class Agent extends EventEmitter {
             config,
             signal,
             maxResultChars: this.maxResultChars,
+            seenFiles,
             onOutput: (t) => this.emit('event', { type: 'action_output', id: actId, text: t }),
           });
           this.emit('event', { type: 'action_end', id: actId, ok: r.ok, output: r.output, diff: r.diff, meta: r.meta });
+          if (action.tool === 'write' && r.changed) seenFiles.add(r.changed);
 
           if (r.changed) {
             changedThisTurn = true;

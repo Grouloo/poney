@@ -20,6 +20,9 @@ node src/cli.js --cwd ./mon-projet --model qwen2.5:14b "tâche"   # mode headles
 - **Édition tolérante** : `<old>` peut avoir une indentation fausse (ré-indentation automatique),
   et en cas d'échec l'agent reçoit les lignes les plus proches du fichier.
 - **Vérification syntaxique** automatique après chaque écriture (.py, .js, .json).
+- **Garde-fou contre les réécritures de mémoire** : `<write>` sur un fichier existant est refusé si son contenu
+  n'est pas visible dans l'historique (lu avec `<read>` ou écrit par le modèle, et pas effacé par un compactage).
+  Une forte réduction d'un fichier (plus de la moitié des lignes) déclenche un avertissement.
 - **Barrière de test** : l'agent ne peut pas conclure tant qu'il a du code modifié non exécuté
   avec succès. Si une *commande de test* est configurée, elle est lancée automatiquement et doit passer.
 - **Arrêt anticipé** de la génération dès qu'une action nécessite un résultat (pas de résultats inventés).

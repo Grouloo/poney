@@ -75,7 +75,7 @@ export function buildSystemPrompt({ cwd, platform, projectNotes, testCommand, sh
     rules.push('You CANNOT run commands. After changing code, re-read it carefully to check it. Tell the user how to test it.');
   }
   rules.push('Work in small steps, then wait for the results. Never invent results.');
-  rules.push('Use <write> for new files or small files, <edit> for small changes in big files.');
+  rules.push('Use <write> for new files, <edit> to change existing files. Never <write> over a file you have not read.');
   if (shell) rules.push('Commands time out; do not start servers that never stop.');
   if (!web) rules.push('You have no internet access.');
   rules.push(`When the task is finished${shell ? ' and tested' : ''}, answer WITHOUT any tool tag: a short summary for the user, in the user's language.`);

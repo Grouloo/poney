@@ -146,16 +146,28 @@ async function syntaxCheck(abs, content, cwd) {
 }
 
 // ---------- write ----------
-async function writeTool(cwd, args) {
+const countLines = (text) => (text ? text.split('\n').length - (text.endsWith('\n') ? 1 : 0) : 0);
+
+async function writeTool(cwd, args, ctx = {}) {
   const { abs, rel } = resolveInside(cwd, args.path);
   const content = args.content ?? '';
   const before = (await exists(abs)) ? await fs.readFile(abs, 'utf8').catch(() => '') : null;
+  const beforeLines = countLines(before);
+  // Small models happily rewrite an existing file from memory and silently drop
+  // code. Overwriting is only allowed when the file's content is in the history.
+  if (before !== null && ctx.seenFiles && !ctx.seenFiles.has(rel) && beforeLines > 5) {
+    throw new ToolError(`Refused: ${rel} already exists (${beforeLines} lines) and you have not read it, so your version would be written from memory and could delete code. ` +
+      `Read it first with <read path="${rel}" />, then change it with <edit>. To replace it completely, read it first, then use <write> again.`);
+  }
   await fs.mkdir(path.dirname(abs), { recursive: true });
   const finalContent = content.endsWith('\n') || content === '' ? content : content + '\n';
   await fs.writeFile(abs, finalContent);
   const n = finalContent.split('\n').length - 1;
   const err = await syntaxCheck(abs, finalContent, cwd);
   let output = `${before === null ? 'Created' : 'Overwrote'} ${rel} (${n} lines).`;
+  if (before !== null && beforeLines >= 20 && n < beforeLines / 2) {
+    output += `\nWARNING: ${rel} went from ${beforeLines} to ${n} lines. If you did not mean to delete code, restore it now.`;
+  }
   if (err) output += `\nWARNING, the file has an error:\n${err}`;
   return { output, ok: !err, changed: rel, diff: unifiedDiff(before ?? '', finalContent, rel), meta: { path: rel } };
 }
