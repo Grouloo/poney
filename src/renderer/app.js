@@ -1,4 +1,5 @@
 import { parseActions, splitThinking } from '../agent/protocol.js';
+import hljs from '../../node_modules/@highlightjs/cdn-assets/es/highlight.min.js';
 
 const $ = (id) => document.getElementById(id);
 const transcript = $('transcript');
@@ -80,7 +81,7 @@ function renderSettings() {
     for (const dir of settings.recent || []) {
       const b = document.createElement('button');
       b.textContent = `📁 ${shortPath(dir)}`;
-      b.onclick = async () => { settings = await window.api.setWorkspace(dir); renderSettings(); };
+      b.onclick = async () => { settings = await window.api.setWorkspace(dir); renderSettings(); onWorkspaceChanged(); };
       recent.appendChild(b);
     }
   }
@@ -137,19 +138,34 @@ $('workspaceBtn').onclick = async () => {
   const before = settings.workspace;
   settings = await window.api.chooseWorkspace();
   renderSettings();
-  if (settings.workspace !== before) clearTranscript();
+  if (settings.workspace !== before) onWorkspaceChanged();
 };
 $('newBtn').onclick = async () => {
   if (running) await window.api.stop();
   await window.api.reset();
   clearTranscript();
+  refreshConversations();
 };
+
+function onWorkspaceChanged() {
+  clearTranscript();
+  closeViewer();
+  expanded.clear();
+  refreshConversations();
+  refreshTree();
+}
 
 function clearTranscript() {
   transcript.innerHTML = '';
   bubbles.clear();
   cards.clear();
   transcript.appendChild(div('msg notice', `Nouvelle conversation dans ${esc(shortPath(settings.workspace))}`));
+}
+
+function addUserMessage(text) {
+  const m = div('msg user');
+  m.appendChild(div('bubble')).textContent = text;
+  add(m);
 }
 
 // ---------- sending ----------
@@ -172,9 +188,7 @@ async function submit() {
   }
   input.value = '';
   autosize();
-  const m = div('msg user');
-  m.appendChild(div('bubble')).textContent = text;
-  add(m);
+  addUserMessage(text);
   setRunning(true);
   try {
     await window.api.send(text);
@@ -194,6 +208,7 @@ input.addEventListener('keydown', (e) => {
 function autosize() {
   input.style.height = 'auto';
   input.style.height = `${Math.min(input.scrollHeight, 220)}px`;
+  input.style.overflowY = input.scrollHeight > 220 ? 'auto' : 'hidden';
 }
 input.addEventListener('input', autosize);
 
@@ -278,10 +293,17 @@ function onEvent(ev) {
     case 'action_start': {
       const card = div('card running');
       card.innerHTML = `<div class="card-head"><span class="status"><span class="spin">◌</span></span><span class="tool">${esc(TOOL_LABEL[ev.tool] || ev.tool)}</span><span class="summary"></span>${ev.auto ? '<span class="tag">vérification auto</span>' : ''}</div><div class="card-body"><pre class="out"></pre></div>`;
-      card.querySelector('.summary').textContent = summarize(ev.tool, ev.args);
+      const summaryEl = card.querySelector('.summary');
+      summaryEl.textContent = summarize(ev.tool, ev.args);
+      if (['read', 'write', 'edit'].includes(ev.tool) && ev.args.path) {
+        summaryEl.classList.add('link');
+        summaryEl.title = 'Ouvrir dans le visualiseur';
+        summaryEl.onclick = (e) => { e.stopPropagation(); openFile(ev.args.path.trim()); };
+      }
       card.querySelector('.card-head').onclick = () => card.classList.toggle('open');
       if (ev.tool === 'run') card.classList.add('open');
       card.dataset.tool = ev.tool;
+      card.dataset.path = ev.args.path || '';
       cards.set(ev.id, card);
       add(card);
       break;
@@ -316,6 +338,9 @@ function onEvent(ev) {
         card.querySelector('.card-head').insertAdjacentHTML('beforeend', `<span class="tag">exit ${ev.meta.exit}</span>`);
       }
       if (card.dataset.tool === 'run' && ev.ok) card.classList.remove('open');
+      if (!replaying && ['write', 'edit', 'run'].includes(card.dataset.tool)) {
+        onFilesChanged(ev.meta?.path || (card.dataset.tool !== 'run' ? card.dataset.path : null));
+      }
       if (!ev.ok) card.classList.add('open');
       scrollDown();
       break;
@@ -326,7 +351,11 @@ function onEvent(ev) {
     case 'error':
       add(div('error', esc(ev.message)));
       break;
+    case 'user_message':
+      addUserMessage(ev.text);
+      break;
     case 'turn_end':
+      if (replaying) break;
       setRunning(false);
       for (const b of bubbles.values()) b.bubble.classList.remove('cursor');
       input.focus();
@@ -353,10 +382,240 @@ function onApproval(req) {
 }
 
 window.api.onEvent(onEvent);
+window.api.onConversationsChanged(() => refreshConversations());
 window.api.onApproval(onApproval);
+
+// ---------- sidebar ----------
+let replaying = false;
+let currentConversation = null;
+
+$('sidebarBtn').onclick = () => document.body.classList.toggle('no-sidebar');
+for (const tab of document.querySelectorAll('.tabs button')) {
+  tab.onclick = () => {
+    for (const t of document.querySelectorAll('.tabs button')) {
+      t.classList.toggle('active', t === tab);
+      $(t.dataset.tab).classList.toggle('hidden', t !== tab);
+    }
+  };
+}
+
+function relativeTime(ts) {
+  const s = (Date.now() - ts) / 1000;
+  if (s < 60) return 'à l’instant';
+  if (s < 3600) return `${Math.floor(s / 60)} min`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h`;
+  if (s < 172800) return 'hier';
+  return new Date(ts).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
+}
+
+async function refreshConversations() {
+  const { current, items } = await window.api.listConversations();
+  currentConversation = current;
+  const list = $('convList');
+  list.innerHTML = '';
+  if (!items.length) {
+    list.innerHTML = `<li class="empty-note">${settings.workspace ? 'Aucune conversation dans ce dossier.' : 'Choisissez un dossier.'}</li>`;
+    return;
+  }
+  for (const c of items) {
+    const li = document.createElement('li');
+    li.classList.toggle('active', c.id === current);
+    li.innerHTML = '<span class="title"></span><span class="when"></span><button class="del" title="Supprimer">✕</button>';
+    li.querySelector('.title').textContent = c.title;
+    li.querySelector('.title').title = c.title;
+    li.querySelector('.when').textContent = relativeTime(c.updatedAt);
+    li.onclick = () => openConversation(c.id);
+    li.querySelector('.del').onclick = async (e) => {
+      e.stopPropagation();
+      if (!confirm(`Supprimer la conversation « ${c.title} » ?`)) return;
+      try {
+        await window.api.deleteConversation(c.id);
+      } catch (err) {
+        alert(err.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''));
+        return;
+      }
+      if (c.id === current) clearTranscript();
+      refreshConversations();
+    };
+    list.appendChild(li);
+  }
+}
+
+async function openConversation(id) {
+  if (running || id === currentConversation) return;
+  const { events, settings: s } = await window.api.openConversation(id);
+  if (s.workspace !== settings.workspace) {
+    settings = s;
+    renderSettings();
+    expanded.clear();
+    refreshTree();
+    closeViewer();
+  }
+  transcript.innerHTML = '';
+  bubbles.clear();
+  cards.clear();
+  replaying = true;
+  try {
+    for (const ev of events) onEvent(ev);
+  } finally {
+    replaying = false;
+  }
+  transcript.scrollTop = transcript.scrollHeight;
+  refreshConversations();
+  input.focus();
+}
+
+// ---------- file tree ----------
+const expanded = new Set(); // expanded directory paths
+let openPath = null;
+
+async function renderDir(rel, ul) {
+  let entries;
+  try {
+    entries = await window.api.listFiles(rel);
+  } catch {
+    ul.innerHTML = '<li class="node muted">illisible</li>';
+    return;
+  }
+  ul.innerHTML = '';
+  for (const e of entries) {
+    const li = document.createElement('li');
+    const node = div(`node${e.ignored ? ' ignored' : ''}${e.path === openPath ? ' active' : ''}`);
+    node.dataset.path = e.path;
+    node.innerHTML = `<span class="caret">${e.dir ? (expanded.has(e.path) ? '▾' : '▸') : ''}</span><span>${e.dir ? '📁' : fileIcon(e.name)}</span><span class="name"></span>`;
+    node.querySelector('.name').textContent = e.name;
+    node.title = e.path;
+    li.appendChild(node);
+    if (e.dir) {
+      const sub = document.createElement('ul');
+      li.appendChild(sub);
+      if (expanded.has(e.path)) await renderDir(e.path, sub);
+      node.onclick = async () => {
+        if (expanded.has(e.path)) {
+          expanded.delete(e.path);
+          sub.innerHTML = '';
+        } else {
+          expanded.add(e.path);
+          await renderDir(e.path, sub);
+        }
+        node.querySelector('.caret').textContent = expanded.has(e.path) ? '▾' : '▸';
+      };
+    } else {
+      node.onclick = () => openFile(e.path);
+    }
+    ul.appendChild(li);
+  }
+  if (!entries.length && rel === '.') ul.innerHTML = '<li class="node muted">Dossier vide</li>';
+}
+
+function fileIcon(name) {
+  const ext = name.split('.').pop().toLowerCase();
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp'].includes(ext)) return '🖼';
+  if (['md', 'txt', 'rst'].includes(ext)) return '📝';
+  return '📄';
+}
+
+let treeRefresh = null;
+async function refreshTree() {
+  $('filesRoot').textContent = shortPath(settings.workspace);
+  if (!settings.workspace) {
+    $('fileTree').innerHTML = '';
+    return;
+  }
+  await renderDir('.', $('fileTree'));
+}
+$('refreshFiles').onclick = refreshTree;
+
+/** Called after the agent writes/edits/runs: refresh the tree and the open file. */
+function onFilesChanged(changedPath) {
+  if (changedPath) {
+    // Reveal the changed file in the tree.
+    const parts = changedPath.split('/');
+    for (let i = 1; i < parts.length; i++) expanded.add(parts.slice(0, i).join('/'));
+  }
+  clearTimeout(treeRefresh);
+  treeRefresh = setTimeout(async () => {
+    await refreshTree();
+    if (changedPath) document.querySelector(`.tree .node[data-path="${CSS.escape(changedPath)}"]`)?.classList.add('flash');
+  }, 150);
+  if (openPath && (!changedPath || changedPath === openPath)) openFile(openPath, { keepScroll: true });
+}
+
+// ---------- viewer ----------
+const EXT_LANG = {
+  js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'javascript', ts: 'typescript', tsx: 'typescript',
+  py: 'python', rb: 'ruby', rs: 'rust', go: 'go', java: 'java', kt: 'kotlin', swift: 'swift', c: 'c', h: 'c',
+  cpp: 'cpp', hpp: 'cpp', cs: 'csharp', php: 'php', sh: 'bash', zsh: 'bash', bash: 'bash', json: 'json',
+  yml: 'yaml', yaml: 'yaml', toml: 'ini', ini: 'ini', md: 'markdown', html: 'xml', xml: 'xml', svg: 'xml',
+  css: 'css', scss: 'scss', sql: 'sql', lua: 'lua', r: 'r', dockerfile: 'dockerfile', makefile: 'makefile',
+};
+
+function formatSize(n) {
+  if (n < 1024) return `${n} o`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} Ko`;
+  return `${(n / 1024 / 1024).toFixed(1)} Mo`;
+}
+
+function closeViewer() {
+  openPath = null;
+  $('viewer').classList.add('hidden');
+  document.querySelectorAll('.tree .node.active').forEach((n) => n.classList.remove('active'));
+}
+
+async function openFile(rel, { keepScroll = false } = {}) {
+  const body = $('viewerBody');
+  const scroll = keepScroll && rel === openPath ? body.scrollTop : 0;
+  let f;
+  try {
+    f = await window.api.readFile(rel);
+  } catch (e) {
+    if (keepScroll) return; // file deleted meanwhile: leave the viewer as is
+    f = { path: rel, kind: 'error', message: e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '') };
+  }
+  openPath = f.path;
+  $('viewer').classList.remove('hidden');
+  $('viewerPath').textContent = f.path;
+  $('viewerPath').title = f.path;
+  document.querySelectorAll('.tree .node').forEach((n) => n.classList.toggle('active', n.dataset.path === f.path));
+
+  if (f.kind === 'text') {
+    const lines = f.content.split('\n');
+    if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
+    $('viewerInfo').textContent = `${lines.length} lignes · ${formatSize(f.size)}${f.truncated ? ' · tronqué' : ''}`;
+    const name = f.path.split('/').pop().toLowerCase();
+    const ext = name.includes('.') ? name.split('.').pop() : name;
+    const lang = EXT_LANG[ext];
+    let html;
+    if (f.content.length > 400_000) html = esc(f.content);
+    else if (lang && hljs.getLanguage(lang)) html = hljs.highlight(f.content, { language: lang, ignoreIllegals: true }).value;
+    else html = hljs.highlightAuto(f.content.slice(0, 100_000)).value + esc(f.content.slice(100_000));
+    body.innerHTML = '<div class="code-view"><div class="gutter"></div><pre><code class="hljs"></code></pre></div>';
+    body.querySelector('.gutter').textContent = lines.map((_, i) => i + 1).join('\n');
+    body.querySelector('code').innerHTML = html;
+  } else if (f.kind === 'image') {
+    $('viewerInfo').textContent = formatSize(f.size);
+    body.innerHTML = '';
+    const img = document.createElement('img');
+    img.src = f.src;
+    img.alt = f.path;
+    body.appendChild(img);
+  } else {
+    $('viewerInfo').textContent = f.size !== undefined ? formatSize(f.size) : '';
+    const msg = { binary: 'Fichier binaire : aperçu indisponible.', large: 'Fichier trop volumineux pour l’aperçu.' }[f.kind] || f.message;
+    body.innerHTML = `<div class="center">${esc(msg)}</div>`;
+  }
+  body.scrollTop = scroll;
+}
+
+$('viewerClose').onclick = closeViewer;
+$('viewerReload').onclick = () => openPath && openFile(openPath, { keepScroll: true });
+$('viewerOpen').onclick = () => openPath && window.api.openFileExternal(openPath);
+$('viewerReveal').onclick = () => openPath && window.api.revealFile(openPath);
 
 // ---------- init ----------
 settings = await window.api.getSettings();
 renderSettings();
 refreshModels();
+refreshConversations();
+refreshTree();
 input.focus();

@@ -13,4 +13,14 @@ contextBridge.exposeInMainWorld('api', {
   approve: (id, ok, always) => ipcRenderer.invoke('agent:approve', { id, ok, always }),
   onEvent: (fn) => ipcRenderer.on('agent:event', (_, ev) => fn(ev)),
   onApproval: (fn) => ipcRenderer.on('agent:approval', (_, req) => fn(req)),
+
+  listConversations: () => ipcRenderer.invoke('conversations:list'),
+  openConversation: (id) => ipcRenderer.invoke('conversations:open', id),
+  deleteConversation: (id) => ipcRenderer.invoke('conversations:delete', id),
+  onConversationsChanged: (fn) => ipcRenderer.on('conversations:changed', (_, id) => fn(id)),
+
+  listFiles: (rel) => ipcRenderer.invoke('files:list', rel),
+  readFile: (rel) => ipcRenderer.invoke('files:read', rel),
+  openFileExternal: (rel) => ipcRenderer.invoke('files:openExternal', rel),
+  revealFile: (rel) => ipcRenderer.invoke('files:reveal', rel),
 });

@@ -5,6 +5,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Agent, DEFAULT_CONFIG } from './agent/agent.js';
 import { listModels } from './agent/llm.js';
+import { ConversationStore } from './conversations.js';
+import { listDir, readFileForViewer } from './files.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -40,6 +42,8 @@ function saveSettings() {
 // ---------- agent ----------
 let win = null;
 let agent = null;
+let store = null;
+let conv = null; // current conversation, created on the first message
 const pendingApprovals = new Map();
 
 const send = (channel, payload) => win && !win.isDestroyed() && win.webContents.send(channel, payload);
@@ -56,10 +60,29 @@ function getAgent() {
         send('agent:approval', req);
       }),
     });
-    agent.on('event', (ev) => send('agent:event', ev));
+    agent.on('event', (ev) => {
+      send('agent:event', ev);
+      if (!conv) return;
+      store.record(conv, ev);
+      if (ev.type === 'turn_end') saveConversation();
+    });
   }
   agent.config = { ...DEFAULT_CONFIG, ...settings.config };
   return agent;
+}
+
+function saveConversation() {
+  if (!conv || !agent) return;
+  conv.messages = agent.messages;
+  conv.untested = agent.untested;
+  store.save(conv);
+  send('conversations:changed', conv.id);
+}
+
+function startNewConversation() {
+  resolveApprovals(false);
+  agent?.reset();
+  conv = null;
 }
 
 function resolveApprovals(value) {
@@ -72,7 +95,7 @@ function setWorkspace(dir) {
   settings.workspace = dir;
   settings.recent = [dir, ...settings.recent.filter((d) => d !== dir)].slice(0, 8);
   saveSettings();
-  agent?.reset();
+  startNewConversation();
   agent = null;
 }
 
@@ -98,6 +121,10 @@ ipcMain.handle('models:list', async (_, cfg) => listModels({ ...settings.config,
 ipcMain.handle('agent:send', async (_, text) => {
   const a = getAgent();
   if (a.running) throw new Error('L’agent est déjà en cours d’exécution.');
+  if (!conv) conv = store.create(settings.workspace, text);
+  store.record(conv, { type: 'user_message', text });
+  store.save(conv);
+  send('conversations:changed', conv.id);
   // Events stream back through 'agent:event'.
   a.send(text).catch((e) => send('agent:event', { type: 'error', message: e.message }));
   return true;
@@ -106,10 +133,35 @@ ipcMain.handle('agent:stop', () => {
   resolveApprovals(false);
   agent?.stop();
 });
-ipcMain.handle('agent:reset', () => {
-  resolveApprovals(false);
-  agent?.reset();
+ipcMain.handle('agent:reset', () => startNewConversation());
+
+ipcMain.handle('conversations:list', () => ({
+  current: conv?.id ?? null,
+  items: settings.workspace ? store.list(settings.workspace) : [],
+}));
+ipcMain.handle('conversations:open', (_, id) => {
+  if (agent?.running) throw new Error('L’agent est en cours d’exécution.');
+  const loaded = store.load(id);
+  if (loaded.workspace !== settings.workspace) setWorkspace(loaded.workspace);
+  const a = getAgent();
+  a.reset();
+  a.messages = loaded.messages;
+  a.untested = loaded.untested;
+  conv = loaded;
+  return { events: loaded.events, settings };
 });
+ipcMain.handle('conversations:delete', (_, id) => {
+  if (conv?.id === id) {
+    if (agent?.running) throw new Error('L’agent est en cours d’exécution.');
+    startNewConversation();
+  }
+  store.delete(id);
+});
+
+ipcMain.handle('files:list', (_, rel) => listDir(settings.workspace, rel));
+ipcMain.handle('files:read', (_, rel) => readFileForViewer(settings.workspace, rel));
+ipcMain.handle('files:openExternal', (_, rel) => shell.openPath(path.join(settings.workspace, rel)));
+ipcMain.handle('files:reveal', (_, rel) => shell.showItemInFolder(path.join(settings.workspace, rel)));
 ipcMain.handle('agent:approve', (_, { id, ok, always }) => {
   if (always) {
     settings.config.approval = 'auto';
@@ -145,9 +197,11 @@ function createWindow() {
 
 app.whenReady().then(() => {
   loadSettings();
+  store = new ConversationStore(path.join(app.getPath('userData'), 'conversations'));
   createWindow();
   app.on('activate', () => BrowserWindow.getAllWindows().length === 0 && createWindow());
 });
+app.on('before-quit', () => saveConversation());
 app.on('window-all-closed', () => {
   agent?.stop();
   if (process.platform !== 'darwin') app.quit();

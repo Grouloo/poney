@@ -5,7 +5,7 @@ import { parseEditBody } from './protocol.js';
 import { webSearch, fetchUrl } from './web.js';
 import { unifiedDiff } from './diff.js';
 
-const IGNORED_DIRS = new Set(['.git', 'node_modules', '__pycache__', '.venv', 'venv', 'dist', 'build', '.next', 'target', '.cache', '.idea', '.vscode']);
+export const IGNORED_DIRS = new Set(['.git', 'node_modules', '__pycache__', '.venv', 'venv', 'dist', 'build', '.next', 'target', '.cache', '.idea', '.vscode']);
 const READ_MAX_LINES = 250;
 
 export class ToolError extends Error {}
@@ -18,7 +18,7 @@ export function truncateMiddle(text, maxChars) {
   return `${text.slice(0, head)}\n\n[... ${cut} characters cut ...]\n\n${text.slice(-tail)}`;
 }
 
-function resolveInside(cwd, p) {
+export function resolveInside(cwd, p) {
   if (!p || !String(p).trim()) throw new ToolError('Missing "path".');
   const clean = String(p).trim().replace(/^["'`]|["'`]$/g, '');
   const abs = path.resolve(cwd, clean);

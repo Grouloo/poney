@@ -27,8 +27,16 @@ node src/cli.js --cwd ./mon-projet --model qwen2.5:14b "tâche"   # mode headles
 - Détection de boucles, relance si le modèle colle du code au lieu de l'écrire.
 - Notes de projet lues depuis `AGENTS.md` / `LOCAL_CODEX.md` / `CLAUDE.md`.
 
+## Interface
+
+- **Conversations sauvegardées** par dossier de projet (`~/Library/Application Support/local-codex/conversations/`) :
+  on peut les rouvrir après redémarrage, l'agent reprend avec son historique.
+- **Navigateur de fichiers** qui se met à jour quand l'agent écrit, et révèle le fichier modifié.
+- **Visualiseur** avec coloration syntaxique et aperçu d'images ; les chemins dans les actions de l'agent sont cliquables.
+
 ## Structure
 
 - `src/agent/` — cœur indépendant de l'UI (boucle, protocole, outils, client LLM, web)
 - `src/main.js`, `src/preload.cjs`, `src/renderer/` — app Electron
+- `src/conversations.js`, `src/files.js` — sauvegarde des conversations, accès fichiers pour le visualiseur
 - `src/cli.js` — runner en ligne de commande

@@ -14,5 +14,8 @@
   },
   "allowScripts": {
     "electron@33.4.11": true
+  },
+  "dependencies": {
+    "@highlightjs/cdn-assets": "^11.12.0"
   }
 }

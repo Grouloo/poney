@@ -23,7 +23,7 @@ export const DEFAULT_CONFIG = {
 
 const PROJECT_NOTE_FILES = ['AGENTS.md', 'LOCAL_CODEX.md', 'CLAUDE.md'];
 const estimateTokens = (s) => Math.ceil(s.length / 3.2);
-let nextId = 1;
+let nextId = Date.now(); // unique across restarts, since saved conversations are replayed by id
 
 export class Agent extends EventEmitter {
   constructor({ cwd, config, approve }) {
