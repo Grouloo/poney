@@ -71,7 +71,12 @@ function shortPath(p) {
 function renderSettings() {
   $('workspaceLabel').textContent = shortPath(settings.workspace);
   $('workspaceBtn').title = settings.workspace || 'Choisir un dossier';
+  const shellOn = settings.config.shellEnabled !== false;
+  $('webEnabled').checked = settings.config.webEnabled !== false;
+  $('shellEnabled').checked = shellOn;
   $('autoApprove').checked = settings.config.approval === 'auto';
+  $('autoApprove').disabled = !shellOn;
+  $('autoApproveLabel').classList.toggle('disabled', !shellOn);
   for (const el of form.elements) {
     if (el.name && settings.config[el.name] !== undefined) el.value = settings.config[el.name];
   }
@@ -131,6 +136,12 @@ $('autoApprove').onchange = async (e) => {
   settings = await window.api.setConfig({ approval: e.target.checked ? 'auto' : 'ask' });
   renderSettings();
 };
+for (const flag of ['webEnabled', 'shellEnabled']) {
+  $(flag).onchange = async (e) => {
+    settings = await window.api.setConfig({ [flag]: e.target.checked });
+    renderSettings();
+  };
+}
 $('settingsBtn').onclick = () => $('settings').classList.toggle('hidden');
 $('closeSettings').onclick = () => $('settings').classList.add('hidden');
 $('workspaceBtn').onclick = async () => {

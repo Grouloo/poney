@@ -41,45 +41,70 @@ const ALL_NAMES = [...Object.keys(TOOLS), ...Object.keys(ALIASES)];
 const NAME_RE = ALL_NAMES.sort((a, b) => b.length - a.length).join('|');
 const OPEN_RE = new RegExp(`<(${NAME_RE})(\\s[^<>]*?)?\\s*(/?)>`, 'g');
 
-export function buildSystemPrompt({ cwd, platform, projectNotes, testCommand }) {
+/** Tools that can be switched off in the settings, and the config flag for each. */
+export const TOOL_FLAGS = { run: 'shellEnabled', web_search: 'webEnabled', fetch: 'webEnabled' };
+
+export function isToolEnabled(tool, config) {
+  const flag = TOOL_FLAGS[tool];
+  return !flag || config[flag] !== false;
+}
+
+export function buildSystemPrompt({ cwd, platform, projectNotes, testCommand, shell = true, web = true }) {
   const notes = projectNotes ? `\nPROJECT NOTES (from the repo):\n${projectNotes}\n` : '';
-  const testLine = testCommand
+  const testLine = testCommand && shell
     ? `\nThe project test command is: ${testCommand}\nIt is run automatically when you finish; make it pass.`
     : '';
-  return `You are a coding agent. You work inside the folder ${cwd} (${platform}).
-You act by writing tool tags. The results come back in the next message.
 
-TOOLS
-<list path="." />                       list files
-<read path="a.py" start="1" end="200" />  read a file (with line numbers)
-<search pattern="regex" path="." />     search text in files
-<write path="a.py">
-full file content
-</write>                                create or overwrite a file
-<edit path="a.py">
-<old>exact existing lines</old>
-<new>replacement lines</new>
-</edit>                                 change part of a file
-<run>command</run>                      run a shell command (scripts, tests, installs)
-<web_search>query</web_search>          search the internet
-<fetch>https://url</fetch>              read a web page
+  const tools = [
+    '<list path="." />                       list files',
+    '<read path="a.py" start="1" end="200" />  read a file (with line numbers)',
+    '<search pattern="regex" path="." />     search text in files',
+    '<write path="a.py">\nfull file content\n</write>                                create or overwrite a file',
+    '<edit path="a.py">\n<old>exact existing lines</old>\n<new>replacement lines</new>\n</edit>                                 change part of a file',
+  ];
+  if (shell) tools.push('<run>command</run>                      run a shell command (scripts, tests, installs)');
+  if (web) {
+    tools.push('<web_search>query</web_search>          search the internet');
+    tools.push('<fetch>https://url</fetch>              read a web page');
+  }
 
-RULES
-1. Read the files you need before changing them. Never guess file contents.
-2. ALWAYS TEST. After changing code, run it or its tests with <run>. If it fails, fix the code (not the test, unless the test is wrong) and run again.
-3. Work in small steps, then wait for the results. Never invent results.
-4. Use <write> for new files or small files, <edit> for small changes in big files.
-5. Commands time out; do not start servers that never stop.
-6. When the task is finished and tested, answer WITHOUT any tool tag: a short summary for the user, in the user's language.${testLine}
-${notes}
-EXAMPLE
-User: create hello.py that prints hi
-Assistant: <write path="hello.py">
+  const rules = ['Read the files you need before changing them. Never guess file contents.'];
+  if (shell) {
+    rules.push('ALWAYS TEST. After changing code, run it or its tests with <run>. If it fails, fix the code (not the test, unless the test is wrong) and run again.');
+  } else {
+    rules.push('You CANNOT run commands. After changing code, re-read it carefully to check it. Tell the user how to test it.');
+  }
+  rules.push('Work in small steps, then wait for the results. Never invent results.');
+  rules.push('Use <write> for new files or small files, <edit> for small changes in big files.');
+  if (shell) rules.push('Commands time out; do not start servers that never stop.');
+  if (!web) rules.push('You have no internet access.');
+  rules.push(`When the task is finished${shell ? ' and tested' : ''}, answer WITHOUT any tool tag: a short summary for the user, in the user's language.`);
+
+  const example = shell
+    ? `<write path="hello.py">
 print("hi")
 </write>
 <run>python3 hello.py</run>
 User: <result tool="run" exit="0">hi</result>
-Assistant: Created hello.py, it prints "hi" (tested).`;
+Assistant: Created hello.py, it prints "hi" (tested).`
+    : `<write path="hello.py">
+print("hi")
+</write>
+User: <result tool="write" path="hello.py">Created hello.py (1 lines).</result>
+Assistant: Created hello.py, it prints "hi". Run it with: python3 hello.py`;
+
+  return `You are a coding agent. You work inside the folder ${cwd} (${platform}).
+You act by writing tool tags. The results come back in the next message.
+
+TOOLS
+${tools.join('\n')}
+
+RULES
+${rules.map((r, i) => `${i + 1}. ${r}`).join('\n')}${testLine}
+${notes}
+EXAMPLE
+User: create hello.py that prints hi
+Assistant: ${example}`;
 }
 
 function parseAttrs(src) {

@@ -55,9 +55,17 @@
     </div>
     <div class="statusline">
       <span id="status"></span>
-      <label class="toggle" title="Exécuter les commandes sans demander">
-        <input type="checkbox" id="autoApprove"> commandes automatiques
-      </label>
+      <div class="toggles">
+        <label class="toggle" title="Autoriser l’agent à chercher sur le web et lire des pages">
+          <input type="checkbox" id="webEnabled"> Web
+        </label>
+        <label class="toggle" title="Autoriser l’agent à lancer des commandes dans le terminal">
+          <input type="checkbox" id="shellEnabled"> Terminal
+        </label>
+        <label class="toggle" id="autoApproveLabel" title="Exécuter les commandes sans demander">
+          <input type="checkbox" id="autoApprove"> sans confirmation
+        </label>
+      </div>
     </div>
   </footer>
   </section>

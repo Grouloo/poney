@@ -12,7 +12,7 @@ for (let i = 0; i < argv.length; i++) {
   if (a.startsWith('--')) {
     const key = a.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
     const next = argv[i + 1];
-    if (['yes', 'verbose', 'help'].includes(key) || next === undefined || next.startsWith('--')) opts[key] = true;
+    if (['yes', 'verbose', 'help', 'noWeb', 'noShell'].includes(key) || next === undefined || next.startsWith('--')) opts[key] = true;
     else { opts[key] = next; i++; }
   } else words.push(a);
 }
@@ -26,6 +26,8 @@ if (!words.length || opts.help) {
   --num-ctx N          context size (default: 16384)
   --test-command CMD   command that must pass before the agent may finish
   --yes                run commands without asking
+  --no-web             disable web search and page fetching
+  --no-shell           disable terminal commands
   --verbose            print full tool outputs`);
   process.exit(words.length ? 0 : 1);
 }
@@ -36,6 +38,8 @@ for (const k of ['numCtx', 'maxTokens', 'maxSteps', 'commandTimeout']) if (opts[
 if (opts.temperature) config.temperature = Number(opts.temperature);
 if (opts.provider === 'openai' && !opts.baseUrl) config.baseUrl = 'http://localhost:1234/v1';
 config.approval = opts.yes ? 'auto' : 'ask';
+if (opts.noWeb) config.webEnabled = false;
+if (opts.noShell) config.shellEnabled = false;
 
 const c = { dim: '\x1b[2m', red: '\x1b[31m', green: '\x1b[32m', yellow: '\x1b[33m', cyan: '\x1b[36m', reset: '\x1b[0m' };
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });

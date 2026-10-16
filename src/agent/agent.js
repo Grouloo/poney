@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { streamChat } from './llm.js';
-import { TOOLS, buildSystemPrompt, parseActions, splitThinking, formatResult } from './protocol.js';
+import { TOOLS, buildSystemPrompt, parseActions, splitThinking, formatResult, isToolEnabled } from './protocol.js';
 import { executeAction, runShell, truncateMiddle } from './tools.js';
 
 export const DEFAULT_CONFIG = {
@@ -17,6 +17,8 @@ export const DEFAULT_CONFIG = {
   maxSteps: 40,
   commandTimeout: 120,
   approval: 'ask', // 'ask' | 'auto'
+  shellEnabled: true, // the agent may run terminal commands
+  webEnabled: true, // the agent may search the web and fetch pages
   testCommand: '',
   searxngUrl: '',
 };
@@ -171,7 +173,10 @@ export class Agent extends EventEmitter {
       platform: `${os.platform()} ${os.arch()}`,
       projectNotes: await this.loadProjectNotes(),
       testCommand: config.testCommand,
+      shell: config.shellEnabled !== false,
+      web: config.webEnabled !== false,
     });
+    const shellOn = config.shellEnabled !== false;
 
     let changedThisTurn = false;
     let gateNudges = 0;
@@ -208,12 +213,12 @@ export class Agent extends EventEmitter {
           if (!codeDumpNudged && /```[\w-]*\n[\s\S]{80,}?```/.test(gen.text) && /\b(create|write|fix|implement|add|update|modify|refactor|cré|écri|ajout|modifi|corrig|implémen)/i.test(userText)) {
             codeDumpNudged = true;
             notice('Code non écrit dans un fichier : relance du modèle.');
-            this.messages.push({ role: 'user', content: 'You showed code in your message but did not save it. Save it with <write path="...">...</write>, then test it with <run>.' });
+            this.messages.push({ role: 'user', content: `You showed code in your message but did not save it. Save it with <write path="...">...</write>${shellOn ? ', then test it with <run>' : ''}.` });
             continue;
           }
 
           // Test gate 1: project test command must pass.
-          if (config.testCommand && changedThisTurn) {
+          if (config.testCommand && changedThisTurn && shellOn) {
             notice(`Vérification : ${config.testCommand}`);
             const actId = nextId++;
             this.emit('event', { type: 'action_start', id: actId, tool: 'run', args: { command: config.testCommand }, auto: true });
@@ -226,7 +231,7 @@ export class Agent extends EventEmitter {
               continue;
             }
             if (r.code === 0) this.untested = false;
-          } else if (this.untested && gateNudges < 2) {
+          } else if (this.untested && shellOn && gateNudges < 2) {
             // Test gate 2: no unverified changes.
             gateNudges++;
             notice('Code modifié mais pas testé : le modèle est relancé pour tester.');
@@ -254,6 +259,12 @@ export class Agent extends EventEmitter {
           if (stopBatch) break;
           const actId = nextId++;
           this.emit('event', { type: 'action_start', id: actId, tool: action.tool, args: action.args });
+          if (!isToolEnabled(action.tool, config)) {
+            const what = action.tool === 'run' ? 'Running commands' : 'Internet access';
+            this.emit('event', { type: 'action_end', id: actId, ok: false, output: 'Outil désactivé dans les réglages.', meta: {} });
+            results.push(formatResult(action.tool, {}, `${what} is disabled by the user. Do not use <${action.tool}>. Continue without it.`));
+            continue;
+          }
           if (action.tool === 'run' && config.approval !== 'auto') {
             const ok = await this.approve({ id: actId, tool: action.tool, command: action.args.command });
             if (signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });

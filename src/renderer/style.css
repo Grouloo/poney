@@ -130,7 +130,9 @@ details.thinking div { white-space: pre-wrap; border-left: 2px solid var(--borde
 .composer-box:focus-within { border-color: var(--accent-2); }
 #input { flex: 1; resize: none; border: none; outline: none; background: transparent; max-height: 220px; padding: 6px; overflow-y: hidden; }
 .statusline { max-width: 820px; margin: 6px auto 0; display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; }
+.toggles { display: flex; gap: 14px; align-items: center; }
 .toggle { display: flex; gap: 6px; align-items: center; cursor: pointer; }
+.toggle.disabled { opacity: 0.45; cursor: default; }
 
 /* ---------- settings drawer ---------- */
 .drawer {

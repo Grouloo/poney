@@ -85,3 +85,17 @@ test('diff', () => {
   const d = unifiedDiff('a\nb\nc\n', 'a\nB\nc\n', 'f');
   assert.match(d, /-b\n\+B/);
 });
+
+test('disabled tools are removed from the prompt', async () => {
+  const { buildSystemPrompt, isToolEnabled } = await import('../src/agent/protocol.js');
+  const full = buildSystemPrompt({ cwd: '/p', platform: 'x' });
+  assert.match(full, /<run>/);
+  assert.match(full, /<web_search>/);
+  const bare = buildSystemPrompt({ cwd: '/p', platform: 'x', shell: false, web: false });
+  assert.doesNotMatch(bare, /<run>|<web_search>|<fetch>/);
+  assert.match(bare, /CANNOT run commands/);
+  assert.equal(isToolEnabled('run', { shellEnabled: false }), false);
+  assert.equal(isToolEnabled('fetch', { webEnabled: false }), false);
+  assert.equal(isToolEnabled('write', { shellEnabled: false, webEnabled: false }), true);
+  assert.equal(isToolEnabled('run', {}), true);
+});
