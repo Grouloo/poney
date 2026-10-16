@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'">
+  <title>Local Codex</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Local Codex</div>
+    <button id="workspaceBtn" class="chip" title="Changer de dossier de projet">
+      <span class="chip-icon">📁</span><span id="workspaceLabel">Choisir un dossier…</span>
+    </button>
+    <select id="modelSelect" class="chip" title="Modèle"></select>
+    <div class="spacer"></div>
+    <button id="newBtn" class="ghost" title="Nouvelle conversation">Nouvelle conversation</button>
+    <button id="settingsBtn" class="ghost icon" title="Réglages">⚙︎</button>
+  </header>
+
+  <main id="transcript">
+    <div id="empty" class="empty">
+      <h1>Que dois-je construire ?</h1>
+      <p>L’agent lit et modifie les fichiers du dossier choisi, lance des commandes, cherche sur le web, et teste son code avant de conclure.</p>
+      <div id="recent" class="recent"></div>
+    </div>
+  </main>
+
+  <footer class="composer">
+    <div class="composer-box">
+      <textarea id="input" rows="1" placeholder="Décrivez une tâche…  (Entrée pour envoyer, Maj+Entrée pour un retour à la ligne)"></textarea>
+      <button id="sendBtn" class="primary">Envoyer</button>
+    </div>
+    <div class="statusline">
+      <span id="status"></span>
+      <label class="toggle" title="Exécuter les commandes sans demander">
+        <input type="checkbox" id="autoApprove"> commandes automatiques
+      </label>
+    </div>
+  </footer>
+
+  <aside id="settings" class="drawer hidden">
+    <div class="drawer-head">
+      <h2>Réglages</h2>
+      <button id="closeSettings" class="ghost icon">✕</button>
+    </div>
+    <form id="settingsForm">
+      <fieldset>
+        <legend>Serveur de modèles</legend>
+        <label>Fournisseur
+          <select name="provider">
+            <option value="ollama">Ollama (API native)</option>
+            <option value="openai">Compatible OpenAI (LM Studio, llama.cpp, vLLM…)</option>
+          </select>
+        </label>
+        <label>URL <input name="baseUrl" placeholder="http://localhost:11434"></label>
+        <label>Clé API (optionnelle) <input name="apiKey" type="password" autocomplete="off"></label>
+        <label>Modèle
+          <div class="row"><input name="model" list="modelList"><button type="button" id="refreshModels" class="ghost">↻</button></div>
+          <datalist id="modelList"></datalist>
+        </label>
+      </fieldset>
+      <fieldset>
+        <legend>Génération</legend>
+        <label>Contexte (tokens) <input name="numCtx" type="number" min="2048" step="1024"></label>
+        <label>Tokens max par réponse <input name="maxTokens" type="number" min="256" step="256"></label>
+        <label>Température <input name="temperature" type="number" min="0" max="2" step="0.05"></label>
+        <label>Étapes max par tâche <input name="maxSteps" type="number" min="1"></label>
+      </fieldset>
+      <fieldset>
+        <legend>Outils</legend>
+        <label>Commande de test du projet
+          <input name="testCommand" placeholder="ex. pytest -q  ·  npm test">
+          <small>Lancée automatiquement quand l’agent pense avoir fini ; il doit la faire passer.</small>
+        </label>
+        <label>Timeout des commandes (s) <input name="commandTimeout" type="number" min="5"></label>
+        <label>Exécution des commandes
+          <select name="approval">
+            <option value="ask">Demander à chaque fois</option>
+            <option value="auto">Automatique</option>
+          </select>
+        </label>
+        <label>URL SearXNG (optionnelle)
+          <input name="searxngUrl" placeholder="http://localhost:8080">
+          <small>Sinon la recherche passe par DuckDuckGo.</small>
+        </label>
+      </fieldset>
+    </form>
+  </aside>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
