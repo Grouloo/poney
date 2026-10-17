@@ -1,5 +1,6 @@
 import { parseActions, splitThinking } from '../agent/protocol.js';
 import hljs from '../../node_modules/@highlightjs/cdn-assets/es/highlight.min.js';
+import { fmtNum, fmtDuration } from './format.js';
 
 const $ = (id) => document.getElementById(id);
 const transcript = $('transcript');
@@ -233,19 +234,17 @@ function autosize() {
 input.addEventListener('input', autosize);
 
 // ---------- generation timing ----------
-const fmtNum = (n, digits = 1) => n.toLocaleString('fr-FR', { maximumFractionDigits: digits, minimumFractionDigits: digits });
-const fmtSeconds = (ms) => `${fmtNum(ms / 1000)} s`;
 
 function formatStats(s) {
-  return [fmtSeconds(s.totalMs), `${s.exact ? '' : '≈'}${s.tokens} tokens`, `${fmtNum(s.tps)} tok/s`].join(' · ');
+  return [fmtDuration(s.totalMs), `${s.exact ? '' : '≈'}${s.tokens} tokens`, `${fmtNum(s.tps)} tok/s`].join(' · ');
 }
 
 function statsDetails(s) {
   return [
-    `Durée totale de la réponse : ${fmtSeconds(s.totalMs)} (${s.steps} appel${s.steps > 1 ? 's' : ''} au modèle, outils compris)`,
-    `Génération : ${fmtSeconds(s.genMs)} pour ${s.tokens} tokens${s.exact ? '' : ' (en partie estimés : le flux est arrêté après chaque action)'}`,
+    `Durée totale de la réponse : ${fmtDuration(s.totalMs)} (${s.steps} appel${s.steps > 1 ? 's' : ''} au modèle, outils compris)`,
+    `Génération : ${fmtDuration(s.genMs)} pour ${s.tokens} tokens${s.exact ? '' : ' (en partie estimés : le flux est arrêté après chaque action)'}`,
     `Vitesse moyenne de génération : ${fmtNum(s.tps)} tokens/s`,
-    `Lecture du prompt : ${fmtSeconds(s.promptMs)}`,
+    `Lecture du prompt : ${fmtDuration(s.promptMs)}`,
   ].join('\n');
 }
 
@@ -254,7 +253,7 @@ let runTimer = null;
 function startRunTimer() {
   const t0 = performance.now();
   clearInterval(runTimer);
-  const tick = () => { $('status').textContent = `L’agent travaille… ${fmtSeconds(performance.now() - t0)}`; };
+  const tick = () => { $('status').textContent = `L’agent travaille… ${fmtDuration(performance.now() - t0)}`; };
   tick();
   runTimer = setInterval(tick, 100);
 }
