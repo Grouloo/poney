@@ -136,6 +136,27 @@ export function parseEditBody(body) {
 }
 
 /**
+ * Models often talk about the tools ("I will rewrite it with the `<write>` tag").
+ * Taking that for a call is harmful: a <write> without path fails, and having no
+ * closing tag it swallows the real call that follows. A tag is a mere mention when:
+ * - it touches a backtick (inline code), or
+ * - it has no attributes, sits in the middle of a sentence, and is not closed on
+ *   the same line (a real mid-sentence call looks like "Checking: <run>ls</run>").
+ */
+function isMention(text, m) {
+  const start = m.index;
+  const end = start + m[0].length;
+  if (text[start - 1] === '`' || text[end] === '`') return true;
+  const hasAttrs = Boolean(m[2] && m[2].trim());
+  if (hasAttrs) return false;
+  const lineBefore = text.slice(text.lastIndexOf('\n', start - 1) + 1, start);
+  if (!/\S/.test(lineBefore) || /```[\w-]*\s*$/.test(lineBefore)) return false; // starts the line
+  const lineEnd = text.indexOf('\n', end);
+  const restOfLine = text.slice(end, lineEnd < 0 ? text.length : lineEnd);
+  return !new RegExp(`</${m[1]}\\s*>`).test(restOfLine);
+}
+
+/**
  * Finds tool actions in a model response.
  * Returns { actions: [{tool, args, raw, start, end, complete}], text } where text
  * is the prose with actions removed. With `final=false` (while streaming), an
@@ -149,6 +170,7 @@ export function parseActions(text, { final = true } = {}) {
   let m;
   while ((m = OPEN_RE.exec(text))) {
     if (m.index < cursor) continue;
+    if (isMention(text, m)) continue; // "I'll use the `<write>` tag": talk, not a call
     const tool = ALIASES[m[1]] || m[1];
     const spec = TOOLS[tool];
     const attrs = parseAttrs(m[2]);

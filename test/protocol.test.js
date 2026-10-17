@@ -99,3 +99,35 @@ test('disabled tools are removed from the prompt', async () => {
   assert.equal(isToolEnabled('write', { shellEnabled: false, webEnabled: false }), true);
   assert.equal(isToolEnabled('run', {}), true);
 });
+
+// Regression: a model talking about the tools looped on "Missing path" (gemma-4).
+test('tool names mentioned in prose are not calls, and do not swallow the real call', () => {
+  const cases = [
+    ['It seems like there was a parsing error. I will rewrite the file again using the `<write>` tag.\n<write path="src/main.py">\nprint(1)\n</write>', 'write', 'src/main.py'],
+    ['Since the environment seems to have trouble parsing the <write> tag, let me look.\n<run>cat src/main.py</run>', 'run', undefined],
+    ['The edit failed, so I decided to use <edit> again.\n<read path="a.py" />', 'read', 'a.py'],
+    ['Use `<read path="x" />` to read. Now:\n<list />', 'list', undefined],
+  ];
+  for (const [text, tool, p] of cases) {
+    const { actions, text: prose } = parseActions(text);
+    assert.equal(actions.length, 1, text);
+    assert.equal(actions[0].tool, tool);
+    assert.equal(actions[0].args.path, p);
+    assert.ok(prose.length > 20, 'the explanation stays visible');
+  }
+});
+
+test('real calls keep working: mid-line closed, fenced, child-tag path, line start', () => {
+  assert.equal(parseActions('Checking: <run>ls -la</run>').actions[0].args.command, 'ls -la');
+  assert.equal(parseActions('```xml\n<write path="a.py">\nx = 1\n</write>\n```').actions[0].args.content, 'x = 1');
+  assert.equal(parseActions('<write>\n<path>a.py</path>\nx\n</write>').actions[0].args.path, 'a.py');
+  assert.equal(parseActions('<web_search>node lts</web_search>').actions[0].args.query, 'node lts');
+});
+
+test('a real write without path gets the exact format back', async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-'));
+  const r = await executeAction({ tool: 'write', args: { content: 'x' } }, { cwd, config: {} });
+  assert.equal(r.ok, false);
+  assert.match(r.output, /path="\.\.\."/);
+  assert.match(r.output, /<write path="dir\/file\.py">/);
+});

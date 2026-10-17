@@ -148,7 +148,18 @@ async function syntaxCheck(abs, content, cwd) {
 // ---------- write ----------
 const countLines = (text) => (text ? text.split('\n').length - (text.endsWith('\n') ? 1 : 0) : 0);
 
+const FORMAT_HELP = {
+  write: '<write path="dir/file.py">\nfull file content\n</write>',
+  edit: '<edit path="dir/file.py">\n<old>exact existing lines</old>\n<new>replacement lines</new>\n</edit>',
+};
+
+function requirePath(tool, args) {
+  if (args.path && String(args.path).trim()) return;
+  throw new ToolError(`Missing path: the opening tag must contain path="...". Exact format:\n${FORMAT_HELP[tool]}`);
+}
+
 async function writeTool(cwd, args, ctx = {}) {
+  requirePath('write', args);
   const { abs, rel } = resolveInside(cwd, args.path);
   const content = args.content ?? '';
   const before = (await exists(abs)) ? await fs.readFile(abs, 'utf8').catch(() => '') : null;
@@ -242,6 +253,7 @@ function reindent(text, fromIndent, toIndent) {
 }
 
 async function editTool(cwd, args) {
+  requirePath('edit', args);
   const { abs, rel } = resolveInside(cwd, args.path);
   let content;
   try { content = await fs.readFile(abs, 'utf8'); } catch {

@@ -102,3 +102,19 @@ test('agent: content removed by a compaction must be read again', async () => {
   assert.equal(ends[0].ok, false);
   assert.equal(await fs.readFile(path.join(cwd, 'inv.py'), 'utf8'), big);
 });
+
+test('agent: explaining "I will use the <write> tag" before the real call writes the file', async () => {
+  const cwd = await tmp();
+  const fake = await fakeOllama([
+    'There was a parsing problem. I will write the file again using the `<write>` tag, making sure the <write> tag is clean.\n<write path="deploy/main.py">\nprint("ok")\n</write>',
+    'Done.',
+  ]);
+  const agent = new Agent({ cwd, config: { baseUrl: fake.url, model: 'fake', approval: 'auto', shellEnabled: false } });
+  const ends = [];
+  agent.on('event', (e) => e.type === 'action_end' && ends.push(e));
+  await agent.send('write deploy/main.py');
+  fake.server.close();
+  assert.equal(ends.length, 1);
+  assert.equal(ends[0].ok, true, ends[0].output);
+  assert.equal(await fs.readFile(path.join(cwd, 'deploy/main.py'), 'utf8'), 'print("ok")\n');
+});
