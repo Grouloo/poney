@@ -356,6 +356,17 @@ export class Agent extends EventEmitter {
     for (const m of this.messages) if (m.role === 'assistant') m.content = stripReasoning(m.content);
     this.turnStartIndex = this.messages.length;
     this.currentTask = userText;
+    const turnT0 = Date.now();
+    // Totals over all the generations of this turn, shown once under the answer.
+    const turnStats = { totalMs: 0, genMs: 0, promptMs: 0, tokens: 0, exact: true, steps: 0 };
+    const addStats = (st) => {
+      if (!st) return;
+      turnStats.genMs += st.genMs;
+      turnStats.promptMs += st.promptMs;
+      turnStats.tokens += st.tokens;
+      turnStats.exact &&= st.exact;
+      turnStats.steps++;
+    };
     this.messages.push({ role: 'user', content: userText });
     this.emit('event', { type: 'turn_start' });
 
@@ -387,8 +398,10 @@ export class Agent extends EventEmitter {
           this.emit('event', { type: 'assistant_end', id: gen.id, text: '', thinking: '', hasActions: false });
           notice('Réponse coupée faute de place : compactage du contexte puis nouvelle tentative.');
           await this.maybeCompact(system, signal, { force: true });
+          addStats(gen.stats);
           gen = await this.generate(system, signal);
         }
+        addStats(gen.stats);
         // An answer cut by the length limit may end with an unfinished action
         // (e.g. half a file in <write>): never execute those.
         const parsed = parseActions(gen.text, { final: !gen.truncated });
@@ -544,7 +557,9 @@ export class Agent extends EventEmitter {
       this.running = false;
       this.abort = null;
       await this.emitContext(system).catch(() => {});
-      this.emit('event', { type: 'turn_end', reason });
+      turnStats.totalMs = Date.now() - turnT0;
+      turnStats.tps = turnStats.genMs ? Math.round((turnStats.tokens / (turnStats.genMs / 1000)) * 10) / 10 : 0;
+      this.emit('event', { type: 'turn_end', reason, stats: turnStats.steps ? turnStats : null });
     }
   }
 }

@@ -90,3 +90,18 @@ test('generation stats: server counts when available, estimate otherwise', async
   assert.equal(ends[0].stats.tps, 100);
   assert.equal(ends[0].stats.exact, true);
 });
+
+test('one stats total per turn, over all model calls', async () => {
+  const cwd = await tmp();
+  await fs.writeFile(path.join(cwd, 'a.txt'), 'x\n');
+  const fake = await fakeOllama([{ content: '<read path="a.txt" />' }, { content: 'Done.' }]);
+  const agent = new Agent({ cwd, config: { baseUrl: fake.url, model: 'fake' } });
+  let end;
+  agent.on('event', (e) => e.type === 'turn_end' && (end = e));
+  await agent.send('go');
+  fake.server.close();
+  assert.equal(end.stats.steps, 2);
+  assert.equal(end.stats.exact, false, 'first call was stopped early after the action');
+  assert.ok(end.stats.tokens > 50);
+  assert.ok(end.stats.tps > 0);
+});

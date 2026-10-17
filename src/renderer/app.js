@@ -60,7 +60,11 @@ function setRunning(v) {
   running = v;
   sendBtn.textContent = v ? 'Arrêter' : 'Envoyer';
   sendBtn.classList.toggle('stop', v);
-  $('status').textContent = v ? 'L’agent travaille…' : '';
+  if (v) startRunTimer();
+  else {
+    stopRunTimer();
+    $('status').textContent = '';
+  }
 }
 
 // ---------- settings ----------
@@ -233,18 +237,30 @@ const fmtNum = (n, digits = 1) => n.toLocaleString('fr-FR', { maximumFractionDig
 const fmtSeconds = (ms) => `${fmtNum(ms / 1000)} s`;
 
 function formatStats(s) {
-  const parts = [fmtSeconds(s.genMs), `${s.exact ? '' : '≈'}${s.tokens} tokens`, `${fmtNum(s.tps)} tok/s`];
-  if (s.promptMs >= 500) parts.push(`lecture du prompt ${fmtSeconds(s.promptMs)}`);
-  return parts.join(' · ');
+  return [fmtSeconds(s.totalMs), `${s.exact ? '' : '≈'}${s.tokens} tokens`, `${fmtNum(s.tps)} tok/s`].join(' · ');
 }
 
 function statsDetails(s) {
   return [
-    `Génération : ${fmtSeconds(s.genMs)} pour ${s.tokens} tokens${s.exact ? '' : ' (estimés : le flux a été arrêté avant la fin, après une action)'}`,
-    `Vitesse : ${fmtNum(s.tps)} tokens/s`,
-    `Lecture du prompt (avant le premier token) : ${fmtSeconds(s.promptMs)}`,
-    `Total : ${fmtSeconds(s.totalMs)}`,
+    `Durée totale de la réponse : ${fmtSeconds(s.totalMs)} (${s.steps} appel${s.steps > 1 ? 's' : ''} au modèle, outils compris)`,
+    `Génération : ${fmtSeconds(s.genMs)} pour ${s.tokens} tokens${s.exact ? '' : ' (en partie estimés : le flux est arrêté après chaque action)'}`,
+    `Vitesse moyenne de génération : ${fmtNum(s.tps)} tokens/s`,
+    `Lecture du prompt : ${fmtSeconds(s.promptMs)}`,
   ].join('\n');
+}
+
+// Live timer for the whole answer, in the status line.
+let runTimer = null;
+function startRunTimer() {
+  const t0 = performance.now();
+  clearInterval(runTimer);
+  const tick = () => { $('status').textContent = `L’agent travaille… ${fmtSeconds(performance.now() - t0)}`; };
+  tick();
+  runTimer = setInterval(tick, 100);
+}
+function stopRunTimer() {
+  clearInterval(runTimer);
+  runTimer = null;
 }
 
 // ---------- rendering agent events ----------
@@ -281,26 +297,14 @@ function onEvent(ev) {
     case 'assistant_start': {
       const el = div('msg assistant');
       const bubble = div('bubble cursor');
-      const meta = div('gen-meta live');
       el.appendChild(bubble);
-      el.appendChild(meta);
       add(el);
-      const b = { el, bubble, meta, raw: '', thinking: '', thinkingEl: null, t0: performance.now(), first: null, timer: null };
-      if (!replaying) {
-        const tick = () => {
-          const s = fmtSeconds(performance.now() - b.t0);
-          meta.textContent = b.first ? `Génération… ${s}` : `Lecture du prompt… ${s}`;
-        };
-        tick();
-        b.timer = setInterval(tick, 100);
-      }
-      bubbles.set(ev.id, b);
+      bubbles.set(ev.id, { el, bubble, raw: '', thinking: '', thinkingEl: null });
       break;
     }
     case 'delta': {
       const b = bubbles.get(ev.id);
       if (!b) break;
-      b.first ??= performance.now();
       if (ev.kind === 'thinking') {
         b.thinking += ev.text;
         if (!b.thinkingEl) {
@@ -321,15 +325,6 @@ function onEvent(ev) {
     case 'assistant_end': {
       const b = bubbles.get(ev.id);
       if (!b) break;
-      clearInterval(b.timer);
-      b.timer = null;
-      b.meta.classList.remove('live');
-      if (ev.stats) {
-        b.meta.textContent = formatStats(ev.stats);
-        b.meta.title = statsDetails(ev.stats);
-      } else {
-        b.meta.remove();
-      }
       b.bubble.classList.remove('cursor');
       const thinking = (b.thinking + (ev.thinking && !b.thinking ? ev.thinking : '')).trim();
       if (thinking && !b.thinkingEl) {
@@ -342,8 +337,8 @@ function onEvent(ev) {
         b.thinkingEl.querySelector('summary').textContent = 'Réflexion';
       }
       if (ev.text) b.bubble.innerHTML = markdown(ev.text);
-      else if (!thinking && !ev.stats) b.el.remove();
-      else b.bubble.remove(); // only actions: keep the reasoning and the timing line
+      else if (!thinking) b.el.remove();
+      else b.bubble.remove();
       break;
     }
     case 'action_start': {
@@ -427,17 +422,15 @@ function onEvent(ev) {
       addUserMessage(ev.text);
       break;
     case 'turn_end':
+      // One timing line for the whole answer, not one per tool call.
+      if (ev.stats) {
+        const meta = div('gen-meta', esc(formatStats(ev.stats) + (ev.reason === 'stopped' ? ' · interrompu' : '')));
+        meta.title = statsDetails(ev.stats);
+        add(meta);
+      }
       if (replaying) break;
       setRunning(false);
-      for (const b of bubbles.values()) {
-        b.bubble.classList.remove('cursor');
-        if (b.timer) {
-          clearInterval(b.timer);
-          b.timer = null;
-          b.meta.classList.remove('live');
-          b.meta.textContent = `Interrompu après ${fmtSeconds(performance.now() - b.t0)}`;
-        }
-      }
+      for (const b of bubbles.values()) b.bubble.classList.remove('cursor');
       input.focus();
       break;
   }
@@ -835,16 +828,18 @@ $('ctxGauge').onclick = async () => {
   if (running) return;
   if (!confirm('Compacter maintenant ? Les anciens messages seront remplacés par un résumé (le fil affiché reste intact).')) return;
   setRunning(true);
+  stopRunTimer();
   $('status').textContent = 'Compactage…';
+  let message = '';
   try {
     const r = await window.api.compactContext();
-    if (!r.compacted) $('status').textContent = r.reason || 'Rien à compacter.';
+    if (!r.compacted) message = r.reason || 'Rien à compacter.';
   } catch (e) {
     document.querySelector('.compaction.pending')?.remove();
     add(div('error', esc(errorText(e))));
   } finally {
     setRunning(false);
-    if ($('status').textContent === 'L’agent travaille…') $('status').textContent = '';
+    $('status').textContent = message;
     refreshGauge();
   }
 };

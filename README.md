@@ -51,8 +51,8 @@ node src/cli.js --cwd ./mon-projet --model qwen2.5:14b "tâche"   # mode headles
   modifier, il est enregistré avec la conversation. Un badge « modifié » signale un prompt personnalisé.
 - **Jauge de contexte** sous la saisie (le trait marque le seuil de compactage) ; un clic compacte à la demande.
   Les résumés apparaissent dans le fil, dépliables.
-- **Temps et vitesse** : chronomètre pendant la génération (lecture du prompt, puis génération), puis sous chaque
-  message de l'agent : durée, tokens et tokens/s (comptes du serveur, ou estimés « ≈ » si le flux a été coupé).
+- **Temps et vitesse** : chronomètre dans la barre d'état pendant la réponse, puis une ligne sous la réponse finale :
+  durée totale, tokens et tokens/s sur l'ensemble des appels au modèle (comptes du serveur, ou estimés « ≈ »).
 - **Visualiseur** avec coloration syntaxique et aperçu d'images ; les chemins dans les actions de l'agent sont cliquables.
 
 ## Structure
