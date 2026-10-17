@@ -277,3 +277,4 @@ body.no-sidebar #sidebar { display: none; }
 
 /* ---------- generation timing ---------- */
 .gen-meta { color: var(--muted); font-size: 11.5px; margin: -6px auto 10px; font-variant-numeric: tabular-nums; cursor: default; }
+.compaction-why { color: var(--warn); margin: 6px 0; }

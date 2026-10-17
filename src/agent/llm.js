@@ -105,15 +105,47 @@ export async function* streamChat({ provider, baseUrl, apiKey, model, messages, 
   }
 }
 
-/** Non-streaming convenience: returns the full text (thinking excluded) and usage. */
+/** Non-streaming convenience: returns the text, the thinking, usage and why it ended. */
 export async function complete(opts) {
   let text = '';
+  let thinking = '';
   let usage = null;
+  let doneReason = null;
   for await (const chunk of streamChat(opts)) {
     if (chunk.type === 'text') text += chunk.text;
+    else if (chunk.type === 'thinking') thinking += chunk.text;
     else if (chunk.type === 'usage') usage = chunk;
+    else if (chunk.type === 'done') doneReason = chunk.reason;
   }
-  return { text, usage };
+  return { text, thinking, usage, doneReason };
+}
+
+/**
+ * Context length actually loaded on an OpenAI-compatible server, when it tells:
+ * LM Studio (loaded_context_length), llama.cpp server (/props n_ctx), vLLM
+ * (max_model_len). Null if unknown. Ollama is not queried: we set num_ctx ourselves.
+ */
+export async function serverContextLength({ provider, baseUrl, apiKey, model }) {
+  if (provider === 'ollama' || !model) return null;
+  const headers = apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
+  const get = async (url) => {
+    try {
+      const res = await fetch(url, { headers, signal: AbortSignal.timeout(2000) });
+      return res.ok ? await res.json() : null;
+    } catch {
+      return null;
+    }
+  };
+  const v1 = openaiBase(baseUrl);
+  const root = v1.replace(/\/v1$/, '');
+  const lms = await get(`${root}/api/v0/models`);
+  const lm = lms?.data?.find((m) => m.id === model);
+  if (lm) return lm.loaded_context_length || null;
+  const props = await get(`${root}/props`);
+  const n = props?.default_generation_settings?.n_ctx ?? props?.n_ctx;
+  if (n) return n;
+  const models = await get(`${v1}/models`);
+  return models?.data?.find((m) => m.id === model)?.max_model_len || null;
 }
 
 export async function listModels({ provider, baseUrl, apiKey }) {

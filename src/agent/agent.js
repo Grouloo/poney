@@ -2,11 +2,11 @@ import { EventEmitter } from 'node:events';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { streamChat, complete } from './llm.js';
+import { streamChat, complete, serverContextLength } from './llm.js';
 import { TOOLS, buildSystemPrompt, parseActions, splitThinking, formatResult, isToolEnabled, withReasoning, stripReasoning } from './protocol.js';
 import { executeAction, runShell, truncateMiddle } from './tools.js';
 import {
-  SUMMARY_MAX_TOKENS, DEFAULT_CHARS_PER_TOKEN,
+  summaryTokens, mechanicalSummary, DEFAULT_CHARS_PER_TOKEN,
   makeEstimator, contextPlan, answerTokens, isValidSample, historyTokens, splitForCompaction, extractFacts, buildSummaryRequest, cleanSummary,
   buildSummaryMessage, calibrate, SUMMARY_MARKER, filesInContext,
 } from './context.js';
@@ -73,6 +73,28 @@ export class Agent extends EventEmitter {
     this.calibratedFor = null;
     this.calibrated = false; // true once a real token count has been used
     this.lastUsage = null; // last token counts reported by the server
+    this.serverCtx = null; // context length actually loaded on the server, if it says
+    this.serverCtxKey = null;
+    this.serverCtxAt = 0;
+  }
+
+  /**
+   * The config with the window the server really has: the setting may say 24k
+   * while LM Studio loaded the model with 16k. Everything is sized from this.
+   */
+  get cfg() {
+    const numCtx = this.serverCtx ? Math.min(this.config.numCtx, this.serverCtx) : this.config.numCtx;
+    return { ...this.config, numCtx };
+  }
+
+  /** Asks the server for its real context length (cached 30 s per server and model). */
+  async refreshServerContext() {
+    const key = `${this.config.provider}|${this.config.baseUrl}|${this.config.model}`;
+    if (key === this.serverCtxKey && Date.now() - this.serverCtxAt < 30_000) return this.serverCtx;
+    this.serverCtx = await serverContextLength(this.config).catch(() => null);
+    this.serverCtxKey = key;
+    this.serverCtxAt = Date.now();
+    return this.serverCtx;
   }
 
   /** Token estimator for the current model (calibration is reset when the model changes). */
@@ -88,7 +110,7 @@ export class Agent extends EventEmitter {
   /** How the window is shared for this system prompt (see contextPlan). */
   plan(system) {
     const est = this.est;
-    return contextPlan(this.config, est(system), this.calibrated);
+    return contextPlan(this.cfg, est(system), this.calibrated);
   }
 
   /** The generated prompt, which follows the settings (tool toggles, test command, project notes). */
@@ -104,7 +126,7 @@ export class Agent extends EventEmitter {
   }
 
   get maxResultChars() {
-    return Math.max(2000, Math.floor(this.config.numCtx * 3.2 * 0.2));
+    return Math.max(2000, Math.floor(this.cfg.numCtx * 3.2 * 0.2));
   }
 
   reset() {
@@ -182,13 +204,16 @@ export class Agent extends EventEmitter {
   /** Current context usage, for the UI gauge. */
   async contextStats(system) {
     system ??= this.systemPrompt ?? await this.defaultSystemPrompt();
+    await this.refreshServerContext();
     const est = this.est;
     const systemTokens = est(system);
     const { budget } = this.plan(system);
     return {
       type: 'context',
       used: systemTokens + historyTokens(this.messages, est),
-      numCtx: this.config.numCtx,
+      numCtx: this.cfg.numCtx,
+      settingCtx: this.config.numCtx,
+      serverCtx: this.serverCtx,
       compactAt: systemTokens + budget,
       limit: systemTokens + budget,
       calibrated: this.calibrated,
@@ -210,7 +235,10 @@ export class Agent extends EventEmitter {
     const before = historyTokens(this.messages, est);
     if (!force && before <= budget) return { compacted: false };
 
-    const { old, recent } = splitForCompaction(this.messages, keep, est);
+    // Forced (manual) compaction: keep only the most recent third, even when the
+    // whole history would fit in the usual "recent" share.
+    const keepTokens = force ? Math.min(keep, Math.floor(before * 0.3)) : keep;
+    const { old, recent } = splitForCompaction(this.messages, keepTokens, est);
     if (old.length < 2) return { compacted: false, reason: 'Pas assez de messages anciens à résumer.' };
 
     this.emit('event', { type: 'compaction_start' });
@@ -220,34 +248,44 @@ export class Agent extends EventEmitter {
     const task = turnStart < old.length ? (this.currentTask ?? taskFromMessage(this.messages[turnStart].content)) : null;
 
     // The summarizer sees the old part only; leave room for its own answer.
-    const maxChars = Math.max(4000, Math.floor((this.config.numCtx - SUMMARY_MAX_TOKENS - 600) * this.charsPerToken * 0.85));
-    // Two attempts; if the model still copies the transcript or ignores the
-    // format, keep only the mechanical facts (files changed, commands).
+    const cfg = this.cfg;
+    const maxTokens = summaryTokens(cfg.numCtx);
+    let maxChars = Math.max(3000, Math.floor((cfg.numCtx - maxTokens - 800) * this.charsPerToken * 0.85));
     let summary = null;
+    let failure = null;
     for (let attempt = 0; attempt < 2 && !summary; attempt++) {
       try {
         const r = await complete({
-          ...this.config,
-          maxTokens: SUMMARY_MAX_TOKENS,
+          ...cfg,
+          maxTokens,
           temperature: attempt === 0 ? 0.1 : 0.4,
           signal,
-          messages: buildSummaryRequest(old, maxChars),
+          messages: buildSummaryRequest(old, maxChars, { retry: attempt > 0 }),
         });
-        summary = cleanSummary(r.text);
+        const c = cleanSummary(r.text);
+        summary = c.summary;
+        if (!summary) {
+          failure = !r.text.trim() && r.thinking.trim()
+            ? 'le modèle a passé tout son budget à réfléchir, sans écrire de résumé'
+            : c.reason;
+        }
       } catch (e) {
         if (signal?.aborted) throw e;
-        break;
+        failure = `erreur du serveur : ${e.message.slice(0, 200)}`;
+        maxChars = Math.floor(maxChars / 2); // the request may have been too long for the server
       }
     }
-    summary ??= '(automatic summary unavailable: see the facts below)';
+    // Fallback without the model: requests, previous summary, last notes.
+    const fallback = !summary;
+    summary ??= mechanicalSummary(old);
 
     const content = buildSummaryMessage({ summary, facts: extractFacts(old), task });
     this.messages = [{ role: 'user', content }, ...recent];
     this.turnStartIndex = task ? 0 : turnStart - old.length + 1;
     const after = historyTokens(this.messages, est);
-    this.emit('event', { type: 'compaction', before, after, removed: old.length, summary: content });
+    this.emit('event', { type: 'compaction', before, after, removed: old.length, summary: content, fallback, failure: fallback ? failure : null });
     await this.emitContext(system);
-    return { compacted: true, before, after };
+    return { compacted: true, before, after, fallback, failure };
   }
 
   /** Manual compaction, from the UI. */
@@ -268,7 +306,7 @@ export class Agent extends EventEmitter {
 
   /** Assistant message for the history: the answer, preceded by its reasoning (capped). */
   assistantContent(gen, text) {
-    const maxChars = Math.floor(this.config.numCtx * this.charsPerToken * 0.08);
+    const maxChars = Math.floor(this.cfg.numCtx * this.charsPerToken * 0.08);
     return withReasoning(text, gen.thinking, maxChars);
   }
 
@@ -289,10 +327,10 @@ export class Agent extends EventEmitter {
     const promptChars = prompt.reduce((n, m) => n + m.content.length, 0);
     // Ask for as long an answer as fits: never more than the window, so the
     // server never has to drop the start of the prompt to make room.
-    const maxTokens = answerTokens(this.config, this.plan(system), historyTokens(prompt, this.est));
+    const maxTokens = answerTokens(this.cfg, this.plan(system), historyTokens(prompt, this.est));
     try {
       for await (const chunk of streamChat({
-        ...this.config,
+        ...this.cfg,
         maxTokens,
         messages: prompt,
         signal: ctrl.signal,
@@ -371,6 +409,7 @@ export class Agent extends EventEmitter {
     this.emit('event', { type: 'turn_start' });
 
     const system = this.systemPrompt ?? await this.defaultSystemPrompt();
+    await this.refreshServerContext();
     const shellOn = config.shellEnabled !== false;
 
     let changedThisTurn = false;

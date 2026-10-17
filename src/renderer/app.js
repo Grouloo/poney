@@ -409,7 +409,7 @@ function onEvent(ev) {
       document.querySelector('.compaction.pending')?.remove();
       const d = document.createElement('details');
       d.className = 'compaction';
-      d.innerHTML = `<summary>🗜 Contexte compacté : ${fmtTokens(ev.before)} → ${fmtTokens(ev.after)} tokens (${ev.removed} messages résumés)</summary><pre></pre>`;
+      d.innerHTML = `<summary>🗜 Contexte compacté : ${fmtTokens(ev.before)} → ${fmtTokens(ev.after)} tokens (${ev.removed} messages résumés)${ev.fallback ? ' · résumé de secours' : ''}</summary>${ev.fallback ? `<p class="compaction-why">Le modèle n’a pas pu écrire le résumé (${esc(ev.failure || 'raison inconnue')}) : un résumé de secours a été construit à partir des demandes, du résumé précédent et des dernières notes de l’agent.</p>` : ''}<pre></pre>`;
       d.querySelector('pre').textContent = ev.summary;
       add(d);
       break;
@@ -809,6 +809,9 @@ function renderGauge(c) {
   g.title = [
     `Contexte utilisé (estimé) : ${c.used} tokens sur ${c.numCtx}`,
     `Compactage automatique seulement quand l’appel suivant ne tiendrait plus : vers ${c.compactAt} tokens (trait vertical)`,
+    c.serverCtx && c.serverCtx < c.settingCtx
+      ? `Le serveur a chargé le modèle avec ${c.serverCtx} tokens de contexte : c’est cette limite qui est utilisée (réglage : ${c.settingCtx})`
+      : '',
     c.calibrated ? 'Estimation calibrée sur les comptes du serveur (marge 4 %)' : 'Estimation pas encore calibrée (marge 8 %)',
     c.measured ? `Dernière mesure du serveur : ${c.measured} tokens` : '',
     'Cliquer pour compacter maintenant',

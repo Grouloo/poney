@@ -31,7 +31,9 @@ node src/cli.js --cwd ./mon-projet --model qwen2.5:14b "tâche"   # mode headles
   d'estimation, ~80-84 % d'une fenêtre de 16k), les anciens messages sont remplacés par un résumé (généré par le modèle, validé, avec repli)
   plus des faits extraits mécaniquement (fichiers modifiés, dernières commandes). Compacter rarement mais beaucoup
   garde le début du prompt stable, donc le cache du serveur reste utilisable. L'estimation des tokens est
-  calibrée sur les comptes réels renvoyés par le serveur. La taille de réponse demandée s'adapte à la place restante
+  calibrée sur les comptes réels renvoyés par le serveur. La taille de contexte réellement chargée par le serveur
+  (LM Studio, llama.cpp server, vLLM) est détectée et plafonne le réglage. Si le modèle n'arrive pas à écrire le
+  résumé, un résumé de secours est construit (demandes, résumé précédent, dernières notes) et la raison est affichée. La taille de réponse demandée s'adapte à la place restante
   (jamais de dépassement de la fenêtre) ; une réponse coupée par la limite n'exécute jamais d'action inachevée,
   et si la coupure vient du manque de place, le contexte est compacté puis l'étape relancée.
 - **Raisonnement conservé pendant une tâche** : la réflexion du modèle (`<think>`, champ `thinking` d'Ollama,

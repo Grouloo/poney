@@ -164,30 +164,109 @@ test('successive compactions do not nest summaries', async () => {
   assert.match(first, /\[CURRENT TASK\]\nRefactor the parser please\n/);
 });
 
-test('cleanSummary rejects copied transcripts and accepts proper summaries', async () => {
+test('cleanSummary: copied transcripts rejected, English or French summaries accepted', async () => {
   const { cleanSummary } = await import('../src/agent/context.js');
-  assert.equal(cleanSummary('<read path="a.py" />\n### USER\n<result tool="read">x</result>'), null);
-  assert.equal(cleanSummary('Some text without the headings'), null);
-  assert.equal(cleanSummary('<think>hmm</think>\nGoal: x\nDone so far: y\nCurrent state: ok\nNext step: z'), 'Goal: x\nDone so far: y\nCurrent state: ok\nNext step: z');
+  assert.match(cleanSummary('<read path="a.py" />\n### USER\n<result tool="read">x</result>').reason, /recopié/);
+  assert.match(cleanSummary('Some text without the headings').reason, /format/);
+  assert.equal(cleanSummary('').reason, 'réponse vide');
+  assert.equal(cleanSummary('<think>hmm</think>\nGoal: x\nDone so far: y\nCurrent state: ok\nNext step: z').summary, 'Goal: x\nDone so far: y\nCurrent state: ok\nNext step: z');
+  assert.ok(cleanSummary('**Objectif :** refactor\n**Déjà fait :** lu parser.py\n**État actuel :** ok\n**Prochaine étape :** tests').summary);
+  assert.ok(cleanSummary('Goal: fix\nDone so far: changed a.py with <edit>\nNext step: run tests').summary, 'one tool mention is fine');
 });
 
-test('a bad summary is retried, then replaced by the facts only', async () => {
+test('a bad summary is retried, then replaced by a backup summary with the reason', async () => {
   const fake = await fakeOllama(() => ({ content: '### USER\n<read path="x" />', promptTokens: 0 }));
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-ctx-'));
   const agent = new Agent({ cwd, config: { baseUrl: fake.url, model: 'fake', numCtx: 4096, maxTokens: 512 } });
-  agent.messages.push(msg('user', 'task'));
+  agent.messages.push(msg('user', 'Refactor the parser'));
   for (let i = 0; i < 10; i++) {
-    agent.messages.push(msg('assistant', `<write path="w${i}.py">\n${'x = 1\n'.repeat(200)}</write>`));
+    agent.messages.push(msg('assistant', `I will now update module number ${i} carefully.\n<write path="w${i}.py">\n${'x = 1\n'.repeat(200)}</write>`));
     agent.messages.push(msg('user', `<result tool="write" path="w${i}.py">\nok\n</result>`));
   }
+  const events = [];
+  agent.on('event', (e) => events.push(e));
   await agent.maybeCompact('system', new AbortController().signal);
   fake.server.close();
   assert.equal(fake.requests.length, 2, 'one retry');
-  assert.match(fake.requests[0].messages[1].content, /<\/conversation>\n\nNow write the summary/);
-  assert.match(agent.messages[0].content, /summary unavailable/);
-  assert.match(agent.messages[0].content, /w0\.py \(written\)/);
+  assert.match(fake.requests[1].messages[1].content, /without long reasoning/);
+  const first = agent.messages[0].content;
+  assert.match(first, /The automatic summary failed/);
+  assert.match(first, /User requests:\n- Refactor the parser/);
+  assert.match(first, /Last notes from the assistant:\n- I will now update module number/);
+  assert.match(first, /w0\.py \(written\)/);
+  const c = events.find((e) => e.type === 'compaction');
+  assert.equal(c.fallback, true);
+  assert.match(c.failure, /recopié/);
 });
 
+test('a model that only reasons gets a clear failure reason', async () => {
+  const server = http.createServer((req, res) => {
+    req.resume();
+    req.on('end', () => res.end(`${JSON.stringify({ message: { thinking: 'Let me think about it at length...' }, done: false })}\n${JSON.stringify({ message: { content: '' }, done: true, done_reason: 'length' })}\n`));
+  });
+  await new Promise((r) => server.listen(0, r));
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-ctx-'));
+  const agent = new Agent({ cwd, config: { baseUrl: `http://localhost:${server.address().port}`, model: 'fake', numCtx: 4096, maxTokens: 512 } });
+  agent.messages.push(msg('user', 'task'));
+  for (let i = 0; i < 10; i++) {
+    agent.messages.push(msg('assistant', `<read path="p${i}.py" />`));
+    agent.messages.push(msg('user', `<result tool="read" path="p${i}.py" lines="1-9">\n${'data '.repeat(400)}\n</result>`));
+  }
+  const r = await agent.maybeCompact('system', new AbortController().signal);
+  server.close();
+  assert.equal(r.fallback, true);
+  assert.match(r.failure, /budget à réfléchir/);
+});
+
+test('summary rejected by the server is retried with a shorter transcript', async () => {
+  const sizes = [];
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (d) => (body += d));
+    req.on('end', () => {
+      const data = JSON.parse(body);
+      sizes.push(data.messages[1].content.length);
+      if (sizes.length === 1) { res.statusCode = 400; return res.end('{"error":"context length exceeded"}'); }
+      res.end(`${JSON.stringify({ message: { content: 'Goal: g\nNext step: s' }, done: true, done_reason: 'stop' })}\n`);
+    });
+  });
+  await new Promise((r) => server.listen(0, r));
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-ctx-'));
+  const agent = new Agent({ cwd, config: { baseUrl: `http://localhost:${server.address().port}`, model: 'fake', numCtx: 4096, maxTokens: 512 } });
+  agent.messages.push(msg('user', 'task'));
+  for (let i = 0; i < 10; i++) {
+    agent.messages.push(msg('assistant', `<read path="p${i}.py" />`));
+    agent.messages.push(msg('user', `<result tool="read" path="p${i}.py" lines="1-9">\n${'data '.repeat(400)}\n</result>`));
+  }
+  const r = await agent.maybeCompact('system', new AbortController().signal);
+  server.close();
+  assert.equal(r.fallback, false);
+  assert.ok(sizes[1] < sizes[0], `${sizes}`);
+});
+
+test('the real context length loaded in LM Studio caps the setting', async () => {
+  const chats = [];
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (d) => (body += d));
+    req.on('end', () => {
+      if (req.url === '/api/v0/models') return res.end(JSON.stringify({ data: [{ id: 'gemma', state: 'loaded', loaded_context_length: 16128 }] }));
+      chats.push(JSON.parse(body));
+      res.end('data: {"choices":[{"delta":{"content":"Done."},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
+    });
+  });
+  await new Promise((r) => server.listen(0, r));
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-ctx-'));
+  const agent = new Agent({ cwd, config: { provider: 'openai', baseUrl: `http://localhost:${server.address().port}/v1`, model: 'gemma', numCtx: 24000, maxTokens: 4096 } });
+  const ctx = [];
+  agent.on('event', (e) => e.type === 'context' && ctx.push(e));
+  await agent.send('hi');
+  server.close();
+  assert.equal(agent.serverCtx, 16128);
+  assert.equal(ctx.at(-1).numCtx, 16128);
+  assert.equal(ctx.at(-1).settingCtx, 24000);
+  assert.ok(chats[0].max_tokens <= 16128);
+});
 
 // ---------- just-in-time compaction ----------
 
@@ -261,4 +340,19 @@ test('an answer cut because the window is full triggers compaction and a retry',
   assert.equal(events.filter((e) => e.type === 'compaction').length, 1);
   assert.equal(events.filter((e) => e.type === 'final').pop().text, 'Done.');
   assert.ok(fake.requests[2].options.num_predict > fake.requests[0].options.num_predict);
+});
+
+test('manual compaction works on a history that would fit in the window', async () => {
+  const fake = await fakeOllama(() => ({ content: 'Goal: g\nNext step: s', promptTokens: 0 }));
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-ctx-'));
+  const agent = new Agent({ cwd, config: { baseUrl: fake.url, model: 'fake', numCtx: 32768, maxTokens: 4096 } });
+  agent.messages.push(msg('user', 'task'));
+  for (let i = 0; i < 6; i++) {
+    agent.messages.push(msg('assistant', `<read path="p${i}.py" />`));
+    agent.messages.push(msg('user', `<result tool="read" path="p${i}.py" lines="1-9">\n${'data '.repeat(100)}\n</result>`));
+  }
+  const r = await agent.compact();
+  fake.server.close();
+  assert.equal(r.compacted, true);
+  assert.ok(r.after < r.before);
 });

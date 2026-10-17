@@ -10,7 +10,10 @@ import { parseActions, stripReasoning } from './protocol.js';
 
 export const KEEP_RECENT = 0.5; // fraction of the budget kept verbatim (most recent messages)
 export const MIN_OUTPUT = 2048; // answer room guaranteed before compacting (capped by maxTokens and numCtx/4)
-export const SUMMARY_MAX_TOKENS = 700;
+/** Answer room for the summary: generous, because reasoning models think before writing it. */
+export function summaryTokens(numCtx) {
+  return Math.min(3000, Math.max(600, Math.floor(numCtx / 5)));
+}
 export const SUMMARY_MARKER = '[CONTEXT SUMMARY';
 
 export const DEFAULT_CHARS_PER_TOKEN = 3.2;
@@ -151,26 +154,67 @@ Be concrete: file names, function names, commands. Never invent anything.`;
  * small models tend to continue a transcript instead of following an
  * instruction placed before it.
  */
-export function buildSummaryRequest(messages, maxChars) {
+export function buildSummaryRequest(messages, maxChars, { retry = false } = {}) {
   return [
     { role: 'system', content: SUMMARY_SYSTEM_PROMPT },
     {
       role: 'user',
       content: `<conversation>\n${renderTranscript(messages, maxChars)}\n</conversation>\n\n` +
         'Now write the summary of the conversation above, with the 4 headings Goal:, Done so far:, Current state:, Next step:. ' +
-        'Do not copy the conversation and do not write any tool tag.',
+        'Do not copy the conversation and do not write any tool tag.' +
+        (retry ? ' Write the summary directly, without long reasoning.' : ''),
     },
   ];
 }
 
-/** Returns a usable summary, or null if the model copied the transcript or ignored the format. */
+// Headings in English or French (small models often answer in the user's language).
+const SUMMARY_HEADINGS = [
+  /goal|objecti|but\s*:/i,
+  /done so far|déjà fait|fait jusqu|réalisé|accompli/i,
+  /current state|état actuel|etat actuel|situation/i,
+  /next step|prochaine|étape suivante|à faire/i,
+];
+
+/** Returns {summary} when usable, else {summary: null, reason} (reason in French, shown in the UI). */
 export function cleanSummary(text) {
-  let t = (text || '').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+  let t = (text || '').replace(/<(think|reasoning)>[\s\S]*?<\/\1>/g, '').trim();
   t = t.replace(/^```\w*\n?|\n?```$/g, '').trim();
-  if (!t) return null;
-  if (/<(result|read|write|edit|run|list|search|web_search|fetch)\b|^### (USER|ASSISTANT)/m.test(t)) return null;
-  if (!/goal/i.test(t) || !/next step/i.test(t)) return null;
-  return t.length > 3000 ? `${t.slice(0, 3000)}…` : t;
+  if (!t) return { summary: null, reason: 'réponse vide' };
+  const toolTags = (t.match(/<(read|write|edit|run|list|search|web_search|fetch)\b[^>]*>/g) || []).length;
+  if (/<result\b|^### (USER|ASSISTANT)/m.test(t) || toolTags > 2) {
+    return { summary: null, reason: 'le modèle a recopié la conversation au lieu de la résumer' };
+  }
+  if (SUMMARY_HEADINGS.filter((h) => h.test(t)).length < 2) {
+    return { summary: null, reason: 'format non respecté (rubriques manquantes)' };
+  }
+  return { summary: t.length > 3000 ? `${t.slice(0, 3000)}…` : t };
+}
+
+const HARNESS_PREFIXES = ['You showed code', 'You changed files', 'Your reply was empty', 'Your message was cut', '(stopped', '(earlier conversation'];
+
+/**
+ * Backup summary when the model cannot write one: the user's requests, the
+ * previous summary if any, and the assistant's last notes. No model involved.
+ */
+export function mechanicalSummary(messages) {
+  const parts = ['(The automatic summary failed. Notes extracted from the conversation:)'];
+  const prev = messages.find((m) => m.content.startsWith(SUMMARY_MARKER));
+  if (prev) {
+    const body = prev.content.split('\n').slice(1).join('\n').split(/\n(?:Files changed:|Last commands:|\[CURRENT TASK\]|Continue the task)/)[0].trim();
+    if (body) parts.push(`Earlier summary:\n${body.slice(0, 1500)}`);
+  }
+  const requests = messages
+    .filter((m) => m.role === 'user' && !m.content.includes('<result') && !m.content.startsWith(SUMMARY_MARKER) && !HARNESS_PREFIXES.some((p) => m.content.startsWith(p)))
+    .map((m) => `- ${m.content.trim().replace(/\s+/g, ' ').slice(0, 300)}`);
+  if (requests.length) parts.push(`User requests:\n${requests.slice(-5).join('\n')}`);
+  const notes = messages
+    .filter((m) => m.role === 'assistant')
+    .map((m) => parseActions(stripReasoning(m.content)).text.replace(/\s+/g, ' ').trim())
+    .filter((t) => t.length > 20)
+    .slice(-3)
+    .map((t) => `- ${t.slice(0, 400)}`);
+  if (notes.length) parts.push(`Last notes from the assistant:\n${notes.join('\n')}`);
+  return parts.join('\n\n');
 }
 
 export function buildSummaryMessage({ summary, facts, task }) {
