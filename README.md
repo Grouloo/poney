@@ -49,7 +49,8 @@ node src/cli.js --cwd ./mon-projet --model qwen2.5:14b "tâche"   # mode headles
 
 - **Modifier un message précédent et relancer** (« ✎ Modifier » au survol) : l'agent revient à son état d'avant ce
   message, même à travers un compactage (l'historique remplacé est archivé), et la suite est supprimée. Les fichiers
-  déjà modifiés par l'agent ne sont pas restaurés.
+  déjà modifiés par l'agent ne sont pas restaurés. Les anciennes conversations sont migrées à l'ouverture : point de
+  reprise exact si le message est encore dans l'historique, sinon historique reconstruit depuis le fil sauvegardé.
 - **Conversations sauvegardées et renommables** (✎ ou double-clic) par dossier de projet (`~/Library/Application Support/local-codex/conversations/`) :
   on peut les rouvrir après redémarrage, l'agent reprend avec son historique.
 - **Navigateur de fichiers** qui se met à jour quand l'agent écrit, et révèle le fichier modifié.

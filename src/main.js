@@ -7,6 +7,7 @@ import { Agent, DEFAULT_CONFIG } from './agent/agent.js';
 import { listModels } from './agent/llm.js';
 import { ConversationStore } from './conversations.js';
 import { listDir, readFileForViewer } from './files.js';
+import { migrateLegacy, rebuildHistory } from './agent/rebuild.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -143,7 +144,8 @@ ipcMain.handle('agent:rewind', (_, turnId) => {
   if (!conv) throw new Error('Aucune conversation ouverte.');
   const at = conv.events.findIndex((e) => e.type === 'user_message' && e.turnId === turnId);
   if (at < 0) throw new Error('Message introuvable dans cette conversation.');
-  a.rewind(turnId);
+  const cp = a.checkpoints.find((c) => c.turnId === turnId);
+  a.rewind(turnId, cp?.rebuild ? { rebuilt: rebuildHistory(conv.events.slice(0, at)) } : {});
   conv.events = conv.events.slice(0, at);
   saveConversation();
   return { events: conv.events };
@@ -161,6 +163,8 @@ ipcMain.handle('conversations:list', () => ({
 ipcMain.handle('conversations:open', (_, id) => {
   if (agent?.running) throw new Error('L’agent est en cours d’exécution.');
   const loaded = store.load(id);
+  // Conversations saved before rewind points existed: give them some.
+  if (migrateLegacy(loaded)) store.save(loaded, { touch: false });
   if (loaded.workspace !== settings.workspace) setWorkspace(loaded.workspace);
   const a = getAgent();
   a.reset();

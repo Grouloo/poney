@@ -162,11 +162,24 @@ export class Agent extends EventEmitter {
    * Puts the conversation back as it was just before the user message `turnId`
    * (that message and everything after it are removed). Files are not restored.
    */
-  rewind(turnId) {
+  rewind(turnId, { rebuilt } = {}) {
     if (this.running) throw new Error('Agent is running.');
     const i = this.checkpoints.findIndex((c) => c.turnId === turnId);
     if (i < 0) throw new Error('Ce message ne peut pas servir de point de reprise.');
     const cp = this.checkpoints[i];
+    if (cp.rebuild) {
+      // Old conversation whose exact history is gone: use the history rebuilt
+      // from the transcript (given by the caller). Earlier checkpoints can no
+      // longer point into an exact history, so they rebuild too.
+      if (!rebuilt) throw new Error('Rebuilt history required.');
+      this.messages = rebuilt;
+      this.untested = false;
+      this.checkpoints = this.checkpoints.slice(0, i).map((c) => ({ turnId: c.turnId, rebuild: true }));
+      this.archives = [];
+      this.lastUsage = null;
+      this.currentTask = null;
+      return;
+    }
     const base = cp.archive == null ? this.messages : this.archives[cp.archive];
     if (!base) throw new Error('L’historique de ce point de reprise n’est plus disponible.');
     this.messages = base.slice(0, cp.length).map((m) => ({ ...m }));
