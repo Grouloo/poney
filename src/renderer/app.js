@@ -228,6 +228,25 @@ function autosize() {
 }
 input.addEventListener('input', autosize);
 
+// ---------- generation timing ----------
+const fmtNum = (n, digits = 1) => n.toLocaleString('fr-FR', { maximumFractionDigits: digits, minimumFractionDigits: digits });
+const fmtSeconds = (ms) => `${fmtNum(ms / 1000)} s`;
+
+function formatStats(s) {
+  const parts = [fmtSeconds(s.genMs), `${s.exact ? '' : '≈'}${s.tokens} tokens`, `${fmtNum(s.tps)} tok/s`];
+  if (s.promptMs >= 500) parts.push(`lecture du prompt ${fmtSeconds(s.promptMs)}`);
+  return parts.join(' · ');
+}
+
+function statsDetails(s) {
+  return [
+    `Génération : ${fmtSeconds(s.genMs)} pour ${s.tokens} tokens${s.exact ? '' : ' (estimés : le flux a été arrêté avant la fin, après une action)'}`,
+    `Vitesse : ${fmtNum(s.tps)} tokens/s`,
+    `Lecture du prompt (avant le premier token) : ${fmtSeconds(s.promptMs)}`,
+    `Total : ${fmtSeconds(s.totalMs)}`,
+  ].join('\n');
+}
+
 // ---------- rendering agent events ----------
 function summarize(tool, args) {
   switch (tool) {
@@ -262,14 +281,26 @@ function onEvent(ev) {
     case 'assistant_start': {
       const el = div('msg assistant');
       const bubble = div('bubble cursor');
+      const meta = div('gen-meta live');
       el.appendChild(bubble);
+      el.appendChild(meta);
       add(el);
-      bubbles.set(ev.id, { el, bubble, raw: '', thinking: '', thinkingEl: null });
+      const b = { el, bubble, meta, raw: '', thinking: '', thinkingEl: null, t0: performance.now(), first: null, timer: null };
+      if (!replaying) {
+        const tick = () => {
+          const s = fmtSeconds(performance.now() - b.t0);
+          meta.textContent = b.first ? `Génération… ${s}` : `Lecture du prompt… ${s}`;
+        };
+        tick();
+        b.timer = setInterval(tick, 100);
+      }
+      bubbles.set(ev.id, b);
       break;
     }
     case 'delta': {
       const b = bubbles.get(ev.id);
       if (!b) break;
+      b.first ??= performance.now();
       if (ev.kind === 'thinking') {
         b.thinking += ev.text;
         if (!b.thinkingEl) {
@@ -290,6 +321,15 @@ function onEvent(ev) {
     case 'assistant_end': {
       const b = bubbles.get(ev.id);
       if (!b) break;
+      clearInterval(b.timer);
+      b.timer = null;
+      b.meta.classList.remove('live');
+      if (ev.stats) {
+        b.meta.textContent = formatStats(ev.stats);
+        b.meta.title = statsDetails(ev.stats);
+      } else {
+        b.meta.remove();
+      }
       b.bubble.classList.remove('cursor');
       const thinking = (b.thinking + (ev.thinking && !b.thinking ? ev.thinking : '')).trim();
       if (thinking && !b.thinkingEl) {
@@ -302,8 +342,8 @@ function onEvent(ev) {
         b.thinkingEl.querySelector('summary').textContent = 'Réflexion';
       }
       if (ev.text) b.bubble.innerHTML = markdown(ev.text);
-      else if (!thinking) b.el.remove();
-      else b.bubble.remove();
+      else if (!thinking && !ev.stats) b.el.remove();
+      else b.bubble.remove(); // only actions: keep the reasoning and the timing line
       break;
     }
     case 'action_start': {
@@ -389,7 +429,15 @@ function onEvent(ev) {
     case 'turn_end':
       if (replaying) break;
       setRunning(false);
-      for (const b of bubbles.values()) b.bubble.classList.remove('cursor');
+      for (const b of bubbles.values()) {
+        b.bubble.classList.remove('cursor');
+        if (b.timer) {
+          clearInterval(b.timer);
+          b.timer = null;
+          b.meta.classList.remove('live');
+          b.meta.textContent = `Interrompu après ${fmtSeconds(performance.now() - b.t0)}`;
+        }
+      }
       input.focus();
       break;
   }

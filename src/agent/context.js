@@ -6,7 +6,7 @@
 // the budget. Compacting rarely but a lot keeps the prompt prefix stable between
 // compactions, so the model server can reuse its KV cache instead of re-reading
 // the whole prompt at every step (which is slow on local hardware).
-import { parseActions } from './protocol.js';
+import { parseActions, stripReasoning } from './protocol.js';
 
 export const KEEP_RECENT = 0.5; // fraction of the budget kept verbatim (most recent messages)
 export const MIN_OUTPUT = 2048; // answer room guaranteed before compacting (capped by maxTokens and numCtx/4)
@@ -68,7 +68,7 @@ export function extractFacts(messages) {
   const commands = [];
   for (const m of messages) {
     if (m.role === 'assistant') {
-      for (const a of parseActions(m.content).actions) {
+      for (const a of parseActions(stripReasoning(m.content)).actions) {
         const p = a.args.path?.trim();
         if (a.tool === 'write' && p) files.set(p, 'written');
         if (a.tool === 'edit' && p && files.get(p) !== 'written') files.set(p, 'edited');
@@ -120,6 +120,7 @@ export function renderTranscript(messages, maxChars) {
   const parts = messages.map((m) => {
     let c = m.content;
     if (m.role === 'assistant') {
+      c = stripReasoning(c);
       c = c.replace(/(<(write|edit)\b[^>]*>)([\s\S]*?)(<\/\2>)/g, (_, open, __, body, close) =>
         `${open}[${body.split('\n').length} lines]${close}`);
     } else {

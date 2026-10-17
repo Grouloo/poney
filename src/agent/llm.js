@@ -61,7 +61,16 @@ export async function* streamChat({ provider, baseUrl, apiKey, model, messages, 
       if (m.thinking) yield { type: 'thinking', text: m.thinking };
       if (m.content) yield { type: 'text', text: m.content };
       if (data.done) {
-        if (data.prompt_eval_count) yield { type: 'usage', promptTokens: data.prompt_eval_count, outputTokens: data.eval_count || 0 };
+        if (data.prompt_eval_count || data.eval_count) {
+          yield {
+            type: 'usage',
+            promptTokens: data.prompt_eval_count || 0,
+            outputTokens: data.eval_count || 0,
+            // Server-side timings (nanoseconds -> ms): more exact than ours.
+            promptMs: data.prompt_eval_duration ? data.prompt_eval_duration / 1e6 : null,
+            evalMs: data.eval_duration ? data.eval_duration / 1e6 : null,
+          };
+        }
         yield { type: 'done', reason: data.done_reason || 'stop' };
         return;
       }

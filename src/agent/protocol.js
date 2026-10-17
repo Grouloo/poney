@@ -209,14 +209,30 @@ export function parseActions(text, { final = true } = {}) {
   return { actions, text: prose.join('').replace(/\n{3,}/g, '\n\n').trim() };
 }
 
-/** Removes <think>...</think> blocks some reasoning models put in their content. */
+/**
+ * Removes reasoning blocks from a model answer: <think> (used by many reasoning
+ * models) and <reasoning> (the wrapper we use to give the model back its own
+ * earlier reasoning; a model may imitate it).
+ */
 export function splitThinking(text) {
   let thinking = '';
-  const out = text.replace(/<think>([\s\S]*?)(<\/think>|$)/g, (_, t) => {
+  const out = text.replace(/<(think|reasoning)>([\s\S]*?)(<\/\1>|$)/g, (_, __, t) => {
     thinking += t;
     return '';
   });
   return { text: out, thinking };
+}
+
+/** Prefixes an assistant message with its reasoning, keeping the end (plans and conclusions are there). */
+export function withReasoning(content, thinking, maxChars) {
+  let t = (thinking || '').trim();
+  if (!t) return content;
+  if (t.length > maxChars) t = `[...]${t.slice(-maxChars)}`;
+  return `<reasoning>\n${t}\n</reasoning>\n${content}`;
+}
+
+export function stripReasoning(content) {
+  return content.replace(/<reasoning>[\s\S]*?<\/reasoning>\n?/g, '');
 }
 
 export function formatResult(tool, attrs, output) {

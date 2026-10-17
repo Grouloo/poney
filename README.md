@@ -34,6 +34,9 @@ node src/cli.js --cwd ./mon-projet --model qwen2.5:14b "tâche"   # mode headles
   calibrée sur les comptes réels renvoyés par le serveur. La taille de réponse demandée s'adapte à la place restante
   (jamais de dépassement de la fenêtre) ; une réponse coupée par la limite n'exécute jamais d'action inachevée,
   et si la coupure vient du manque de place, le contexte est compacté puis l'étape relancée.
+- **Raisonnement conservé pendant une tâche** : la réflexion du modèle (`<think>`, champ `thinking` d'Ollama,
+  `reasoning_content`) est renvoyée avec ses messages entre les appels d'outils (plafonnée, la fin est gardée),
+  pour qu'il ne reparte pas de zéro après chaque résultat ; elle est retirée à la demande suivante.
 - Détection de boucles, relance si le modèle colle du code au lieu de l'écrire.
 - Notes de projet lues depuis `AGENTS.md` / `LOCAL_CODEX.md` / `CLAUDE.md`.
 
@@ -48,6 +51,8 @@ node src/cli.js --cwd ./mon-projet --model qwen2.5:14b "tâche"   # mode headles
   modifier, il est enregistré avec la conversation. Un badge « modifié » signale un prompt personnalisé.
 - **Jauge de contexte** sous la saisie (le trait marque le seuil de compactage) ; un clic compacte à la demande.
   Les résumés apparaissent dans le fil, dépliables.
+- **Temps et vitesse** : chronomètre pendant la génération (lecture du prompt, puis génération), puis sous chaque
+  message de l'agent : durée, tokens et tokens/s (comptes du serveur, ou estimés « ≈ » si le flux a été coupé).
 - **Visualiseur** avec coloration syntaxique et aperçu d'images ; les chemins dans les actions de l'agent sont cliquables.
 
 ## Structure

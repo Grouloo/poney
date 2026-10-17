@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { streamChat, complete } from './llm.js';
-import { TOOLS, buildSystemPrompt, parseActions, splitThinking, formatResult, isToolEnabled } from './protocol.js';
+import { TOOLS, buildSystemPrompt, parseActions, splitThinking, formatResult, isToolEnabled, withReasoning, stripReasoning } from './protocol.js';
 import { executeAction, runShell, truncateMiddle } from './tools.js';
 import {
   SUMMARY_MAX_TOKENS, DEFAULT_CHARS_PER_TOKEN,
@@ -29,6 +29,26 @@ export const DEFAULT_CONFIG = {
 };
 
 const PROJECT_NOTE_FILES = ['AGENTS.md', 'LOCAL_CODEX.md', 'CLAUDE.md'];
+/**
+ * Timing of one generation. Uses the server's counts and durations when it
+ * reports them (not the case when we stop the stream early), else estimates.
+ */
+export function generationStats({ t0, tFirst, tEnd, usage, est, text }) {
+  if (tFirst == null) return null;
+  const exact = Boolean(usage?.outputTokens);
+  const tokens = exact ? usage.outputTokens : est(text);
+  const genMs = usage?.evalMs || Math.max(1, tEnd - tFirst);
+  const promptMs = usage?.promptMs ?? tFirst - t0;
+  return {
+    totalMs: tEnd - t0,
+    promptMs: Math.round(promptMs),
+    genMs: Math.round(genMs),
+    tokens,
+    tps: Math.round((tokens / (genMs / 1000)) * 10) / 10,
+    exact,
+  };
+}
+
 /** The user request carried by a message (unwraps a compaction summary). */
 function taskFromMessage(content) {
   if (!content.startsWith(SUMMARY_MARKER)) return content;
@@ -246,6 +266,12 @@ export class Agent extends EventEmitter {
 
   // ----- generation -----
 
+  /** Assistant message for the history: the answer, preceded by its reasoning (capped). */
+  assistantContent(gen, text) {
+    const maxChars = Math.floor(this.config.numCtx * this.charsPerToken * 0.08);
+    return withReasoning(text, gen.thinking, maxChars);
+  }
+
   async generate(system, signal) {
     const id = nextId++;
     this.emit('event', { type: 'assistant_start', id });
@@ -256,6 +282,9 @@ export class Agent extends EventEmitter {
     let thinking = '';
     let cutAt = -1;
     let doneReason = null;
+    let usage = null;
+    const t0 = Date.now();
+    let tFirst = null;
     const prompt = this.buildPrompt(system);
     const promptChars = prompt.reduce((n, m) => n + m.content.length, 0);
     // Ask for as long an answer as fits: never more than the window, so the
@@ -270,6 +299,7 @@ export class Agent extends EventEmitter {
       })) {
         if (chunk.type === 'done') { doneReason = chunk.reason; continue; }
         if (chunk.type === 'usage') {
+          usage = chunk;
           this.lastUsage = chunk;
           if (isValidSample(this.charsPerToken, promptChars, chunk.promptTokens)) {
             this.charsPerToken = calibrate(this.charsPerToken, promptChars, chunk.promptTokens);
@@ -277,6 +307,7 @@ export class Agent extends EventEmitter {
           }
           continue;
         }
+        tFirst ??= Date.now();
         if (chunk.type === 'thinking') {
           thinking += chunk.text;
           this.emit('event', { type: 'delta', id, kind: 'thinking', text: chunk.text });
@@ -307,7 +338,8 @@ export class Agent extends EventEmitter {
     thinking += split.thinking;
     // Cut by the length limit (not by us): the end of the answer is missing.
     const truncated = cutAt < 0 && doneReason === 'length';
-    return { id, text: visible, thinking, truncated, contextLimited: truncated && maxTokens < this.config.maxTokens };
+    const stats = generationStats({ t0, tFirst, tEnd: Date.now(), usage, est: this.est, text: text + thinking });
+    return { id, text: visible, thinking, truncated, contextLimited: truncated && maxTokens < this.config.maxTokens, stats };
   }
 
   // ----- main loop -----
@@ -318,6 +350,10 @@ export class Agent extends EventEmitter {
     this.abort = new AbortController();
     const { signal } = this.abort;
     const config = this.config;
+    // Reasoning is kept across the tool calls of a turn (so the model does not
+    // restart its thinking from scratch after each result), then dropped when
+    // the next request starts.
+    for (const m of this.messages) if (m.role === 'assistant') m.content = stripReasoning(m.content);
     this.turnStartIndex = this.messages.length;
     this.currentTask = userText;
     this.messages.push({ role: 'user', content: userText });
@@ -366,9 +402,9 @@ export class Agent extends EventEmitter {
             : 'Your message was cut at the length limit. Continue from where it stopped, more briefly.';
           notice(unfinished ? `Réponse coupée (limite de longueur) : <${unfinished.tool}> incomplet, non exécuté.` : 'Réponse coupée (limite de longueur).');
         }
-        this.emit('event', { type: 'assistant_end', id: gen.id, text: prose, thinking: gen.thinking, hasActions: actions.length > 0 });
+        this.emit('event', { type: 'assistant_end', id: gen.id, text: prose, thinking: gen.thinking, hasActions: actions.length > 0, stats: gen.stats });
         if (gen.truncated && !actions.length) {
-          this.messages.push({ role: 'assistant', content: gen.text.slice(0, unfinished?.start ?? gen.text.length).trim() || '(cut)' });
+          this.messages.push({ role: 'assistant', content: this.assistantContent(gen, gen.text.slice(0, unfinished?.start ?? gen.text.length).trim() || '(cut)') });
           this.messages.push({ role: 'user', content: cutNote });
           continue;
         }
@@ -377,11 +413,11 @@ export class Agent extends EventEmitter {
         if (!actions.length) {
           if (!gen.text.trim()) {
             if (++emptyReplies > 2) { reason = 'empty'; notice('Le modèle ne répond plus.'); break; }
-            this.messages.push({ role: 'assistant', content: '(empty)' });
+            this.messages.push({ role: 'assistant', content: this.assistantContent(gen, '(empty)') });
             this.messages.push({ role: 'user', content: 'Your reply was empty. Continue the task using a tool tag, or give your final summary.' });
             continue;
           }
-          this.messages.push({ role: 'assistant', content: gen.text });
+          this.messages.push({ role: 'assistant', content: this.assistantContent(gen, gen.text) });
 
           // Code pasted in a markdown block instead of written to a file.
           if (!codeDumpNudged && /```[\w-]*\n[\s\S]{80,}?```/.test(gen.text) && /\b(create|write|fix|implement|add|update|modify|refactor|cré|écri|ajout|modifi|corrig|implémen)/i.test(userText)) {
@@ -427,7 +463,7 @@ export class Agent extends EventEmitter {
           if (TOOLS[a.tool].observes) break;
         }
         const last = toRun[toRun.length - 1];
-        this.messages.push({ role: 'assistant', content: gen.text.slice(0, last.end).trim() });
+        this.messages.push({ role: 'assistant', content: this.assistantContent(gen, gen.text.slice(0, last.end).trim()) });
 
         const results = [];
         let stopBatch = false;
