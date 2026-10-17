@@ -10,6 +10,8 @@ import {
 import { Agent } from '../src/agent/agent.js';
 
 const est = makeEstimator(3.2);
+// A summary request: separate transcript, or continuation of the conversation.
+const isSummaryReq = (d) => d.messages[0].content.startsWith('You summarize') || d.messages.at(-1).content.includes('PAUSE THE TASK');
 const msg = (role, content) => ({ role, content });
 
 test('splitForCompaction keeps recent messages that fit, at least 2', () => {
@@ -71,7 +73,7 @@ function fakeOllama(handler) {
 }
 
 test('agent compacts a long history with a summary, then keeps a stable prefix', async () => {
-  const isSummary = (data) => data.messages[0].content.startsWith('You summarize');
+  const isSummary = (data) => isSummaryReq(data);
   let step = 0;
   const fake = await fakeOllama((data) => {
     const chars = data.messages.reduce((n, m) => n + m.content.length, 0);
@@ -322,7 +324,7 @@ test('an unfinished <write> cut by the length limit is not executed', async () =
 });
 
 test('an answer cut because the window is full triggers compaction and a retry', async () => {
-  const isSummary = (d) => d.messages[0].content.startsWith('You summarize');
+  const isSummary = (d) => isSummaryReq(d);
   let main = 0;
   const fake = await fakeOllama((d) => {
     if (isSummary(d)) return { content: 'Goal: g\nNext step: s', promptTokens: 0 };
@@ -355,4 +357,25 @@ test('manual compaction works on a history that would fit in the window', async 
   fake.server.close();
   assert.equal(r.compacted, true);
   assert.ok(r.after < r.before);
+});
+
+test('the summary request continues the cached conversation (same prefix, no re-read)', async () => {
+  const fake = await fakeOllama((d) => (isSummaryReq(d)
+    ? { content: 'Goal: g\nNext step: s', promptTokens: 0 }
+    : { content: fake.requests.filter((r) => !isSummaryReq(r)).length === 1 ? '<read path="big.txt" />' : 'Done.', promptTokens: 0 }));
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-ctx-'));
+  await fs.writeFile(path.join(cwd, 'big.txt'), `${'data '.repeat(1000)}\n`);
+  const agent = new Agent({ cwd, config: { baseUrl: fake.url, model: 'fake', numCtx: 8192, maxTokens: 4096 } });
+  bigHistory(agent, 10, 270); // just under the budget; reading big.txt pushes it over
+  const events = [];
+  agent.on('event', (e) => events.push(e));
+  await agent.send('go');
+  fake.server.close();
+
+  assert.deepEqual(fake.requests.map((d) => (isSummaryReq(d) ? 'summary' : 'main')), ['main', 'summary', 'main']);
+  const [main, summary] = fake.requests;
+  assert.match(summary.messages.at(-1).content, /PAUSE THE TASK/);
+  assert.equal(summary.messages[0].content, main.messages[0].content, 'same system prompt');
+  assert.deepEqual(summary.messages.slice(0, main.messages.length), main.messages, 'previous request is an exact prefix');
+  assert.equal(events.find((e) => e.type === 'compaction').fallback, false);
 });

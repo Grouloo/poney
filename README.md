@@ -36,9 +36,12 @@ node src/cli.js --cwd ./mon-projet --model qwen2.5:14b "tâche"   # mode headles
   résumé, un résumé de secours est construit (demandes, résumé précédent, dernières notes) et la raison est affichée. La taille de réponse demandée s'adapte à la place restante
   (jamais de dépassement de la fenêtre) ; une réponse coupée par la limite n'exécute jamais d'action inachevée,
   et si la coupure vient du manque de place, le contexte est compacté puis l'étape relancée.
-- **Raisonnement conservé pendant une tâche** : la réflexion du modèle (`<think>`, champ `thinking` d'Ollama,
-  `reasoning_content`) est renvoyée avec ses messages entre les appels d'outils (plafonnée, la fin est gardée),
-  pour qu'il ne reparte pas de zéro après chaque résultat ; elle est retirée à la demande suivante.
+- **Raisonnement conservé** : la réflexion du modèle (`<think>`, champ `thinking` d'Ollama, `reasoning_content`)
+  est renvoyée avec ses messages (plafonnée, la fin est gardée), pour qu'il ne reparte pas de zéro après chaque
+  résultat d'outil. Elle disparaît au compactage.
+- **Cache du serveur préservé** : le début du prompt ne change jamais d'un appel à l'autre (sauf au compactage),
+  donc le serveur ne relit que les nouveaux tokens. Le résumé de compactage est demandé dans la continuité de la
+  conversation déjà en cache (quelques secondes au lieu de plusieurs minutes de relecture sur du matériel modeste).
 - Détection de boucles, relance si le modèle colle du code au lieu de l'écrire.
 - Notes de projet lues depuis `AGENTS.md` / `LOCAL_CODEX.md` / `CLAUDE.md`.
 

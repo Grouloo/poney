@@ -3,11 +3,12 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { streamChat, complete, serverContextLength } from './llm.js';
-import { TOOLS, buildSystemPrompt, parseActions, splitThinking, formatResult, isToolEnabled, withReasoning, stripReasoning } from './protocol.js';
+import { TOOLS, buildSystemPrompt, parseActions, splitThinking, formatResult, isToolEnabled, withReasoning } from './protocol.js';
 import { executeAction, runShell, truncateMiddle } from './tools.js';
 import {
   summaryTokens, mechanicalSummary, DEFAULT_CHARS_PER_TOKEN,
   makeEstimator, contextPlan, answerTokens, isValidSample, historyTokens, splitForCompaction, extractFacts, buildSummaryRequest, cleanSummary,
+  buildInlineSummaryRequest,
   buildSummaryMessage, calibrate, SUMMARY_MARKER, filesInContext,
 } from './context.js';
 
@@ -47,6 +48,18 @@ export function generationStats({ t0, tFirst, tEnd, usage, est, text }) {
     tps: Math.round((tokens / (genMs / 1000)) * 10) / 10,
     exact,
   };
+}
+
+/** Models expect alternating roles: merge consecutive same-role messages, start with a user one. */
+function mergeRoles(msgs) {
+  const merged = [];
+  for (const m of msgs) {
+    const last = merged[merged.length - 1];
+    if (last && last.role === m.role) last.content += `\n\n${m.content}`;
+    else merged.push({ role: m.role, content: m.content });
+  }
+  if (merged[0]?.role === 'assistant') merged.unshift({ role: 'user', content: '(earlier conversation removed)' });
+  return merged;
 }
 
 /** The user request carried by a message (unwraps a compaction summary). */
@@ -155,14 +168,15 @@ export class Agent extends EventEmitter {
   // ----- context management -----
 
   /** Builds the message list sent to the model, compacting old turns to fit num_ctx. */
-  buildPrompt(system) {
+  buildPrompt(system, { raw = false } = {}) {
     // Normally maybeCompact() keeps the history within budget; the passes below
     // are a safety net (e.g. a single huge message, or a failed compaction).
     const est = this.est;
     const msgs = this.messages.map((m) => ({ ...m }));
     const { budget } = this.plan(system);
     const total = () => historyTokens(msgs, est);
-    if (total() <= budget) return [{ role: 'system', content: system }, ...msgs];
+    // raw: exactly what the server already has in cache (used for the summary request).
+    if (raw || total() <= budget) return [{ role: 'system', content: system }, ...mergeRoles(msgs)];
 
     // Pass 1: shrink old tool results and old file bodies, oldest first, keeping the last 4 messages intact.
     for (let i = 0; i < msgs.length - 4 && total() > budget; i++) {
@@ -188,15 +202,7 @@ export class Agent extends EventEmitter {
       const task = msgs.findIndex((m) => m.keep);
       msgs[task].content = `${msgs[task].content}\n\n[${dropped} older messages were removed to save memory. Re-read files if you need them.]`;
     }
-    // Models expect alternating roles; merge consecutive same-role messages.
-    const merged = [];
-    for (const m of msgs) {
-      const last = merged[merged.length - 1];
-      if (last && last.role === m.role) last.content += `\n\n${m.content}`;
-      else merged.push({ role: m.role, content: m.content });
-    }
-    if (merged[0]?.role === 'assistant') merged.unshift({ role: 'user', content: '(earlier conversation removed)' });
-    return [{ role: 'system', content: system }, ...merged];
+    return [{ role: 'system', content: system }, ...mergeRoles(msgs)];
   }
 
   // ----- context gauge & compaction -----
@@ -247,20 +253,29 @@ export class Agent extends EventEmitter {
     // previous compaction the first message is a summary: take the request it carries.
     const task = turnStart < old.length ? (this.currentTask ?? taskFromMessage(this.messages[turnStart].content)) : null;
 
-    // The summarizer sees the old part only; leave room for its own answer.
+    // 1st try: continue the cached conversation with a summary instruction (the
+    // server has already read that prompt: no long re-read). Then: a separate
+    // transcript of the old part, shortened if the server rejects it.
     const cfg = this.cfg;
+    const plan = this.plan(system);
+    const prompt = this.buildPrompt(system, { raw: true });
+    const inlineRoom = cfg.numCtx - historyTokens(prompt, est) - plan.margin - 150;
+    const attempts = [];
+    if (inlineRoom >= 600) attempts.push({ inline: true, maxTokens: Math.min(summaryTokens(cfg.numCtx), inlineRoom) });
+    attempts.push({ inline: false }, { inline: false, retry: true });
     const maxTokens = summaryTokens(cfg.numCtx);
     let maxChars = Math.max(3000, Math.floor((cfg.numCtx - maxTokens - 800) * this.charsPerToken * 0.85));
     let summary = null;
     let failure = null;
-    for (let attempt = 0; attempt < 2 && !summary; attempt++) {
+    for (const attempt of attempts) {
+      if (summary) break;
       try {
         const r = await complete({
           ...cfg,
-          maxTokens,
-          temperature: attempt === 0 ? 0.1 : 0.4,
+          maxTokens: attempt.maxTokens ?? maxTokens,
+          temperature: attempt.retry ? 0.4 : 0.1,
           signal,
-          messages: buildSummaryRequest(old, maxChars, { retry: attempt > 0 }),
+          messages: attempt.inline ? buildInlineSummaryRequest(prompt) : buildSummaryRequest(old, maxChars, { retry: attempt.retry }),
         });
         const c = cleanSummary(r.text);
         summary = c.summary;
@@ -272,7 +287,7 @@ export class Agent extends EventEmitter {
       } catch (e) {
         if (signal?.aborted) throw e;
         failure = `erreur du serveur : ${e.message.slice(0, 200)}`;
-        maxChars = Math.floor(maxChars / 2); // the request may have been too long for the server
+        if (!attempt.inline) maxChars = Math.floor(maxChars / 2); // the request may have been too long for the server
       }
     }
     // Fallback without the model: requests, previous summary, last notes.
@@ -388,10 +403,10 @@ export class Agent extends EventEmitter {
     this.abort = new AbortController();
     const { signal } = this.abort;
     const config = this.config;
-    // Reasoning is kept across the tool calls of a turn (so the model does not
-    // restart its thinking from scratch after each result), then dropped when
-    // the next request starts.
-    for (const m of this.messages) if (m.role === 'assistant') m.content = stripReasoning(m.content);
+    // Reasoning stays in the history (so the model does not restart its thinking
+    // from scratch after each result) until a compaction summarizes it: removing
+    // it here would change the start of the prompt and force the server to
+    // re-read everything (minutes on local hardware).
     this.turnStartIndex = this.messages.length;
     this.currentTask = userText;
     const turnT0 = Date.now();

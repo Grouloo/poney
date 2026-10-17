@@ -30,7 +30,7 @@ function fakeOllama(replies) {
 const tmp = () => fs.mkdtemp(path.join(os.tmpdir(), 'lcx-think-'));
 const assistantMsgs = (req) => req.messages.filter((m) => m.role === 'assistant').map((m) => m.content);
 
-test('reasoning is kept across tool calls of a turn, and dropped at the next request', async () => {
+test('reasoning is kept across tool calls and turns, so the prompt start never changes', async () => {
   const cwd = await tmp();
   await fs.writeFile(path.join(cwd, 'a.txt'), 'hello\n');
   const fake = await fakeOllama([
@@ -45,10 +45,10 @@ test('reasoning is kept across tool calls of a turn, and dropped at the next req
 
   // Step 2 sees the reasoning of step 1.
   assert.match(assistantMsgs(fake.requests[1])[0], /^<reasoning>\nPLAN: first read a\.txt, then answer\.\n<\/reasoning>\n<read path="a\.txt" \/>/);
-  // Next request: earlier reasoning removed, actions kept.
-  const third = assistantMsgs(fake.requests[2]).join('\n');
-  assert.doesNotMatch(third, /reasoning|PLAN/);
-  assert.match(third, /<read path="a\.txt" \/>/);
+  // Next request: the previous messages are unchanged (server cache reusable).
+  const prev = fake.requests[1].messages;
+  assert.deepEqual(fake.requests[2].messages.slice(0, prev.length), prev);
+  assert.match(assistantMsgs(fake.requests[2]).join('\n'), /PLAN/);
 });
 
 test('inline <think> blocks are kept the same way', async () => {

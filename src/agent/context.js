@@ -167,6 +167,26 @@ export function buildSummaryRequest(messages, maxChars, { retry = false } = {}) 
   ];
 }
 
+export const SUMMARY_INLINE_INSTRUCTION = 'PAUSE THE TASK: do not use any tool now. ' +
+  'Write only a summary of the whole conversation so far, so that the work can continue with a fresh memory: ' +
+  'at most 200 words, short bullet points under exactly these headings: Goal:, Done so far:, Current state: (what works, what fails, exact errors), Next step:. ' +
+  'Be concrete (files, functions, commands). Never invent anything.';
+
+/**
+ * Summary request that reuses the server's prompt cache: the exact prompt of the
+ * conversation (already read by the server) plus the instruction at the end.
+ * Reading a whole new transcript instead can take minutes on local hardware.
+ * The instruction is appended to the last user message when there is one, to
+ * keep roles alternating (some chat templates, e.g. Gemma's, require it).
+ */
+export function buildInlineSummaryRequest(prompt) {
+  const msgs = prompt.map((m) => ({ ...m }));
+  const last = msgs[msgs.length - 1];
+  if (last.role === 'user') last.content = `${last.content}\n\n${SUMMARY_INLINE_INSTRUCTION}`;
+  else msgs.push({ role: 'user', content: SUMMARY_INLINE_INSTRUCTION });
+  return msgs;
+}
+
 // Headings in English or French (small models often answer in the user's language).
 const SUMMARY_HEADINGS = [
   /goal|objecti|but\s*:/i,
