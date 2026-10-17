@@ -59,6 +59,7 @@ function div(cls, html) {
 
 function setRunning(v) {
   running = v;
+  document.body.classList.toggle('running', v); // hides the "edit message" buttons
   sendBtn.textContent = v ? 'Arrêter' : 'Envoyer';
   sendBtn.classList.toggle('stop', v);
   if (v) startRunTimer();
@@ -183,10 +184,71 @@ function clearTranscript() {
   transcript.appendChild(div('msg notice', `Nouvelle conversation dans ${esc(shortPath(settings.workspace))}`));
 }
 
-function addUserMessage(text) {
+function addUserMessage(text, turnId) {
   const m = div('msg user');
   m.appendChild(div('bubble')).textContent = text;
+  if (turnId) {
+    // Messages sent before this feature have no rewind point: no edit button.
+    const btn = document.createElement('button');
+    btn.className = 'edit-msg';
+    btn.textContent = '✎ Modifier';
+    btn.title = 'Modifier ce message et relancer la conversation à partir d’ici';
+    btn.onclick = () => startEditMessage(m, turnId, text);
+    m.appendChild(btn);
+  }
   add(m);
+}
+
+/** Inline editor on a previous user message; "Relancer" restarts the conversation from it. */
+function startEditMessage(m, turnId, text) {
+  if (running || m.classList.contains('editing')) return;
+  m.classList.add('editing');
+  const editor = div('msg-editor');
+  editor.innerHTML = `<textarea rows="3"></textarea>
+    <p class="edit-note">Les messages qui suivent seront supprimés de la conversation. Les fichiers déjà modifiés par l’agent ne sont pas restaurés.</p>
+    <div class="edit-actions"><button class="ghost cancel">Annuler</button><button class="primary relaunch">Relancer</button></div>`;
+  const area = editor.querySelector('textarea');
+  area.value = text;
+  m.appendChild(editor);
+  const fit = () => { area.style.height = 'auto'; area.style.height = `${Math.min(area.scrollHeight, 360)}px`; };
+  fit();
+  area.addEventListener('input', fit);
+  area.focus();
+  area.setSelectionRange(area.value.length, area.value.length);
+  const close = () => { editor.remove(); m.classList.remove('editing'); };
+  const relaunch = async () => {
+    const newText = area.value.trim();
+    if (!newText || running) return;
+    try {
+      const { events } = await window.api.rewind(turnId);
+      replayTranscript(events);
+    } catch (e) {
+      close();
+      add(div('error', esc(errorText(e))));
+      return;
+    }
+    refreshGauge();
+    await sendMessage(newText);
+  };
+  editor.querySelector('.cancel').onclick = close;
+  editor.querySelector('.relaunch').onclick = relaunch;
+  area.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); close(); }
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); relaunch(); }
+  });
+}
+
+function replayTranscript(events) {
+  transcript.innerHTML = '';
+  bubbles.clear();
+  cards.clear();
+  replaying = true;
+  try {
+    for (const ev of events) onEvent(ev);
+  } finally {
+    replaying = false;
+  }
+  transcript.scrollTop = transcript.scrollHeight;
 }
 
 // ---------- sending ----------
@@ -209,10 +271,15 @@ async function submit() {
   }
   input.value = '';
   autosize();
-  addUserMessage(text);
+  await sendMessage(text);
+}
+
+async function sendMessage(text) {
+  const turnId = crypto.randomUUID();
+  addUserMessage(text, turnId);
   setRunning(true);
   try {
-    await window.api.send(text);
+    await window.api.send(text, turnId);
   } catch (e) {
     add(div('error', esc(e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''))));
     setRunning(false);
@@ -448,7 +515,7 @@ function onEvent(ev) {
       add(div('error', esc(ev.message)));
       break;
     case 'user_message':
-      addUserMessage(ev.text);
+      addUserMessage(ev.text, ev.turnId);
       break;
     case 'turn_end':
       promptProgress = null;
@@ -595,16 +662,7 @@ async function openConversation(id) {
     refreshTree();
     closeViewer();
   }
-  transcript.innerHTML = '';
-  bubbles.clear();
-  cards.clear();
-  replaying = true;
-  try {
-    for (const ev of events) onEvent(ev);
-  } finally {
-    replaying = false;
-  }
-  transcript.scrollTop = transcript.scrollHeight;
+  replayTranscript(events);
   refreshConversations();
   refreshPromptBadge();
   refreshGauge();

@@ -76,6 +76,8 @@ function saveConversation() {
   conv.messages = agent.messages;
   conv.untested = agent.untested;
   conv.systemPrompt = agent.systemPrompt;
+  conv.checkpoints = agent.checkpoints;
+  conv.archives = agent.archives;
   store.save(conv);
   send('conversations:changed', conv.id);
 }
@@ -119,19 +121,32 @@ ipcMain.handle('workspace:set', (_, dir) => {
 });
 ipcMain.handle('workspace:reveal', () => settings.workspace && shell.openPath(settings.workspace));
 ipcMain.handle('models:list', async (_, cfg) => listModels({ ...settings.config, ...cfg }));
-ipcMain.handle('agent:send', async (_, text) => {
+ipcMain.handle('agent:send', async (_, text, turnId) => {
   const a = getAgent();
   if (a.running) throw new Error('L’agent est déjà en cours d’exécution.');
   if (!conv) {
     conv = store.create(settings.workspace, text);
     conv.systemPrompt = a.systemPrompt; // edited before the first message
   }
-  store.record(conv, { type: 'user_message', text });
+  store.record(conv, { type: 'user_message', text, turnId });
   store.save(conv);
   send('conversations:changed', conv.id);
   // Events stream back through 'agent:event'.
-  a.send(text).catch((e) => send('agent:event', { type: 'error', message: e.message }));
+  a.send(text, { turnId }).catch((e) => send('agent:event', { type: 'error', message: e.message }));
   return true;
+});
+// Restart the conversation from an earlier user message (edited by the user):
+// the agent goes back to its state before that message, and the transcript is cut there.
+ipcMain.handle('agent:rewind', (_, turnId) => {
+  const a = getAgent();
+  if (a.running) throw new Error('L’agent est en cours d’exécution.');
+  if (!conv) throw new Error('Aucune conversation ouverte.');
+  const at = conv.events.findIndex((e) => e.type === 'user_message' && e.turnId === turnId);
+  if (at < 0) throw new Error('Message introuvable dans cette conversation.');
+  a.rewind(turnId);
+  conv.events = conv.events.slice(0, at);
+  saveConversation();
+  return { events: conv.events };
 });
 ipcMain.handle('agent:stop', () => {
   resolveApprovals(false);
@@ -152,6 +167,8 @@ ipcMain.handle('conversations:open', (_, id) => {
   a.messages = loaded.messages;
   a.untested = loaded.untested;
   a.systemPrompt = loaded.systemPrompt ?? null;
+  a.checkpoints = loaded.checkpoints ?? [];
+  a.archives = loaded.archives ?? [];
   conv = loaded;
   return { events: loaded.events, settings };
 });

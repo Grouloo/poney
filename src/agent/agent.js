@@ -86,6 +86,11 @@ export class Agent extends EventEmitter {
     this.calibratedFor = null;
     this.calibrated = false; // true once a real token count has been used
     this.lastUsage = null; // last token counts reported by the server
+    // Rewind points: one per user message, to restart the conversation from an
+    // edited message. A compaction rewrites the history, so the history it
+    // replaces is archived and the checkpoints taken before it point there.
+    this.checkpoints = []; // [{ turnId, archive: index | null (current history), length, untested }]
+    this.archives = []; // pre-compaction histories (null once no checkpoint needs them)
     this.serverCtx = null; // context length actually loaded on the server, if it says
     this.serverCtxKey = null;
     this.serverCtxAt = 0;
@@ -147,6 +152,31 @@ export class Agent extends EventEmitter {
     this.messages = [];
     this.untested = false;
     this.systemPrompt = null;
+    this.lastUsage = null;
+    this.currentTask = null;
+    this.checkpoints = [];
+    this.archives = [];
+  }
+
+  /**
+   * Puts the conversation back as it was just before the user message `turnId`
+   * (that message and everything after it are removed). Files are not restored.
+   */
+  rewind(turnId) {
+    if (this.running) throw new Error('Agent is running.');
+    const i = this.checkpoints.findIndex((c) => c.turnId === turnId);
+    if (i < 0) throw new Error('Ce message ne peut pas servir de point de reprise.');
+    const cp = this.checkpoints[i];
+    const base = cp.archive == null ? this.messages : this.archives[cp.archive];
+    if (!base) throw new Error('L’historique de ce point de reprise n’est plus disponible.');
+    this.messages = base.slice(0, cp.length).map((m) => ({ ...m }));
+    this.untested = cp.untested;
+    this.checkpoints = this.checkpoints.slice(0, i);
+    // Earlier checkpoints still pointing at the restored archive now match the
+    // current history; archives nobody points at any more are dropped.
+    for (const c of this.checkpoints) if (c.archive === cp.archive) c.archive = null;
+    const used = new Set(this.checkpoints.map((c) => c.archive));
+    this.archives = this.archives.map((a, k) => (used.has(k) ? a : null));
     this.lastUsage = null;
     this.currentTask = null;
   }
@@ -296,6 +326,11 @@ export class Agent extends EventEmitter {
     summary ??= mechanicalSummary(old);
 
     const content = buildSummaryMessage({ summary, facts: extractFacts(old), task });
+    // Keep the history being replaced for the rewind points that need it.
+    if (this.checkpoints.some((c) => c.archive == null)) {
+      const k = this.archives.push(this.messages) - 1;
+      for (const c of this.checkpoints) if (c.archive == null) c.archive = k;
+    }
     this.messages = [{ role: 'user', content }, ...recent];
     this.turnStartIndex = task ? 0 : turnStart - old.length + 1;
     const after = historyTokens(this.messages, est);
@@ -404,8 +439,9 @@ export class Agent extends EventEmitter {
 
   // ----- main loop -----
 
-  async send(userText) {
+  async send(userText, { turnId } = {}) {
     if (this.running) throw new Error('Agent is already running.');
+    if (turnId) this.checkpoints.push({ turnId, archive: null, length: this.messages.length, untested: this.untested });
     this.running = true;
     this.abort = new AbortController();
     const { signal } = this.abort;
