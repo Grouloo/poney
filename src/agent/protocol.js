@@ -135,6 +135,55 @@ export function parseEditBody(body) {
   return pairs;
 }
 
+const tryJson = (s) => {
+  try { return JSON.parse(s); } catch { return null; }
+};
+
+const quoteAttr = (k, v) => {
+  if (v === undefined || v === null || v === '') return '';
+  const s = String(v);
+  return s.includes('"') ? ` ${k}='${s}'` : ` ${k}="${s}"`;
+};
+
+/** Our tag for a tool call given as name + JSON arguments (native function calling formats). */
+function jsonToTag(name, a = {}) {
+  const tool = ALIASES[name] || name;
+  if (!TOOLS[tool]) return null;
+  switch (tool) {
+    case 'write': return `<write${quoteAttr('path', a.path ?? a.file)}>\n${a.content ?? a.text ?? ''}\n</write>`;
+    case 'edit': return `<edit${quoteAttr('path', a.path ?? a.file)}>\n<old>${a.old ?? a.old_text ?? a.search ?? ''}</old>\n<new>${a.new ?? a.new_text ?? a.replace ?? ''}</new>\n</edit>`;
+    case 'run': return `<run>${a.command ?? a.cmd ?? ''}</run>`;
+    case 'web_search': return `<web_search>${a.query ?? a.q ?? ''}</web_search>`;
+    case 'fetch': return `<fetch>${a.url ?? ''}</fetch>`;
+    default: return `<${tool}${['path', 'start', 'end', 'pattern', 'depth'].map((k) => quoteAttr(k, a[k])).join('')} />`;
+  }
+}
+
+/**
+ * Models trained for function calling sometimes use their native format instead
+ * of our tags. Rewrite the common ones into our tags:
+ * - Gemma: <|tool_call>call:list path="." /<tool_call|>  (or call:name{json})
+ * - Hermes/Qwen: <tool_call>{"name": "...", "arguments": {...}}</tool_call>
+ *   (also what the client emits for API-level tool_calls).
+ */
+export function normalizeToolCalls(text) {
+  let t = text.replace(/<\|tool_call>\s*call:\s*([a-z_]+)([\s\S]*?)<tool_call\|>/gi, (m, name, rest) => {
+    let r = rest.trim();
+    const json = tryJson(r);
+    if (json && typeof json === 'object') return jsonToTag(name, json) ?? m;
+    if (r.endsWith('/')) r = r.slice(0, -1).trim();
+    const tool = ALIASES[name] || name;
+    return TOOLS[tool] ? `<${tool}${r ? ` ${r}` : ''} />` : m;
+  });
+  t = t.replace(/<tool_call>\s*(\{[\s\S]*?\})\s*<\/tool_call>/g, (m, body) => {
+    const o = tryJson(body);
+    if (!o?.name) return m;
+    const args = typeof o.arguments === 'string' ? tryJson(o.arguments) ?? {} : o.arguments ?? o.parameters ?? {};
+    return jsonToTag(o.name, args) ?? m;
+  });
+  return t;
+}
+
 /**
  * Models often talk about the tools ("I will rewrite it with the `<write>` tag").
  * Taking that for a call is harmful: a <write> without path fails, and having no
@@ -163,6 +212,7 @@ function isMention(text, m) {
  * action whose closing tag hasn't arrived yet is returned with complete=false.
  */
 export function parseActions(text, { final = true } = {}) {
+  text = normalizeToolCalls(text);
   const actions = [];
   const prose = [];
   let cursor = 0;

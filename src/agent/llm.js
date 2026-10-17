@@ -1,6 +1,10 @@
 // Streaming chat client for local model servers.
 // - "ollama": native /api/chat (lets us set num_ctx, which the OpenAI shim ignores)
-// - "openai": any OpenAI-compatible server (LM Studio, llama.cpp server, vLLM, ...)
+// - "openai": any OpenAI-compatible server (LM Studio, llama.cpp server, vLLM, ...).
+//   When the server is LM Studio, its SDK is used instead of HTTP: same model and
+//   cache, but it reports the progress of prompt processing (minutes on long
+//   prompts with local hardware). HTTP remains the fallback.
+import { LMStudioClient, Chat } from '@lmstudio/sdk';
 
 function trimSlash(url) {
   return url.replace(/\/+$/, '');
@@ -34,11 +38,148 @@ async function checkResponse(res) {
 }
 
 /**
- * Yields {type: 'text' | 'thinking', text} chunks, and at the end (if the
- * server reports them) {type: 'usage', promptTokens, outputTokens} and
- * {type: 'done', reason} where reason 'length' means the answer was cut.
+ * Yields {type: 'text' | 'thinking', text} chunks, {type: 'progress', progress}
+ * (0..1) while the prompt is being read when the server reports it, and at the
+ * end (if the server reports them) {type: 'usage', promptTokens, outputTokens,
+ * promptMs?, evalMs?} and {type: 'done', reason} ('length' = the answer was cut).
  */
-export async function* streamChat({ provider, baseUrl, apiKey, model, messages, numCtx, temperature, maxTokens, signal }) {
+export async function* streamChat(opts) {
+  if (opts.provider === 'openai' && await isLMStudio(opts)) {
+    let yielded = false;
+    try {
+      for await (const chunk of streamLMStudio(opts)) {
+        yielded = true;
+        yield chunk;
+      }
+      return;
+    } catch (e) {
+      if (yielded || opts.signal?.aborted) throw e;
+      // SDK unusable before anything came out: fall back to HTTP for this call,
+      // and for good if it could not even connect.
+      if (/ECONNREFUSED|websocket|connect/i.test(String(e?.message))) lmsBroken.add(lmsRoot(opts.baseUrl));
+    }
+  }
+  yield* streamHTTP(opts);
+}
+
+// ---------- LM Studio (SDK) ----------
+
+const lmsDetected = new Map(); // root url -> boolean
+const lmsBroken = new Set();
+const lmsClients = new Map();
+
+const lmsRoot = (baseUrl) => openaiBase(baseUrl).replace(/\/v1$/, '');
+
+/** True when the OpenAI-compatible server is LM Studio (it has /api/v0/models with model states). */
+async function isLMStudio({ baseUrl }) {
+  const root = lmsRoot(baseUrl);
+  if (lmsBroken.has(root)) return false;
+  if (!lmsDetected.has(root)) {
+    let ok = false;
+    try {
+      const res = await fetch(`${root}/api/v0/models`, { signal: AbortSignal.timeout(2000) });
+      const data = res.ok ? await res.json() : null;
+      ok = Array.isArray(data?.data) && data.data.some((m) => 'state' in m);
+    } catch {}
+    lmsDetected.set(root, ok);
+  }
+  return lmsDetected.get(root);
+}
+
+function lmsClient(baseUrl) {
+  const ws = lmsRoot(baseUrl).replace(/^http/, 'ws');
+  if (!lmsClients.has(ws)) {
+    const quiet = { info() {}, warn() {}, error() {}, debug() {} };
+    lmsClients.set(ws, new LMStudioClient({ baseUrl: ws, logger: quiet }));
+  }
+  return lmsClients.get(ws);
+}
+
+/** Closes the SDK connections (they keep a Node process alive, e.g. the CLI). */
+export async function closeClients() {
+  const clients = [...lmsClients.values()];
+  lmsClients.clear();
+  await Promise.all(clients.map((c) => c[Symbol.asyncDispose]?.().catch(() => {})));
+}
+
+async function* streamLMStudio({ baseUrl, model, messages, temperature, maxTokens, signal }) {
+  if (!model) throw new Error('No model selected.');
+  const ws = lmsRoot(baseUrl).replace(/^http/, 'ws');
+  let handle;
+  try {
+    // The SDK retries forever when the WebSocket does not answer: give up after a few seconds.
+    handle = await Promise.race([
+      lmsClient(baseUrl).llm.model(model),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('LM Studio websocket connect timeout')), 4000).unref?.()),
+    ]);
+  } catch (e) {
+    const client = lmsClients.get(ws);
+    lmsClients.delete(ws);
+    client?.[Symbol.asyncDispose]?.().catch(() => {});
+    throw e;
+  }
+  // The SDK reports progress through a callback and text through an iterator:
+  // merge both into one ordered queue.
+  const queue = [];
+  let wake = null;
+  let finished = false;
+  let failure = null;
+  const push = (item) => {
+    queue.push(item);
+    wake?.();
+    wake = null;
+  };
+  const prediction = handle.respond(Chat.from(messages), {
+    maxTokens,
+    temperature,
+    contextOverflowPolicy: 'stopAtLimit', // we size the prompt ourselves: never truncate silently
+    onPromptProcessingProgress: (progress) => push({ type: 'progress', progress }),
+  });
+  const onAbort = () => prediction.cancel();
+  signal?.addEventListener('abort', onAbort);
+  (async () => {
+    try {
+      for await (const f of prediction) {
+        if (f.reasoningType === 'reasoning') push({ type: 'thinking', text: f.content });
+        else if (f.reasoningType === 'none') push({ type: 'text', text: f.content });
+      }
+      const { stats } = await prediction.result();
+      const ttftMs = (stats.timeToFirstTokenSec ?? 0) * 1000;
+      push({
+        type: 'usage',
+        promptTokens: stats.promptTokensCount || 0,
+        outputTokens: stats.predictedTokensCount || 0,
+        promptMs: ttftMs || null,
+        evalMs: stats.totalTimeSec ? stats.totalTimeSec * 1000 - ttftMs : null,
+      });
+      push({ type: 'done', reason: stats.stopReason === 'maxPredictedTokensReached' ? 'length' : 'stop' });
+    } catch (e) {
+      failure = e;
+    } finally {
+      finished = true;
+      wake?.();
+      wake = null;
+    }
+  })();
+  try {
+    while (true) {
+      if (queue.length) {
+        yield queue.shift();
+        continue;
+      }
+      if (finished) break;
+      await new Promise((resolve) => (wake = resolve));
+    }
+    if (failure && !signal?.aborted) throw failure;
+  } finally {
+    signal?.removeEventListener('abort', onAbort);
+    if (!finished) prediction.cancel(); // the consumer stopped early (e.g. after an action)
+  }
+}
+
+// ---------- HTTP (Ollama native, OpenAI-compatible) ----------
+
+async function* streamHTTP({ provider, baseUrl, apiKey, model, messages, numCtx, temperature, maxTokens, signal }) {
   if (!model) throw new Error('No model selected.');
   if (provider === 'ollama') {
     const res = await fetch(`${trimSlash(baseUrl)}/api/chat`, {
@@ -60,6 +201,10 @@ export async function* streamChat({ provider, baseUrl, apiKey, model, messages, 
       const m = data.message || {};
       if (m.thinking) yield { type: 'thinking', text: m.thinking };
       if (m.content) yield { type: 'text', text: m.content };
+      for (const call of m.tool_calls || []) {
+        // Native function call (the model ignored our tags): pass it on as text.
+        yield { type: 'text', text: `\n<tool_call>${JSON.stringify({ name: call.function?.name, arguments: call.function?.arguments ?? {} })}</tool_call>` };
+      }
       if (data.done) {
         if (data.prompt_eval_count || data.eval_count) {
           yield {
@@ -87,18 +232,32 @@ export async function* streamChat({ provider, baseUrl, apiKey, model, messages, 
     body: JSON.stringify({ model, messages, stream: true, stream_options: { include_usage: true }, temperature, max_tokens: maxTokens }),
   });
   await checkResponse(res);
+  const toolCalls = []; // native function calls, streamed in pieces
+  const flushToolCalls = function* () {
+    for (const c of toolCalls.splice(0)) {
+      if (c.name) yield { type: 'text', text: `\n<tool_call>${JSON.stringify({ name: c.name, arguments: c.arguments })}</tool_call>` };
+    }
+  };
   for await (const line of readLines(res.body)) {
     if (!line.startsWith('data:')) continue;
     const payload = line.slice(5).trim();
-    if (payload === '[DONE]') return;
+    if (payload === '[DONE]') { yield* flushToolCalls(); return; }
     let data;
     try { data = JSON.parse(payload); } catch { continue; }
     if (data.usage?.prompt_tokens) {
       yield { type: 'usage', promptTokens: data.usage.prompt_tokens, outputTokens: data.usage.completion_tokens || 0 };
     }
-    const finish = data.choices?.[0]?.finish_reason;
-    if (finish) yield { type: 'done', reason: finish };
     const delta = data.choices?.[0]?.delta || {};
+    for (const tc of delta.tool_calls || []) {
+      const c = (toolCalls[tc.index ?? 0] ??= { name: '', arguments: '' });
+      if (tc.function?.name) c.name += tc.function.name;
+      if (tc.function?.arguments) c.arguments += tc.function.arguments;
+    }
+    const finish = data.choices?.[0]?.finish_reason;
+    if (finish) {
+      yield* flushToolCalls();
+      yield { type: 'done', reason: finish };
+    }
     const thinking = delta.reasoning_content || delta.reasoning;
     if (thinking) yield { type: 'thinking', text: thinking };
     if (delta.content) yield { type: 'text', text: delta.content };
@@ -112,7 +271,8 @@ export async function complete(opts) {
   let usage = null;
   let doneReason = null;
   for await (const chunk of streamChat(opts)) {
-    if (chunk.type === 'text') text += chunk.text;
+    if (chunk.type === 'progress') opts.onProgress?.(chunk.progress);
+    else if (chunk.type === 'text') text += chunk.text;
     else if (chunk.type === 'thinking') thinking += chunk.text;
     else if (chunk.type === 'usage') usage = chunk;
     else if (chunk.type === 'done') doneReason = chunk.reason;

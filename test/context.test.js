@@ -246,13 +246,14 @@ test('summary rejected by the server is retried with a shorter transcript', asyn
   assert.ok(sizes[1] < sizes[0], `${sizes}`);
 });
 
-test('the real context length loaded in LM Studio caps the setting', async () => {
+test('the real context length loaded in LM Studio caps the setting (HTTP fallback without websocket)', async () => {
   const chats = [];
   const server = http.createServer((req, res) => {
     let body = '';
     req.on('data', (d) => (body += d));
     req.on('end', () => {
       if (req.url === '/api/v0/models') return res.end(JSON.stringify({ data: [{ id: 'gemma', state: 'loaded', loaded_context_length: 16128 }] }));
+      if (req.method !== 'POST') { res.statusCode = 404; return res.end(); } // e.g. the SDK's websocket attempt
       chats.push(JSON.parse(body));
       res.end('data: {"choices":[{"delta":{"content":"Done."},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
     });

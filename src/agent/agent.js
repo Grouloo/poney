@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { streamChat, complete, serverContextLength } from './llm.js';
-import { TOOLS, buildSystemPrompt, parseActions, splitThinking, formatResult, isToolEnabled, withReasoning } from './protocol.js';
+import { TOOLS, buildSystemPrompt, parseActions, splitThinking, formatResult, isToolEnabled, withReasoning, normalizeToolCalls } from './protocol.js';
 import { executeAction, runShell, truncateMiddle } from './tools.js';
 import {
   summaryTokens, mechanicalSummary, DEFAULT_CHARS_PER_TOKEN,
@@ -275,6 +275,7 @@ export class Agent extends EventEmitter {
           maxTokens: attempt.maxTokens ?? maxTokens,
           temperature: attempt.retry ? 0.4 : 0.1,
           signal,
+          onProgress: (progress) => this.emit('event', { type: 'prompt_progress', id: 'compaction', progress }),
           messages: attempt.inline ? buildInlineSummaryRequest(prompt) : buildSummaryRequest(old, maxChars, { retry: attempt.retry }),
         });
         const c = cleanSummary(r.text);
@@ -351,6 +352,10 @@ export class Agent extends EventEmitter {
         signal: ctrl.signal,
       })) {
         if (chunk.type === 'done') { doneReason = chunk.reason; continue; }
+        if (chunk.type === 'progress') {
+          this.emit('event', { type: 'prompt_progress', id, progress: chunk.progress });
+          continue;
+        }
         if (chunk.type === 'usage') {
           usage = chunk;
           this.lastUsage = chunk;
@@ -371,7 +376,9 @@ export class Agent extends EventEmitter {
         // Stop early once the model has asked for something it needs to see the
         // result of, or starts inventing a result. Saves time on slow hardware
         // and prevents hallucinated follow-up actions.
-        const visible = splitThinking(text).text;
+        // Native tool-call formats are rewritten first, so that positions found
+        // here are valid in the text kept below.
+        const visible = normalizeToolCalls(splitThinking(text).text);
         const fake = visible.search(/<result\b|^\s*(User|Human):/m);
         if (fake >= 0) { cutAt = fake; break; }
         const { actions } = parseActions(visible, { final: false });
@@ -386,7 +393,7 @@ export class Agent extends EventEmitter {
       signal.removeEventListener('abort', onAbort);
     }
     const split = splitThinking(text);
-    let visible = split.text;
+    let visible = normalizeToolCalls(split.text);
     if (cutAt >= 0) visible = visible.slice(0, cutAt);
     thinking += split.thinking;
     // Cut by the length limit (not by us): the end of the answer is missing.

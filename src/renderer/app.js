@@ -248,12 +248,37 @@ function statsDetails(s) {
   ].join('\n');
 }
 
+// Progress of the prompt reading (before the first token), when the server reports it.
+let promptProgress = null; // { id, value, t0 }
+
+function promptProgressText() {
+  if (!promptProgress) return '';
+  const { value, t0 } = promptProgress;
+  let text = `lecture du prompt ${Math.floor(value * 100)} %`;
+  if (value >= 0.03 && value < 1) {
+    const remaining = ((performance.now() - t0) * (1 - value)) / value;
+    if (remaining >= 1000) text += `, encore ≈ ${fmtDuration(remaining)}`;
+  }
+  return text;
+}
+
+function onPromptProgress(ev) {
+  if (!promptProgress || promptProgress.id !== ev.id) promptProgress = { id: ev.id, t0: performance.now(), value: 0 };
+  promptProgress.value = ev.progress;
+  if (ev.progress >= 1) promptProgress = null;
+  // Manual compaction has no running timer: show it directly.
+  if (!runTimer && running) $('status').textContent = `Compactage… ${promptProgressText()}`;
+}
+
 // Live timer for the whole answer, in the status line.
 let runTimer = null;
 function startRunTimer() {
   const t0 = performance.now();
   clearInterval(runTimer);
-  const tick = () => { $('status').textContent = `L’agent travaille… ${fmtDuration(performance.now() - t0)}`; };
+  const tick = () => {
+    const progress = promptProgressText();
+    $('status').textContent = `L’agent travaille… ${fmtDuration(performance.now() - t0)}${progress ? ` · ${progress}` : ''}`;
+  };
   tick();
   runTimer = setInterval(tick, 100);
 }
@@ -304,6 +329,7 @@ function onEvent(ev) {
     case 'delta': {
       const b = bubbles.get(ev.id);
       if (!b) break;
+      if (promptProgress?.id === ev.id) promptProgress = null; // first token: reading is over
       if (ev.kind === 'thinking') {
         b.thinking += ev.text;
         if (!b.thinkingEl) {
@@ -401,11 +427,15 @@ function onEvent(ev) {
     case 'context':
       if (!replaying) renderGauge(ev);
       break;
+    case 'prompt_progress':
+      if (!replaying) onPromptProgress(ev);
+      break;
     case 'compaction_start':
       document.querySelector('.compaction.pending')?.remove();
       add(div('compaction pending', '<span class="spin">◌</span> Compactage du contexte : résumé des anciens messages…'));
       break;
     case 'compaction': {
+      if (promptProgress?.id === 'compaction') promptProgress = null;
       document.querySelector('.compaction.pending')?.remove();
       const d = document.createElement('details');
       d.className = 'compaction';
@@ -421,6 +451,7 @@ function onEvent(ev) {
       addUserMessage(ev.text);
       break;
     case 'turn_end':
+      promptProgress = null;
       // One timing line for the whole answer, not one per tool call.
       if (ev.stats) {
         const meta = div('gen-meta', esc(formatStats(ev.stats) + (ev.reason === 'stopped' ? ' · interrompu' : '')));

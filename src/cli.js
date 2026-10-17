@@ -3,6 +3,7 @@
 import path from 'node:path';
 import readline from 'node:readline/promises';
 import { Agent } from './agent/agent.js';
+import { closeClients } from './agent/llm.js';
 
 const argv = process.argv.slice(2);
 const opts = {};
@@ -86,3 +87,4 @@ agent.on('event', (ev) => {
 process.on('SIGINT', () => agent.stop());
 await agent.send(words.join(' '));
 rl.close();
+await closeClients();

@@ -1,0 +1,78 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import http from 'node:http';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { parseActions } from '../src/agent/protocol.js';
+import { Agent } from '../src/agent/agent.js';
+
+test('native tool-call formats are understood as our tags', () => {
+  const one = (t) => parseActions(t).actions.map((a) => [a.tool, a.args]);
+  assert.deepEqual(one('<|tool_call>call:list path="." /<tool_call|>'), [['list', { path: '.' }]]);
+  assert.deepEqual(one('<|tool_call>call:read{"path": "src/x.py"}<tool_call|>'), [['read', { path: 'src/x.py' }]]);
+  assert.deepEqual(one('<tool_call>{"name": "write_file", "arguments": {"path": "a.py", "content": "print(1)"}}</tool_call>'), [['write', { path: 'a.py', content: 'print(1)' }]]);
+  assert.deepEqual(one('<tool_call>{"name": "edit", "arguments": {"path": "a.py", "old": "x = 1", "new": "x = 2"}}</tool_call>')[0][0], 'edit');
+  assert.deepEqual(one('<tool_call>{"name":"run","arguments":"{\\"command\\": \\"ls -la\\"}"}</tool_call>'), [['run', { command: 'ls -la' }]]);
+  assert.deepEqual(one('<tool_call>{"name": "unknown_tool", "arguments": {}}</tool_call>'), []);
+});
+
+function serve(handler) {
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (d) => (body += d));
+    req.on('end', () => handler(req, res, body));
+  });
+  return new Promise((resolve) => server.listen(0, () => resolve({ server, url: `http://localhost:${server.address().port}` })));
+}
+
+test('OpenAI-style streamed tool_calls are executed', async () => {
+  let n = 0;
+  const { server, url } = await serve((req, res) => {
+    if (req.method !== 'POST') { res.statusCode = 404; return res.end(); }
+    const chunks = ++n === 1
+      ? [
+          { choices: [{ delta: { tool_calls: [{ index: 0, function: { name: 'write_file', arguments: '{"path": "out.txt", ' } }] } }] },
+          { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '"content": "hello"}' } }] } }] },
+          { choices: [{ delta: {}, finish_reason: 'tool_calls' }] },
+        ]
+      : [{ choices: [{ delta: { content: 'Done.' }, finish_reason: 'stop' }] }];
+    res.end(`${chunks.map((c) => `data: ${JSON.stringify(c)}\n\n`).join('')}data: [DONE]\n\n`);
+  });
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-native-'));
+  const agent = new Agent({ cwd, config: { provider: 'openai', baseUrl: `${url}/v1`, model: 'm', shellEnabled: false } });
+  await agent.send('write hello in out.txt');
+  server.close();
+  assert.equal(await fs.readFile(path.join(cwd, 'out.txt'), 'utf8'), 'hello\n');
+});
+
+test('Ollama tool_calls are executed', async () => {
+  let n = 0;
+  const { server, url } = await serve((req, res) => {
+    const msg = ++n === 1
+      ? { content: '', tool_calls: [{ function: { name: 'write', arguments: { path: 'o.txt', content: 'hi' } } }] }
+      : { content: 'Done.' };
+    res.end(`${JSON.stringify({ message: msg, done: true, done_reason: 'stop' })}\n`);
+  });
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-native-'));
+  const agent = new Agent({ cwd, config: { baseUrl: url, model: 'm', shellEnabled: false } });
+  await agent.send('write hi in o.txt');
+  server.close();
+  assert.equal(await fs.readFile(path.join(cwd, 'o.txt'), 'utf8'), 'hi\n');
+});
+
+test('a streamed native call stops the generation at the right place', async () => {
+  const { server, url } = await serve((req, res) => {
+    const parts = ['<|tool_call>call:', 'list path="." /', '<tool_call|>', ' and then some invented text'];
+    res.end(parts.map((p) => JSON.stringify({ message: { content: p }, done: false })).join('\n') + `\n${JSON.stringify({ message: { content: '' }, done: true })}\n`);
+  });
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-native-'));
+  const agent = new Agent({ cwd, config: { baseUrl: url, model: 'm' } });
+  const ends = [];
+  agent.on('event', (e) => e.type === 'action_start' && ends.push(e));
+  agent.config.maxSteps = 1;
+  await agent.send('list files');
+  server.close();
+  assert.equal(ends[0]?.tool, 'list');
+  assert.match(agent.messages[1].content, /^<list path="\." \/>$/);
+});
