@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { streamChat, complete, serverContextLength } from './llm.js';
-import { TOOLS, buildSystemPrompt, parseActions, splitThinking, formatResult, isToolEnabled, withReasoning, normalizeToolCalls } from './protocol.js';
+import { TOOLS, buildSystemPrompt, parseActions, splitThinking, formatResult, isToolEnabled, withReasoning, normalizeToolCalls, stripReasoning, legacyReasoningToNotes, toolSchemas } from './protocol.js';
 import { executeAction, runShell, truncateMiddle } from './tools.js';
 import {
   summaryTokens, mechanicalSummary, DEFAULT_CHARS_PER_TOKEN,
@@ -68,6 +68,9 @@ function taskFromMessage(content) {
   const m = content.match(/\[CURRENT TASK\]\n([\s\S]*?)\n\nContinue the task from here\./);
   return m ? m[1] : null;
 }
+
+// After the server has read (and cached) the prompt, delay without any visible output before we give up.
+const INVISIBLE_TIMEOUT_MS = 45_000;
 
 // Non-space characters of prose allowed after a completed action before we stop the generation.
 const NARRATION_LIMIT = 400;
@@ -318,6 +321,7 @@ export class Agent extends EventEmitter {
       try {
         const r = await complete({
           ...cfg,
+          ...(attempt.inline ? { toolSchemas: toolSchemas(this.config) } : {}),
           maxTokens: attempt.maxTokens ?? maxTokens,
           temperature: attempt.retry ? 0.4 : 0.1,
           signal,
@@ -373,8 +377,16 @@ export class Agent extends EventEmitter {
 
   /** Assistant message for the history: the answer, preceded by its reasoning (capped). */
   assistantContent(gen, text) {
-    const maxChars = Math.floor(this.cfg.numCtx * this.charsPerToken * 0.08);
-    return withReasoning(text, gen.thinking, maxChars);
+    return withReasoning(text, gen.thinking);
+  }
+
+  /** Converts reasoning blocks saved by older versions into short notes (see withReasoning). */
+  upgradeReasoning() {
+    const fix = (list) => list?.forEach((m) => {
+      if (m && m.role === 'assistant' && m.content.includes('<reasoning>')) m.content = legacyReasoningToNotes(m.content);
+    });
+    fix(this.messages);
+    this.archives.forEach(fix);
   }
 
   async generate(system, signal) {
@@ -388,6 +400,9 @@ export class Agent extends EventEmitter {
     let cutAt = -1;
     let narrationCut = false;
     let streamError = null;
+    let visibleSeen = false;
+    let invisibleTimeout = false;
+    let watchdog = null;
     let doneReason = null;
     let usage = null;
     const t0 = Date.now();
@@ -400,11 +415,27 @@ export class Agent extends EventEmitter {
     try {
       for await (const chunk of streamChat({
         ...this.cfg,
+        toolSchemas: toolSchemas(this.config),
         maxTokens,
         messages: prompt,
         signal: ctrl.signal,
       })) {
         if (chunk.type === 'done') { doneReason = chunk.reason; continue; }
+        if (chunk.type === 'tool_progress') {
+          visibleSeen = true;
+          tFirst ??= Date.now();
+          this.emit('event', { type: 'delta', id, kind: 'tool', text: chunk.text, name: chunk.name });
+          continue;
+        }
+        if (chunk.type === 'prompt_read') {
+          // The server has read the prompt (it is cached): something visible
+          // should come within seconds. If not, the model is stuck producing
+          // invisible tokens: stop instead of waiting minutes.
+          watchdog = setTimeout(() => {
+            if (!visibleSeen) { invisibleTimeout = true; ctrl.abort(); }
+          }, INVISIBLE_TIMEOUT_MS);
+          continue;
+        }
         if (chunk.type === 'progress') {
           this.emit('event', { type: 'prompt_progress', id, progress: chunk.progress });
           continue;
@@ -419,6 +450,7 @@ export class Agent extends EventEmitter {
           continue;
         }
         tFirst ??= Date.now();
+        if (chunk.text) visibleSeen = true;
         if (chunk.type === 'thinking') {
           thinking += chunk.text;
           this.emit('event', { type: 'delta', id, kind: 'thinking', text: chunk.text });
@@ -460,9 +492,12 @@ export class Agent extends EventEmitter {
         streamError = e;
       }
     } finally {
+      clearTimeout(watchdog);
       ctrl.abort();
       signal.removeEventListener('abort', onAbort);
     }
+    // Tokens were generated but nothing visible came out.
+    const invisible = !visibleSeen && (invisibleTimeout || (usage?.outputTokens ?? 0) > 20);
     const split = splitThinking(text);
     let visible = normalizeToolCalls(split.text);
     if (cutAt >= 0) visible = visible.slice(0, cutAt);
@@ -474,7 +509,7 @@ export class Agent extends EventEmitter {
     }
     const stats = generationStats({ t0, tFirst, tEnd: Date.now(), usage, est: this.est, text: text + thinking });
     if (narrationCut) this.emit('event', { type: 'notice', text: 'Le modèle continuait à écrire après son action au lieu d’attendre le résultat : génération arrêtée, l’action est exécutée.' });
-    return { id, text: visible, thinking, truncated, contextLimited: truncated && !streamError && maxTokens < this.config.maxTokens, stats };
+    return { id, text: visible, thinking, truncated, contextLimited: truncated && !streamError && maxTokens < this.config.maxTokens, stats, invisible };
   }
 
   // ----- main loop -----
@@ -515,6 +550,7 @@ export class Agent extends EventEmitter {
     let testFailures = 0;
     let emptyReplies = 0;
     let codeDumpNudged = false;
+    let invisibleRetried = false;
     const recent = [];
     let reason = 'done';
 
@@ -539,6 +575,19 @@ export class Agent extends EventEmitter {
           gen = await this.generate(system, signal);
         }
         addStats(gen.stats);
+        if (gen.invisible) {
+          this.emit('event', { type: 'assistant_end', id: gen.id, text: '', thinking: '', hasActions: false });
+          if (!invisibleRetried) {
+            // Seen with Gemma when earlier reasoning is in the history: retry without it.
+            invisibleRetried = true;
+            notice('Le modèle génère sans rien produire de visible : nouvel essai sans les notes de raisonnement de l’historique.');
+            for (const m of this.messages) if (m.role === 'assistant') m.content = stripReasoning(m.content);
+            continue;
+          }
+          reason = 'error';
+          this.emit('event', { type: 'error', message: 'Le modèle génère des tokens sans rien produire de visible. Essayez de modifier votre dernier message (✎) ou de démarrer une nouvelle conversation.' });
+          break;
+        }
         // An answer cut by the length limit may end with an unfinished action
         // (e.g. half a file in <write>): never execute those.
         const parsed = parseActions(gen.text, { final: !gen.truncated });

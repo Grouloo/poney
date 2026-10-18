@@ -411,6 +411,14 @@ function onEvent(ev) {
       b.pieces = (b.pieces || 0) + 1;
       b.firstAt ??= performance.now();
       liveGen = b;
+      if (ev.kind === 'tool') {
+        // Native tool call being generated: parsed at the end, show that something is coming.
+        b.toolName = ev.name || b.toolName;
+        const { text } = streamingDisplay(b.raw);
+        b.bubble.innerHTML = markdown(text) + `<p class="muted"><span class="spin">◌</span> prépare une action${b.toolName ? ` (${esc(b.toolName)})` : ''}…</p>`;
+        scrollDown();
+        break;
+      }
       if (ev.kind === 'thinking') {
         b.thinking += ev.text;
         b.thinkPieces = (b.thinkPieces || 0) + 1;

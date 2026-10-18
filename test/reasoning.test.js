@@ -44,7 +44,7 @@ test('reasoning is kept across tool calls and turns, so the prompt start never c
   fake.server.close();
 
   // Step 2 sees the reasoning of step 1.
-  assert.match(assistantMsgs(fake.requests[1])[0], /^<reasoning>\nPLAN: first read a\.txt, then answer\.\n<\/reasoning>\n<read path="a\.txt" \/>/);
+  assert.equal(assistantMsgs(fake.requests[1])[0], '(My notes: PLAN: first read a.txt, then answer.)\n<read path="a.txt" />');
   // Next request: the previous messages are unchanged (server cache reusable).
   const prev = fake.requests[1].messages;
   assert.deepEqual(fake.requests[2].messages.slice(0, prev.length), prev);
@@ -58,13 +58,59 @@ test('inline <think> blocks are kept the same way', async () => {
   const agent = new Agent({ cwd, config: { baseUrl: fake.url, model: 'fake' } });
   await agent.send('go');
   fake.server.close();
-  assert.match(assistantMsgs(fake.requests[1])[0], /<reasoning>\nneed the file\n<\/reasoning>/);
+  assert.match(assistantMsgs(fake.requests[1])[0], /^\(My notes: need the file\)\n/);
 });
 
-test('long reasoning keeps its end; reasoning is treated as thinking if imitated', () => {
-  const r = withReasoning('<run>ls</run>', `${'a'.repeat(5000)}CONCLUSION`, 100);
-  assert.match(r, /^<reasoning>\n\[\.\.\.\]a+CONCLUSION\n<\/reasoning>\n<run>ls<\/run>$/);
+test('long reasoning becomes a short note keeping its end; imitations are treated as thinking', () => {
+  const r = withReasoning('<run>ls</run>', `${'a'.repeat(5000)}\n\nCONCLUSION`);
+  assert.match(r, /^\(My notes: …a+ CONCLUSION\)\n<run>ls<\/run>$/);
+  assert.ok(r.length < 700);
   assert.equal(splitThinking('<reasoning>x</reasoning>answer').text, 'answer');
+  assert.deepEqual(splitThinking('(My notes: plan)\nanswer'), { text: 'answer', thinking: 'plan' });
+});
+
+test('reasoning blocks saved by older versions are converted to short notes', async () => {
+  const { legacyReasoningToNotes, stripReasoning } = await import('../src/agent/protocol.js');
+  const old = `<reasoning>\n${'think '.repeat(400)}DONE\n</reasoning>\n<run>ls</run>`;
+  const notes = legacyReasoningToNotes(old);
+  assert.match(notes, /^\(My notes: ….*DONE\)\n<run>ls<\/run>$/);
+  assert.equal(stripReasoning(notes), '<run>ls</run>');
+  const agent = new Agent({ cwd: await tmp(), config: { model: 'm' } });
+  agent.messages = [{ role: 'user', content: 'x' }, { role: 'assistant', content: old }];
+  agent.archives = [[{ role: 'assistant', content: old }], null];
+  agent.upgradeReasoning();
+  assert.match(agent.messages[1].content, /^\(My notes:/);
+  assert.match(agent.archives[0][0].content, /^\(My notes:/);
+});
+
+test('a generation with tokens but nothing visible is retried once without the notes', async () => {
+  const cwd = await tmp();
+  await fs.writeFile(path.join(cwd, 'a.txt'), 'x\n');
+  let n = 0;
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (d) => (body += d));
+    req.on('end', () => {
+      requests.push(JSON.parse(body));
+      n++;
+      // 1: reads (with reasoning); 2: invisible tokens only; 3: answers.
+      const lines = n === 1
+        ? [{ message: { thinking: 'plan' }, done: false }, { message: { content: '<read path="a.txt" />' }, done: false }]
+        : n === 2 ? [] : [{ message: { content: 'Done.' }, done: false }];
+      lines.push({ message: { content: '' }, done: true, done_reason: n === 2 ? 'length' : 'stop', eval_count: n === 2 ? 400 : 10 });
+      res.end(lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+    });
+  });
+  await new Promise((r) => server.listen(0, r));
+  const agent = new Agent({ cwd, config: { baseUrl: `http://localhost:${server.address().port}`, model: 'm' } });
+  const events = [];
+  agent.on('event', (e) => events.push(e));
+  await agent.send('read a.txt');
+  server.close();
+  assert.ok(events.some((e) => e.type === 'notice' && /rien produire de visible/.test(e.text)));
+  assert.equal(events.find((e) => e.type === 'final')?.text, 'Done.');
+  assert.doesNotMatch(JSON.stringify(requests[2].messages), /My notes/);
 });
 
 test('actions only mentioned in the reasoning are not counted as done', () => {

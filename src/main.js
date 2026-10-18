@@ -173,6 +173,7 @@ ipcMain.handle('conversations:open', (_, id) => {
   a.systemPrompt = loaded.systemPrompt ?? null;
   a.checkpoints = loaded.checkpoints ?? [];
   a.archives = loaded.archives ?? [];
+  a.upgradeReasoning(); // older reasoning blocks -> short notes
   conv = loaded;
   return { events: loaded.events, settings };
 });

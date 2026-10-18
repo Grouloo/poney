@@ -34,7 +34,7 @@ test('the model history is rebuilt from the transcript', () => {
   const h = rebuildHistory(events);
   assert.deepEqual(h.map((m) => m.role), ['user', 'assistant', 'user', 'assistant', 'user', 'assistant', 'user']);
   assert.equal(h[0].content, 'Crée hello.py');
-  assert.match(h[1].content, /^<reasoning>\nneed a file\n<\/reasoning>\nJe le crée\.\n<write path="hello\.py">\nprint\("hi"\)\n<\/write>\n<run>python3 hello\.py<\/run>$/);
+  assert.match(h[1].content, /^\(My notes: need a file\)\nJe le crée\.\n<write path="hello\.py">\nprint\("hi"\)\n<\/write>\n<run>python3 hello\.py<\/run>$/);
   assert.match(h[2].content, /<result tool="write" path="hello\.py">\nCreated hello\.py/);
   assert.match(h[2].content, /<result tool="run" exit="0" command="python3 hello\.py">\nhi\n<\/result>/);
   assert.equal(h[3].content, 'Fait.');

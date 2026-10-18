@@ -47,8 +47,11 @@ async function checkResponse(res) {
  */
 export async function* streamChat(opts) {
   if (opts.provider === 'openai' && await isLMStudio(opts)) {
+    // Declare our tools to models with native tool calls (see toolSchemas).
+    opts = { ...opts, tools: lmsToolUse(opts) && opts.toolSchemas?.length ? opts.toolSchemas : undefined };
     try {
       yield* readPromptLMStudio(opts);
+      yield { type: 'prompt_read' }; // the prompt is in the server cache
     } catch (e) {
       if (opts.signal?.aborted) throw e;
       // No progress this time: the HTTP request reads the prompt itself.
@@ -62,6 +65,7 @@ export async function* streamChat(opts) {
 // ---------- LM Studio (SDK) ----------
 
 const lmsDetected = new Map(); // root url -> boolean
+const lmsModels = new Map(); // root url -> [{ id, capabilities }]
 const lmsBroken = new Set();
 const lmsClients = new Map();
 
@@ -77,10 +81,16 @@ async function isLMStudio({ baseUrl }) {
       const res = await fetch(`${root}/api/v0/models`, { signal: AbortSignal.timeout(2000) });
       const data = res.ok ? await res.json() : null;
       ok = Array.isArray(data?.data) && data.data.some((m) => 'state' in m);
+      if (ok) lmsModels.set(root, data.data);
     } catch {}
     lmsDetected.set(root, ok);
   }
   return lmsDetected.get(root);
+}
+
+/** Whether LM Studio says this model supports native tool calls. */
+function lmsToolUse({ baseUrl, model }) {
+  return Boolean(lmsModels.get(lmsRoot(baseUrl))?.find((m) => m.id === model)?.capabilities?.includes('tool_use'));
 }
 
 function lmsClient(baseUrl) {
@@ -104,7 +114,7 @@ export async function closeClients() {
  * stops at the first token: the server cache then holds the prompt, so the HTTP
  * request that follows starts generating almost at once.
  */
-async function* readPromptLMStudio({ baseUrl, model, messages, temperature, signal }) {
+async function* readPromptLMStudio({ baseUrl, model, messages, temperature, signal, tools }) {
   if (!model) throw new Error('No model selected.');
   const ws = lmsRoot(baseUrl).replace(/^http/, 'ws');
   let handle;
@@ -133,6 +143,8 @@ async function* readPromptLMStudio({ baseUrl, model, messages, temperature, sign
   const prediction = handle.respond(Chat.from(messages), {
     maxTokens: 1,
     temperature,
+    // Same tools as the HTTP request, so that the cached prompt is identical.
+    ...(tools ? { rawTools: { type: 'toolArray', tools } } : {}),
     contextOverflowPolicy: 'stopAtLimit', // we size the prompt ourselves: never truncate silently
     onPromptProcessingProgress: (progress) => push({ type: 'progress', progress }),
   });
@@ -171,7 +183,7 @@ async function* readPromptLMStudio({ baseUrl, model, messages, temperature, sign
 
 // ---------- HTTP (Ollama native, OpenAI-compatible) ----------
 
-async function* streamHTTP({ provider, baseUrl, apiKey, model, messages, numCtx, temperature, maxTokens, signal }) {
+async function* streamHTTP({ provider, baseUrl, apiKey, model, messages, numCtx, temperature, maxTokens, signal, tools }) {
   if (!model) throw new Error('No model selected.');
   if (provider === 'ollama') {
     const res = await fetch(`${trimSlash(baseUrl)}/api/chat`, {
@@ -221,7 +233,7 @@ async function* streamHTTP({ provider, baseUrl, apiKey, model, messages, numCtx,
     method: 'POST',
     headers,
     signal,
-    body: JSON.stringify({ model, messages, stream: true, stream_options: { include_usage: true }, temperature, max_tokens: maxTokens }),
+    body: JSON.stringify({ model, messages, stream: true, stream_options: { include_usage: true }, temperature, max_tokens: maxTokens, ...(tools ? { tools } : {}) }),
   });
   await checkResponse(res);
   const toolCalls = []; // native function calls, streamed in pieces
@@ -244,6 +256,8 @@ async function* streamHTTP({ provider, baseUrl, apiKey, model, messages, numCtx,
       const c = (toolCalls[tc.index ?? 0] ??= { name: '', arguments: '' });
       if (tc.function?.name) c.name += tc.function.name;
       if (tc.function?.arguments) c.arguments += tc.function.arguments;
+      // Visible progress while a native call is generated (it is parsed at the end).
+      yield { type: 'tool_progress', name: c.name, text: tc.function?.arguments || '' };
     }
     const finish = data.choices?.[0]?.finish_reason;
     if (finish) {

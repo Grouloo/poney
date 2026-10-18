@@ -76,3 +76,46 @@ test('a streamed native call stops the generation at the right place', async () 
   assert.equal(ends[0]?.tool, 'list');
   assert.match(agent.messages[1].content, /^<list path="\." \/>$/);
 });
+
+test("Gemma's raw native arguments (unquoted keys, <|\"|> delimiters) are understood", () => {
+  const one = (t) => parseActions(t).actions.map((a) => [a.tool, a.args]);
+  assert.deepEqual(one('<|tool_call>call:run{command:"ls -la src"}<tool_call|>'), [['run', { command: 'ls -la src' }]]);
+  assert.deepEqual(one('<|tool_call>call:write{path:<|"|>a.py<|"|>,content:<|"|>x = "1"\nprint(x)<|"|>}<tool_call|>'), [['write', { path: 'a.py', content: 'x = "1"\nprint(x)' }]]);
+});
+
+test('tool schemas follow the toggles', async () => {
+  const { toolSchemas } = await import('../src/agent/protocol.js');
+  const names = (c) => toolSchemas(c).map((t) => t.function.name);
+  assert.deepEqual(names({}), ['list', 'read', 'search', 'write', 'edit', 'run', 'web_search', 'fetch']);
+  assert.deepEqual(names({ shellEnabled: false, webEnabled: false }), ['list', 'read', 'search', 'write', 'edit']);
+});
+
+test('tools are declared only to LM Studio models with tool_use, and native calls show progress', async () => {
+  for (const [model, expectTools] of [['gemma', true], ['qwen', false]]) {
+    const bodies = [];
+    const { server, url } = await serve((req, res, body) => {
+      if (req.url === '/api/v0/models') return res.end(JSON.stringify({ data: [{ id: 'gemma', state: 'loaded', capabilities: ['tool_use'] }, { id: 'qwen', state: 'loaded' }] }));
+      if (req.method !== 'POST') { res.statusCode = 404; return res.end(); }
+      bodies.push(JSON.parse(body));
+      const chunks = bodies.length === 1
+        ? [{ choices: [{ delta: { tool_calls: [{ index: 0, function: { name: 'list', arguments: '{"path"' } }] } }] },
+           { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: ': "."}' } }] } }] },
+           { choices: [{ delta: {}, finish_reason: 'tool_calls' }] }]
+        : [{ choices: [{ delta: { content: 'Done.' }, finish_reason: 'stop' }] }];
+      res.end(`${chunks.map((c) => `data: ${JSON.stringify(c)}\n\n`).join('')}data: [DONE]\n\n`);
+    });
+    const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-native-'));
+    const agent = new Agent({ cwd, config: { provider: 'openai', baseUrl: `${url}/v1`, model, shellEnabled: false } });
+    const deltas = [];
+    const actions = [];
+    agent.on('event', (e) => { if (e.type === 'delta') deltas.push(e.kind); if (e.type === 'action_start') actions.push(e.tool); });
+    await agent.send('list');
+    server.close();
+    assert.equal(Boolean(bodies[0].tools), expectTools, model);
+    if (expectTools) {
+      assert.deepEqual(bodies[0].tools.map((t) => t.function.name), ['list', 'read', 'search', 'write', 'edit', 'web_search', 'fetch']);
+      assert.ok(deltas.includes('tool'), 'progress shown while the native call streams');
+    }
+    assert.deepEqual(actions, ['list']);
+  }
+});

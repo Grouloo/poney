@@ -24,7 +24,7 @@ export function actionTag(tool, a = {}) {
  * original, not identical: long outputs were truncated when saved, and the
  * app's automatic reminders were not saved.
  */
-export function rebuildHistory(events, { maxReasoningChars = 4000 } = {}) {
+export function rebuildHistory(events, { maxReasoningChars } = {}) {
   const messages = [];
   let step = null; // { prose, thinking, actions: [{ id, tool, args, end }] }
   let pendingAuto = []; // results of commands run by the app itself (test command)

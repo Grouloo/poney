@@ -41,6 +41,34 @@ const ALL_NAMES = [...Object.keys(TOOLS), ...Object.keys(ALIASES)];
 const NAME_RE = ALL_NAMES.sort((a, b) => b.length - a.length).join('|');
 const OPEN_RE = new RegExp(`<(${NAME_RE})(\\s[^<>]*?)?\\s*(/?)>`, 'g');
 
+/**
+ * The same tools in the standard function-calling format. Declared to servers
+ * whose model supports native tool calls (LM Studio, "tool_use"): Gemma uses
+ * its native format anyway, and without the declaration LM Studio holds those
+ * calls back until they end, and drops them if cut (nothing visible for minutes).
+ */
+export function toolSchemas(config = {}) {
+  const fn = (name, description, props, required) => ({
+    type: 'function',
+    function: {
+      name,
+      description,
+      parameters: { type: 'object', properties: Object.fromEntries(Object.entries(props).map(([k, d]) => [k, { type: 'string', description: d }])), required },
+    },
+  });
+  const all = [
+    fn('list', 'List files in a folder', { path: 'folder, default "."' }, []),
+    fn('read', 'Read a file (with line numbers)', { path: 'file path', start: 'first line', end: 'last line' }, ['path']),
+    fn('search', 'Search text in files', { pattern: 'regex', path: 'folder' }, ['pattern']),
+    fn('write', 'Create or overwrite a whole file', { path: 'file path', content: 'full file content' }, ['path', 'content']),
+    fn('edit', 'Replace exact existing lines in a file', { path: 'file path', old: 'exact existing lines', new: 'replacement lines' }, ['path', 'old', 'new']),
+    fn('run', 'Run a shell command (scripts, tests, installs)', { command: 'shell command' }, ['command']),
+    fn('web_search', 'Search the internet', { query: 'search query' }, ['query']),
+    fn('fetch', 'Read a web page', { url: 'full URL' }, ['url']),
+  ];
+  return all.filter((t) => isToolEnabled(t.function.name, config));
+}
+
 /** Tools that can be switched off in the settings, and the config flag for each. */
 export const TOOL_FLAGS = { run: 'shellEnabled', web_search: 'webEnabled', fetch: 'webEnabled' };
 
@@ -139,6 +167,30 @@ const tryJson = (s) => {
   try { return JSON.parse(s); } catch { return null; }
 };
 
+/**
+ * Gemma's native arguments are not JSON: {command:"ls -la"} or with its own
+ * string delimiter, {command:<|"|>ls -la<|"|>}. Normalized, then parsed.
+ */
+function parseLooseArgs(s) {
+  const strict = tryJson(s);
+  if (strict && typeof strict === 'object') return strict;
+  if (s.includes('<|"|>')) {
+    // Values between <|"|> delimiters may contain anything, quotes included.
+    const out = {};
+    for (const m of s.matchAll(/([A-Za-z_][\w-]*)\s*:\s*(?:<\|"\|>([\s\S]*?)<\|"\|>|(-?\d+(?:\.\d+)?|true|false))/g)) out[m[1]] = m[2] ?? m[3];
+    if (Object.keys(out).length) return out;
+  }
+  const t = s.trim();
+  if (!t.startsWith('{')) return null;
+  const quoted = t.replace(/([{,]\s*)([A-Za-z_][\w-]*)\s*:/g, '$1"$2":');
+  const j = tryJson(quoted);
+  if (j && typeof j === 'object') return j;
+  // Last resort: key:"value" pairs (values may contain anything but an unescaped quote).
+  const out = {};
+  for (const m of t.matchAll(/([A-Za-z_][\w-]*)\s*:\s*"((?:[^"\\]|\\.)*)"/g)) out[m[1]] = m[2].replace(/\\n/g, '\n').replace(/\\"/g, '"');
+  return Object.keys(out).length ? out : null;
+}
+
 const quoteAttr = (k, v) => {
   if (v === undefined || v === null || v === '') return '';
   const s = String(v);
@@ -169,7 +221,7 @@ function jsonToTag(name, a = {}) {
 export function normalizeToolCalls(text) {
   let t = text.replace(/<\|tool_call>\s*call:\s*([a-z_]+)([\s\S]*?)<tool_call\|>/gi, (m, name, rest) => {
     let r = rest.trim();
-    const json = tryJson(r);
+    const json = r.startsWith('{') ? parseLooseArgs(r) : null;
     if (json && typeof json === 'object') return jsonToTag(name, json) ?? m;
     if (r.endsWith('/')) r = r.slice(0, -1).trim();
     const tool = ALIASES[name] || name;
@@ -288,23 +340,41 @@ export function parseActions(text, { final = true } = {}) {
  */
 export function splitThinking(text) {
   let thinking = '';
-  const out = text.replace(/<(think|reasoning)>([\s\S]*?)(<\/\1>|$)/g, (_, __, t) => {
+  let out = text.replace(/<(think|reasoning)>([\s\S]*?)(<\/\1>|$)/g, (_, __, t) => {
+    thinking += t;
+    return '';
+  });
+  // A model may also imitate the notes we give it back.
+  out = out.replace(/^\s*\(My notes: ([^\n]*)\)\n?/, (_, t) => {
     thinking += t;
     return '';
   });
   return { text: out, thinking };
 }
 
-/** Prefixes an assistant message with its reasoning, keeping the end (plans and conclusions are there). */
-export function withReasoning(content, thinking, maxChars) {
-  let t = (thinking || '').trim();
+/**
+ * The reasoning kept in the history is a short plain-text note: the end of the
+ * model's reasoning (where its plan and conclusions are), so it does not start
+ * over from scratch after each tool result. Not the full reasoning: with Gemma,
+ * a long reasoning in the history (as a <reasoning> block, or in the template's
+ * own thinking field) made the model emit only invisible tokens.
+ */
+export const NOTES_MAX_CHARS = 600;
+
+export function withReasoning(content, thinking, maxChars = NOTES_MAX_CHARS) {
+  let t = (thinking || '').replace(/\s+/g, ' ').trim();
   if (!t) return content;
-  if (t.length > maxChars) t = `[...]${t.slice(-maxChars)}`;
-  return `<reasoning>\n${t}\n</reasoning>\n${content}`;
+  if (t.length > maxChars) t = `…${t.slice(-maxChars)}`;
+  return `(My notes: ${t})\n${content}`;
 }
 
 export function stripReasoning(content) {
-  return content.replace(/<reasoning>[\s\S]*?<\/reasoning>\n?/g, '');
+  return content.replace(/<reasoning>[\s\S]*?<\/reasoning>\n?/g, '').replace(/^\(My notes: .*\)\n?/m, '');
+}
+
+/** Converts full <reasoning> blocks (older versions) into short notes. */
+export function legacyReasoningToNotes(content) {
+  return content.replace(/<reasoning>\n?([\s\S]*?)\n?<\/reasoning>\n?/g, (_, r) => withReasoning('', r));
 }
 
 export function formatResult(tool, attrs, output) {
