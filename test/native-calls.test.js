@@ -119,3 +119,16 @@ test('tools are declared only to LM Studio models with tool_use, and native call
     assert.deepEqual(actions, ['list']);
   }
 });
+
+// Regression: Gemma opening native calls with our attribute syntax and never closing them.
+test('unclosed native calls (attribute or brace form) are understood, incomplete ones are not', () => {
+  const acts = (t, final = true) => parseActions(t, { final }).actions.map((a) => [a.tool, a.args]);
+  assert.deepEqual(
+    acts('<|tool_call>call:read path="deploy/core_logic/da_layer/storage_manager.py" /><|tool_call>call:read path="deploy/core_logic/audit_agent/audit_agent.py" />'),
+    [['read', { path: 'deploy/core_logic/da_layer/storage_manager.py' }], ['read', { path: 'deploy/core_logic/audit_agent/audit_agent.py' }]],
+  );
+  assert.deepEqual(acts('<|tool_call>call:run{command:<|"|>ls -la<|"|>}'), [['run', { command: 'ls -la' }]]);
+  assert.deepEqual(acts('<|tool_call>call:write{path:<|"|>a.py<|"|>,content:<|"|>d = {1: 2}<|"|>}'), [['write', { path: 'a.py', content: 'd = {1: 2}' }]]);
+  assert.deepEqual(acts('<|tool_call>call:read path="a.py" /><tool_call|>'), [['read', { path: 'a.py' }]]);
+  assert.deepEqual(acts('<|tool_call>call:run{command:<|"|>ls', false), [], 'still streaming');
+});

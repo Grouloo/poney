@@ -219,14 +219,27 @@ function jsonToTag(name, a = {}) {
  *   (also what the client emits for API-level tool_calls).
  */
 export function normalizeToolCalls(text) {
+  // 1. Complete native calls: <|tool_call>call:name{args}<tool_call|> (or attributes inside).
   let t = text.replace(/<\|tool_call>\s*call:\s*([a-z_]+)([\s\S]*?)<tool_call\|>/gi, (m, name, rest) => {
     let r = rest.trim();
     const json = r.startsWith('{') ? parseLooseArgs(r) : null;
     if (json && typeof json === 'object') return jsonToTag(name, json) ?? m;
-    if (r.endsWith('/')) r = r.slice(0, -1).trim();
+    r = r.replace(/\/?>?\s*$/, '').trim();
     const tool = ALIASES[name] || name;
     return TOOLS[tool] ? `<${tool}${r ? ` ${r}` : ''} />` : m;
   });
+  // 2. Unclosed calls with braces: <|tool_call>call:name{args} (no <tool_call|>),
+  // once the braces are balanced (not while the arguments are still streaming).
+  t = t.replace(/<\|tool_call>\s*call:\s*([a-z_]+)\s*(?=\{)/gi, (m, name, offset, whole) =>
+    (matchingBrace(whole, offset + m.length) < 0 ? m : `\u0003${name}\u0004`));
+  t = replaceBraceCalls(t);
+  // 3. Unclosed calls written like our tags: <|tool_call>call:read path="a.py" />
+  t = t.replace(/<\|tool_call>\s*call:\s*([a-z_]+)(?=[\s/>])/gi, (m, name) => {
+    const tool = ALIASES[name] || name;
+    return TOOLS[tool] ? `<${tool}` : m;
+  });
+  t = t.replace(/<tool_call\|>/g, ''); // stray closers left by the forms above
+  // 4. Hermes/Qwen JSON calls.
   t = t.replace(/<tool_call>\s*(\{[\s\S]*?\})\s*<\/tool_call>/g, (m, body) => {
     const o = tryJson(body);
     if (!o?.name) return m;
@@ -234,6 +247,45 @@ export function normalizeToolCalls(text) {
     return jsonToTag(o.name, args) ?? m;
   });
   return t;
+}
+
+/** Index of the "}" closing the "{" at `start`, skipping strings ("…" and Gemma's <|"|>…<|"|>); -1 if not closed yet. */
+function matchingBrace(s, start) {
+  let depth = 0;
+  for (let i = start; i < s.length; i++) {
+    if (s.startsWith('<|"|>', i)) {
+      const close = s.indexOf('<|"|>', i + 5);
+      if (close < 0) return -1;
+      i = close + 4;
+      continue;
+    }
+    const c = s[i];
+    if (c === '"') {
+      let j = i + 1;
+      while (j < s.length && s[j] !== '"') j += s[j] === '\\' ? 2 : 1;
+      if (j >= s.length) return -1;
+      i = j;
+    } else if (c === '{') depth++;
+    else if (c === '}' && --depth === 0) return i;
+  }
+  return -1;
+}
+
+/** Rewrites marked unclosed brace calls (\u0003name\u0004{...}) into our tags. */
+function replaceBraceCalls(t) {
+  let out = '';
+  let i = 0;
+  while (true) {
+    const a = t.indexOf('\u0003', i);
+    if (a < 0) return out + t.slice(i);
+    const b = t.indexOf('\u0004', a);
+    const name = t.slice(a + 1, b);
+    const end = matchingBrace(t, b + 1);
+    const args = parseLooseArgs(t.slice(b + 1, end + 1));
+    const tag = args && jsonToTag(name, args);
+    out += t.slice(i, a) + (tag ?? `<|tool_call>call:${name}${t.slice(b + 1, end + 1)}`);
+    i = end + 1;
+  }
 }
 
 /**

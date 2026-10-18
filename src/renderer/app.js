@@ -1,4 +1,4 @@
-import { parseActions, splitThinking } from '../agent/protocol.js';
+import { parseActions, splitThinking, normalizeToolCalls } from '../agent/protocol.js';
 import hljs from '../../node_modules/@highlightjs/cdn-assets/es/highlight.min.js';
 import { fmtNum, fmtDuration } from './format.js';
 
@@ -387,10 +387,10 @@ function renderDiff(diff) {
 
 function streamingDisplay(raw) {
   // Hide tool tags while streaming; show only the prose.
-  let visible = splitThinking(raw).text;
-  // A native call (<|tool_call>…) not closed yet: hide it until it is complete.
-  const open = visible.lastIndexOf('<|tool_call>');
-  const nativePending = open >= 0 && visible.indexOf('<tool_call|>', open) < 0;
+  // Complete native calls become our tags; one still left is not complete yet: hide it.
+  let visible = normalizeToolCalls(splitThinking(raw).text);
+  const open = visible.indexOf('<|tool_call>');
+  const nativePending = open >= 0;
   if (nativePending) visible = visible.slice(0, open);
   const { text, actions } = parseActions(visible, { final: false });
   const pending = nativePending || actions.some((a) => !a.complete);

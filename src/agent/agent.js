@@ -505,8 +505,9 @@ export class Agent extends EventEmitter {
     // Gemma sometimes makes its tool call inside its reasoning: if the answer has
     // no action, use the first complete native call found there.
     if (!parseActions(visible).actions.length) {
-      const call = thinking.match(/<\|tool_call>[\s\S]*?<tool_call\|>/);
-      const action = call && parseActions(normalizeToolCalls(call[0])).actions[0];
+      const at = thinking.indexOf('<|tool_call>');
+      const first = at < 0 ? null : parseActions(normalizeToolCalls(thinking.slice(at))).actions[0];
+      const action = first?.start === 0 ? first : null; // the native call itself, not a tag mentioned later
       if (action?.complete) {
         visible = `${visible.trim()}\n${action.raw}`.trim();
         this.emit('event', { type: 'notice', text: 'Appel d’outil trouvé dans la réflexion du modèle : il est exécuté.' });
