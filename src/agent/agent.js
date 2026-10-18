@@ -62,6 +62,21 @@ function mergeRoles(msgs) {
   return merged;
 }
 
+/**
+ * First complete call to a reading tool (read, list, search, run, web) written
+ * inside the reasoning, our tags or a native call. Mentions (`<read>` in
+ * backticks, attribute-less tags mid-sentence) are ignored by the parser.
+ */
+function firstObservingCall(thinking) {
+  if (!/<[a-z_|]/i.test(thinking)) return null;
+  // In its reasoning Gemma often writes the call in backticks: accepted for the
+  // read-only tools, which are harmless to run even if it was only a plan.
+  const unquoted = thinking.replace(/`(<(?:read|list|search)\b[^`\n]*?\/?>)`/g, '$1');
+  const normalized = normalizeToolCalls(unquoted);
+  const action = parseActions(normalized, { final: false }).actions.find((a) => a.complete && TOOLS[a.tool].observes);
+  return action ? { raw: action.raw, before: normalized.slice(0, action.end) } : null;
+}
+
 /** The user request carried by a message (unwraps a compaction summary). */
 function taskFromMessage(content) {
   if (!content.startsWith(SUMMARY_MARKER)) return content;
@@ -401,6 +416,7 @@ export class Agent extends EventEmitter {
     let narrationCut = false;
     let streamError = null;
     let visibleSeen = false;
+    let thinkingCall = null; // { raw, end } of a call found in the reasoning
     let invisibleTimeout = false;
     let watchdog = null;
     let doneReason = null;
@@ -454,6 +470,14 @@ export class Agent extends EventEmitter {
         if (chunk.type === 'thinking') {
           thinking += chunk.text;
           this.emit('event', { type: 'delta', id, kind: 'thinking', text: chunk.text });
+          // Gemma sometimes "calls" a tool inside its reasoning, then imagines
+          // the result and reasons on it for minutes. Stop at the call and run it
+          // for real (reading tools only: their result is what it needs).
+          const call = /[>}|]/.test(chunk.text) ? firstObservingCall(thinking) : null; // a call can only end on these
+          if (call) {
+            thinkingCall = call;
+            break;
+          }
           continue;
         }
         text += chunk.text;
@@ -484,7 +508,14 @@ export class Agent extends EventEmitter {
         }
       }
     } catch (e) {
-      if (signal.aborted) throw e;
+      if (signal.aborted) {
+        // Stopped by the user: keep what was produced in the transcript.
+        const partial = splitThinking(text);
+        if (partial.text.trim() || thinking || partial.thinking) {
+          this.emit('event', { type: 'assistant_end', id, text: parseActions(normalizeToolCalls(partial.text)).text, thinking: thinking + partial.thinking, hasActions: false, interrupted: true });
+        }
+        throw e;
+      }
       if (e.name !== 'AbortError') {
         // Stream cut by the server or the network in the middle of the answer:
         // keep what came (complete actions still run), as for a length cut.
@@ -502,9 +533,14 @@ export class Agent extends EventEmitter {
     let visible = normalizeToolCalls(split.text);
     if (cutAt >= 0) visible = visible.slice(0, cutAt);
     thinking += split.thinking;
-    // Gemma sometimes makes its tool call inside its reasoning: if the answer has
-    // no action, use the first complete native call found there.
-    if (!parseActions(visible).actions.length) {
+    if (thinkingCall && !parseActions(visible).actions.length) {
+      // Keep the reasoning up to the call only: what follows was imagined.
+      thinking = thinkingCall.before;
+      visible = `${visible.trim()}\n${thinkingCall.raw}`.trim();
+      this.emit('event', { type: 'notice', text: 'Le modèle a appelé un outil dans sa réflexion : génération arrêtée, l’appel est exécuté pour de vrai.' });
+    } else if (!parseActions(visible).actions.length) {
+      // Gemma sometimes makes its tool call inside its reasoning: if the answer has
+      // no action, use the first complete native call found there.
       const at = thinking.indexOf('<|tool_call>');
       const first = at < 0 ? null : parseActions(normalizeToolCalls(thinking.slice(at))).actions[0];
       const action = first?.start === 0 ? first : null; // the native call itself, not a tag mentioned later
