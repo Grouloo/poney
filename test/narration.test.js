@@ -56,3 +56,30 @@ test('a long final answer without action is not cut', async () => {
   f.server.close();
   assert.ok(final.length > 500);
 });
+
+test('a stream cut by the server keeps what was written: complete actions still run', async () => {
+  let n = 0;
+  const server = http.createServer((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      if (++n === 1) {
+        res.write(`${JSON.stringify({ message: { content: '<write path="kept.py">\nx = 1\n</write>\n<write path="lost.py">\nhalf' }, done: false })}\n`);
+        setTimeout(() => res.socket.destroy(), 50); // like LM Studio's "TypeError: terminated"
+      } else {
+        res.end(`${JSON.stringify({ message: { content: 'Done.' }, done: true })}\n`);
+      }
+    });
+  });
+  await new Promise((r) => server.listen(0, r));
+  const cwd = await tmp();
+  const agent = new Agent({ cwd, config: { baseUrl: `http://localhost:${server.address().port}`, model: 'm', shellEnabled: false } });
+  const events = [];
+  agent.on('event', (e) => events.push(e));
+  await agent.send('create files');
+  server.close();
+  assert.equal(await fs.readFile(path.join(cwd, 'kept.py'), 'utf8'), 'x = 1\n');
+  await assert.rejects(fs.access(path.join(cwd, 'lost.py')));
+  assert.ok(events.some((e) => e.type === 'notice' && /coupé la génération/.test(e.text)));
+  assert.equal(events.filter((e) => e.type === 'error').length, 0);
+  assert.equal(events.find((e) => e.type === 'final')?.text, 'Done.');
+});

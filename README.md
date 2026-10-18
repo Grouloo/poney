@@ -61,8 +61,10 @@ node src/cli.js --cwd ./mon-projet --model qwen2.5:14b "tâche"   # mode headles
 - **Jauge de contexte** sous la saisie (le trait marque le seuil de compactage) ; un clic compacte à la demande.
   Les résumés apparaissent dans le fil, dépliables.
 - **Progression de la lecture du prompt** (LM Studio) : pourcentage et temps restant estimé dans la barre d'état
-  avant le premier token. LM Studio est détecté automatiquement derrière « Compatible OpenAI » et piloté via son SDK
-  (même modèle, même cache) ; repli sur HTTP sinon. Les autres serveurs n'exposent pas cette information.
+  avant le premier token. LM Studio est détecté automatiquement derrière « Compatible OpenAI » : le prompt est lu via
+  son SDK (qui donne la progression) puis la réponse est générée en HTTP en réutilisant ce cache. La génération ne
+  passe pas par le SDK, que LM Studio coupe après ~5 min. Les autres serveurs n'exposent pas cette information.
+- **Flux coupé par le serveur** : ce qui était déjà écrit est conservé et les actions complètes sont exécutées.
 - **Appels d'outils natifs compris** : si le modèle utilise son format natif (Gemma `<|tool_call>…`, Hermes/Qwen
   `<tool_call>{json}`, champs `tool_calls` des API OpenAI/Ollama), l'appel est converti dans nos balises.
 - **Temps et vitesse** : chronomètre dans la barre d'état pendant la réponse, puis une ligne sous la réponse finale :

@@ -387,6 +387,7 @@ export class Agent extends EventEmitter {
     let thinking = '';
     let cutAt = -1;
     let narrationCut = false;
+    let streamError = null;
     let doneReason = null;
     let usage = null;
     const t0 = Date.now();
@@ -452,7 +453,12 @@ export class Agent extends EventEmitter {
       }
     } catch (e) {
       if (signal.aborted) throw e;
-      if (e.name !== 'AbortError') throw e;
+      if (e.name !== 'AbortError') {
+        // Stream cut by the server or the network in the middle of the answer:
+        // keep what came (complete actions still run), as for a length cut.
+        if (!splitThinking(text).text.trim()) throw e;
+        streamError = e;
+      }
     } finally {
       ctrl.abort();
       signal.removeEventListener('abort', onAbort);
@@ -462,10 +468,13 @@ export class Agent extends EventEmitter {
     if (cutAt >= 0) visible = visible.slice(0, cutAt);
     thinking += split.thinking;
     // Cut by the length limit (not by us): the end of the answer is missing.
-    const truncated = cutAt < 0 && doneReason === 'length';
+    const truncated = cutAt < 0 && (doneReason === 'length' || Boolean(streamError));
+    if (streamError) {
+      this.emit('event', { type: 'notice', text: `Le serveur a coupé la génération (${streamError.message}) : ce qui était déjà écrit est conservé, les actions complètes sont exécutées.` });
+    }
     const stats = generationStats({ t0, tFirst, tEnd: Date.now(), usage, est: this.est, text: text + thinking });
     if (narrationCut) this.emit('event', { type: 'notice', text: 'Le modèle continuait à écrire après son action au lieu d’attendre le résultat : génération arrêtée, l’action est exécutée.' });
-    return { id, text: visible, thinking, truncated, contextLimited: truncated && maxTokens < this.config.maxTokens, stats };
+    return { id, text: visible, thinking, truncated, contextLimited: truncated && !streamError && maxTokens < this.config.maxTokens, stats };
   }
 
   // ----- main loop -----

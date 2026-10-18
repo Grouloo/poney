@@ -1,9 +1,11 @@
 // Streaming chat client for local model servers.
 // - "ollama": native /api/chat (lets us set num_ctx, which the OpenAI shim ignores)
 // - "openai": any OpenAI-compatible server (LM Studio, llama.cpp server, vLLM, ...).
-//   When the server is LM Studio, its SDK is used instead of HTTP: same model and
-//   cache, but it reports the progress of prompt processing (minutes on long
-//   prompts with local hardware). HTTP remains the fallback.
+//   With LM Studio, the prompt is first read through its SDK, which reports the
+//   reading progress (minutes on long prompts with local hardware), and stopped
+//   at the first token; the answer is then generated over HTTP, which reuses
+//   that cache. Generating through the SDK is avoided: LM Studio cuts SDK
+//   predictions after about 5 minutes ("TypeError: terminated").
 import { LMStudioClient, Chat } from '@lmstudio/sdk';
 
 function trimSlash(url) {
@@ -45,17 +47,12 @@ async function checkResponse(res) {
  */
 export async function* streamChat(opts) {
   if (opts.provider === 'openai' && await isLMStudio(opts)) {
-    let yielded = false;
     try {
-      for await (const chunk of streamLMStudio(opts)) {
-        yielded = true;
-        yield chunk;
-      }
-      return;
+      yield* readPromptLMStudio(opts);
     } catch (e) {
-      if (yielded || opts.signal?.aborted) throw e;
-      // SDK unusable before anything came out: fall back to HTTP for this call,
-      // and for good if it could not even connect.
+      if (opts.signal?.aborted) throw e;
+      // No progress this time: the HTTP request reads the prompt itself.
+      // Stop trying the SDK if it could not even connect.
       if (/ECONNREFUSED|websocket|connect/i.test(String(e?.message))) lmsBroken.add(lmsRoot(opts.baseUrl));
     }
   }
@@ -102,7 +99,12 @@ export async function closeClients() {
   await Promise.all(clients.map((c) => c[Symbol.asyncDispose]?.().catch(() => {})));
 }
 
-async function* streamLMStudio({ baseUrl, model, messages, temperature, maxTokens, signal }) {
+/**
+ * Reads the prompt through the SDK, yielding {type: 'progress'} events, and
+ * stops at the first token: the server cache then holds the prompt, so the HTTP
+ * request that follows starts generating almost at once.
+ */
+async function* readPromptLMStudio({ baseUrl, model, messages, temperature, signal }) {
   if (!model) throw new Error('No model selected.');
   const ws = lmsRoot(baseUrl).replace(/^http/, 'ws');
   let handle;
@@ -118,8 +120,7 @@ async function* streamLMStudio({ baseUrl, model, messages, temperature, maxToken
     client?.[Symbol.asyncDispose]?.().catch(() => {});
     throw e;
   }
-  // The SDK reports progress through a callback and text through an iterator:
-  // merge both into one ordered queue.
+  // The SDK reports progress through a callback: queue it for the generator.
   const queue = [];
   let wake = null;
   let finished = false;
@@ -130,7 +131,7 @@ async function* streamLMStudio({ baseUrl, model, messages, temperature, maxToken
     wake = null;
   };
   const prediction = handle.respond(Chat.from(messages), {
-    maxTokens,
+    maxTokens: 1,
     temperature,
     contextOverflowPolicy: 'stopAtLimit', // we size the prompt ourselves: never truncate silently
     onPromptProcessingProgress: (progress) => push({ type: 'progress', progress }),
@@ -139,20 +140,11 @@ async function* streamLMStudio({ baseUrl, model, messages, temperature, maxToken
   signal?.addEventListener('abort', onAbort);
   (async () => {
     try {
-      for await (const f of prediction) {
-        if (f.reasoningType === 'reasoning') push({ type: 'thinking', text: f.content });
-        else if (f.reasoningType === 'none') push({ type: 'text', text: f.content });
+      for await (const _ of prediction) {
+        prediction.cancel(); // the first token means the prompt is read
+        break;
       }
-      const { stats } = await prediction.result();
-      const ttftMs = (stats.timeToFirstTokenSec ?? 0) * 1000;
-      push({
-        type: 'usage',
-        promptTokens: stats.promptTokensCount || 0,
-        outputTokens: stats.predictedTokensCount || 0,
-        promptMs: ttftMs || null,
-        evalMs: stats.totalTimeSec ? stats.totalTimeSec * 1000 - ttftMs : null,
-      });
-      push({ type: 'done', reason: stats.stopReason === 'maxPredictedTokensReached' ? 'length' : 'stop' });
+      await prediction.result().catch(() => {});
     } catch (e) {
       failure = e;
     } finally {
@@ -173,7 +165,7 @@ async function* streamLMStudio({ baseUrl, model, messages, temperature, maxToken
     if (failure && !signal?.aborted) throw failure;
   } finally {
     signal?.removeEventListener('abort', onAbort);
-    if (!finished) prediction.cancel(); // the consumer stopped early (e.g. after an action)
+    if (!finished) prediction.cancel();
   }
 }
 
