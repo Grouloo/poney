@@ -337,14 +337,24 @@ function onPromptProgress(ev) {
   if (!runTimer && running) $('status').textContent = `Compactage… ${promptProgressText()}`;
 }
 
+// Generation in progress (after the prompt was read).
+let liveGen = null;
+
+function liveGenText() {
+  if (!liveGen || promptProgress) return '';
+  const secs = (performance.now() - liveGen.firstAt) / 1000;
+  const rate = secs > 1 ? ` · ${fmtNum(liveGen.pieces / secs)} tok/s` : '';
+  return `génération ${liveGen.pieces} tokens${rate}`;
+}
+
 // Live timer for the whole answer, in the status line.
 let runTimer = null;
 function startRunTimer() {
   const t0 = performance.now();
   clearInterval(runTimer);
   const tick = () => {
-    const progress = promptProgressText();
-    $('status').textContent = `L’agent travaille… ${fmtDuration(performance.now() - t0)}${progress ? ` · ${progress}` : ''}`;
+    const extra = promptProgressText() || liveGenText();
+    $('status').textContent = `L’agent travaille… ${fmtDuration(performance.now() - t0)}${extra ? ` · ${extra}` : ''}`;
   };
   tick();
   runTimer = setInterval(tick, 100);
@@ -397,14 +407,20 @@ function onEvent(ev) {
       const b = bubbles.get(ev.id);
       if (!b) break;
       if (promptProgress?.id === ev.id) promptProgress = null; // first token: reading is over
+      // Live counter (one streamed piece ≈ one token): makes a long generation visible.
+      b.pieces = (b.pieces || 0) + 1;
+      b.firstAt ??= performance.now();
+      liveGen = b;
       if (ev.kind === 'thinking') {
         b.thinking += ev.text;
+        b.thinkPieces = (b.thinkPieces || 0) + 1;
         if (!b.thinkingEl) {
           b.thinkingEl = document.createElement('details');
           b.thinkingEl.className = 'thinking';
           b.thinkingEl.innerHTML = '<summary>Réflexion…</summary><div></div>';
           b.el.insertBefore(b.thinkingEl, b.bubble);
         }
+        b.thinkingEl.querySelector('summary').textContent = `Réflexion… ${b.thinkPieces} tokens`;
         b.thinkingEl.querySelector('div').textContent = b.thinking;
       } else {
         b.raw += ev.text;
@@ -417,6 +433,7 @@ function onEvent(ev) {
     case 'assistant_end': {
       const b = bubbles.get(ev.id);
       if (!b) break;
+      if (liveGen === b) liveGen = null;
       b.bubble.classList.remove('cursor');
       const thinking = (b.thinking + (ev.thinking && !b.thinking ? ev.thinking : '')).trim();
       if (thinking && !b.thinkingEl) {
@@ -426,7 +443,7 @@ function onEvent(ev) {
         b.thinkingEl.querySelector('div').textContent = thinking;
         b.el.insertBefore(b.thinkingEl, b.bubble);
       } else if (b.thinkingEl) {
-        b.thinkingEl.querySelector('summary').textContent = 'Réflexion';
+        b.thinkingEl.querySelector('summary').textContent = b.thinkPieces ? `Réflexion (${b.thinkPieces} tokens)` : 'Réflexion';
       }
       if (ev.text) b.bubble.innerHTML = markdown(ev.text);
       else if (!thinking) b.el.remove();
@@ -519,6 +536,7 @@ function onEvent(ev) {
       break;
     case 'turn_end':
       promptProgress = null;
+      liveGen = null;
       // One timing line for the whole answer, not one per tool call.
       if (ev.stats) {
         const meta = div('gen-meta', esc(formatStats(ev.stats) + (ev.reason === 'stopped' ? ' · interrompu' : '')));

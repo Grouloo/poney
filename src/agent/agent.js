@@ -69,6 +69,9 @@ function taskFromMessage(content) {
   return m ? m[1] : null;
 }
 
+// Non-space characters of prose allowed after a completed action before we stop the generation.
+const NARRATION_LIMIT = 400;
+
 let nextId = Date.now(); // unique across restarts, since saved conversations are replayed by id
 
 export class Agent extends EventEmitter {
@@ -383,6 +386,7 @@ export class Agent extends EventEmitter {
     let text = '';
     let thinking = '';
     let cutAt = -1;
+    let narrationCut = false;
     let doneReason = null;
     let usage = null;
     const t0 = Date.now();
@@ -432,6 +436,19 @@ export class Agent extends EventEmitter {
         const { actions } = parseActions(visible, { final: false });
         const obs = actions.find((a) => a.complete && TOOLS[a.tool].observes);
         if (obs) { cutAt = obs.end; break; }
+        // After a <write>/<edit>, small models often go on narrating ("the tests
+        // pass...") instead of waiting for the result: minutes of invented text
+        // on local hardware. Stop once a long text follows the last action
+        // without starting a new one.
+        const last = actions[actions.length - 1];
+        if (last?.complete) {
+          const after = visible.slice(last.end);
+          if (after.replace(/\s/g, '').length > NARRATION_LIMIT && !/<[a-z_|]/i.test(after)) {
+            cutAt = last.end;
+            narrationCut = true;
+            break;
+          }
+        }
       }
     } catch (e) {
       if (signal.aborted) throw e;
@@ -447,6 +464,7 @@ export class Agent extends EventEmitter {
     // Cut by the length limit (not by us): the end of the answer is missing.
     const truncated = cutAt < 0 && doneReason === 'length';
     const stats = generationStats({ t0, tFirst, tEnd: Date.now(), usage, est: this.est, text: text + thinking });
+    if (narrationCut) this.emit('event', { type: 'notice', text: 'Le modèle continuait à écrire après son action au lieu d’attendre le résultat : génération arrêtée, l’action est exécutée.' });
     return { id, text: visible, thinking, truncated, contextLimited: truncated && maxTokens < this.config.maxTokens, stats };
   }
 
