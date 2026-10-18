@@ -387,10 +387,14 @@ function renderDiff(diff) {
 
 function streamingDisplay(raw) {
   // Hide tool tags while streaming; show only the prose.
-  const visible = splitThinking(raw).text;
+  let visible = splitThinking(raw).text;
+  // A native call (<|tool_call>…) not closed yet: hide it until it is complete.
+  const open = visible.lastIndexOf('<|tool_call>');
+  const nativePending = open >= 0 && visible.indexOf('<tool_call|>', open) < 0;
+  if (nativePending) visible = visible.slice(0, open);
   const { text, actions } = parseActions(visible, { final: false });
-  const pending = actions.some((a) => !a.complete);
-  return { text: text.replace(/<[a-z_]*$/, ''), pending };
+  const pending = nativePending || actions.some((a) => !a.complete);
+  return { text: text.replace(/<\|?[a-z_]*$/, ''), pending };
 }
 
 function onEvent(ev) {

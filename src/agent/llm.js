@@ -58,8 +58,123 @@ export async function* streamChat(opts) {
       // Stop trying the SDK if it could not even connect.
       if (/ECONNREFUSED|websocket|connect/i.test(String(e?.message))) lmsBroken.add(lmsRoot(opts.baseUrl));
     }
+    if (lmsRawMode(opts) && !lmsBroken.has(lmsRoot(opts.baseUrl))) {
+      let yielded = false;
+      try {
+        for await (const chunk of streamLMStudioRaw(opts)) {
+          yielded = true;
+          yield chunk;
+        }
+        return;
+      } catch (e) {
+        if (yielded || opts.signal?.aborted) throw e;
+        // Raw mode unusable this time: the chat endpoint below.
+      }
+    }
   }
   yield* streamHTTP(opts);
+}
+
+// ---------- LM Studio raw mode (Gemma) ----------
+// The chat endpoint parses the output: from a "<|tool_call>" on, it holds
+// everything back until the call is closed, and drops it if it never is (Gemma
+// sometimes opens a call inside its reasoning): generation goes on, nothing comes
+// out. In raw mode we render the prompt with the model's own template (SDK) and
+// use /v1/completions, which returns every token; reasoning is split here.
+
+/** Models whose output format the raw mode knows (Gemma: <|channel>thought … <channel|>). */
+function lmsRawMode({ baseUrl, model }) {
+  const m = lmsModels.get(lmsRoot(baseUrl))?.find((x) => x.id === model);
+  return /^gemma/i.test(m?.arch || '');
+}
+
+const CHANNEL_OPEN = '<|channel>';
+const CHANNEL_CLOSE = '<channel|>';
+const END_MARKERS = ['<turn|>', '<eos>', '<end_of_turn>'];
+
+/** Length of the longest end of `s` that could be the start of `marker`. */
+function partialTail(s, marker) {
+  for (let k = Math.min(marker.length - 1, s.length); k > 0; k--) if (s.endsWith(marker.slice(0, k))) return k;
+  return 0;
+}
+
+/** Splits a raw Gemma stream into text and thinking, markers possibly cut across pieces. */
+export function makeChannelSplitter() {
+  let buf = '';
+  let mode = 'text'; // 'text' | 'header' (channel name line) | 'thinking'
+  return function* split(piece, final = false) {
+    buf += piece;
+    for (const end of END_MARKERS) buf = buf.split(end).join('');
+    while (true) {
+      if (mode === 'text') {
+        const i = buf.indexOf(CHANNEL_OPEN);
+        if (i >= 0) {
+          if (i) yield { type: 'text', text: buf.slice(0, i) };
+          buf = buf.slice(i + CHANNEL_OPEN.length);
+          mode = 'header';
+          continue;
+        }
+        const keep = final ? 0 : Math.max(partialTail(buf, CHANNEL_OPEN), ...END_MARKERS.map((m) => partialTail(buf, m)));
+        const out = buf.slice(0, buf.length - keep);
+        if (out) yield { type: 'text', text: out };
+        buf = buf.slice(buf.length - keep);
+        return;
+      }
+      if (mode === 'header') {
+        const nl = buf.indexOf('\n');
+        if (nl < 0) {
+          if (final) buf = '';
+          return;
+        }
+        buf = buf.slice(nl + 1);
+        mode = 'thinking';
+        continue;
+      }
+      const j = buf.indexOf(CHANNEL_CLOSE);
+      if (j >= 0) {
+        if (j) yield { type: 'thinking', text: buf.slice(0, j) };
+        buf = buf.slice(j + CHANNEL_CLOSE.length);
+        mode = 'text';
+        continue;
+      }
+      const keep = final ? 0 : partialTail(buf, CHANNEL_CLOSE);
+      const out = buf.slice(0, buf.length - keep);
+      if (out) yield { type: 'thinking', text: out };
+      buf = buf.slice(buf.length - keep);
+      return;
+    }
+  };
+}
+
+async function* streamLMStudioRaw({ baseUrl, apiKey, model, messages, temperature, maxTokens, signal, tools }) {
+  const handle = await lmsModelHandle(baseUrl, model);
+  const prompt = await handle.applyPromptTemplate(Chat.from(messages), tools ? { toolDefinitions: tools } : undefined);
+  const headers = { 'Content-Type': 'application/json' };
+  if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+  const res = await fetch(`${openaiBase(baseUrl)}/completions`, {
+    method: 'POST',
+    headers,
+    signal,
+    body: JSON.stringify({ model, prompt, stream: true, stream_options: { include_usage: true }, temperature, max_tokens: maxTokens, stop: ['<turn|>'] }),
+  });
+  await checkResponse(res);
+  const split = makeChannelSplitter();
+  let finish = null;
+  for await (const line of readLines(res.body)) {
+    if (!line.startsWith('data:')) continue;
+    const payload = line.slice(5).trim();
+    if (payload === '[DONE]') break;
+    let data;
+    try { data = JSON.parse(payload); } catch { continue; }
+    if (data.usage?.completion_tokens) {
+      yield { type: 'usage', promptTokens: data.usage.prompt_tokens || 0, outputTokens: data.usage.completion_tokens };
+    }
+    const choice = data.choices?.[0];
+    if (choice?.text) yield* split(choice.text);
+    if (choice?.finish_reason) finish = choice.finish_reason;
+  }
+  yield* split('', true);
+  yield { type: 'done', reason: finish === 'length' ? 'length' : 'stop' };
 }
 
 // ---------- LM Studio (SDK) ----------
@@ -114,13 +229,12 @@ export async function closeClients() {
  * stops at the first token: the server cache then holds the prompt, so the HTTP
  * request that follows starts generating almost at once.
  */
-async function* readPromptLMStudio({ baseUrl, model, messages, temperature, signal, tools }) {
+async function lmsModelHandle(baseUrl, model) {
   if (!model) throw new Error('No model selected.');
   const ws = lmsRoot(baseUrl).replace(/^http/, 'ws');
-  let handle;
   try {
     // The SDK retries forever when the WebSocket does not answer: give up after a few seconds.
-    handle = await Promise.race([
+    return await Promise.race([
       lmsClient(baseUrl).llm.model(model),
       new Promise((_, reject) => setTimeout(() => reject(new Error('LM Studio websocket connect timeout')), 4000).unref?.()),
     ]);
@@ -130,6 +244,10 @@ async function* readPromptLMStudio({ baseUrl, model, messages, temperature, sign
     client?.[Symbol.asyncDispose]?.().catch(() => {});
     throw e;
   }
+}
+
+async function* readPromptLMStudio({ baseUrl, model, messages, temperature, signal, tools }) {
+  const handle = await lmsModelHandle(baseUrl, model);
   // The SDK reports progress through a callback: queue it for the generator.
   const queue = [];
   let wake = null;

@@ -502,6 +502,16 @@ export class Agent extends EventEmitter {
     let visible = normalizeToolCalls(split.text);
     if (cutAt >= 0) visible = visible.slice(0, cutAt);
     thinking += split.thinking;
+    // Gemma sometimes makes its tool call inside its reasoning: if the answer has
+    // no action, use the first complete native call found there.
+    if (!parseActions(visible).actions.length) {
+      const call = thinking.match(/<\|tool_call>[\s\S]*?<tool_call\|>/);
+      const action = call && parseActions(normalizeToolCalls(call[0])).actions[0];
+      if (action?.complete) {
+        visible = `${visible.trim()}\n${action.raw}`.trim();
+        this.emit('event', { type: 'notice', text: 'Appel d’outil trouvé dans la réflexion du modèle : il est exécuté.' });
+      }
+    }
     // Cut by the length limit (not by us): the end of the answer is missing.
     const truncated = cutAt < 0 && (doneReason === 'length' || Boolean(streamError));
     if (streamError) {

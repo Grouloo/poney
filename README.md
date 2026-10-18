@@ -39,8 +39,11 @@ node src/cli.js --cwd ./mon-projet --model qwen2.5:14b "tâche"   # mode headles
 - **Raisonnement conservé en note courte** : la fin de la réflexion du modèle (~600 caractères, texte simple) est
   gardée devant ses messages, pour qu'il ne reparte pas de zéro après chaque résultat d'outil. Pas la réflexion
   entière : avec Gemma, elle faisait produire au modèle uniquement des tokens invisibles.
-- **Outils déclarés nativement** aux modèles LM Studio qui le supportent (`tool_use`) : leurs appels natifs arrivent
-  structurés et visibles en cours de génération, au lieu d'être retenus par LM Studio (et perdus si coupés).
+- **Outils déclarés nativement** aux modèles LM Studio qui le supportent (`tool_use`).
+- **Mode brut pour Gemma dans LM Studio** : le prompt est mis en forme avec le gabarit du modèle (SDK) et généré via
+  `/v1/completions`, qui renvoie chaque token. L'endpoint chat de LM Studio retenait tout ce qui suivait un début
+  d'appel d'outil (parfois ouvert dans la réflexion) : la génération continuait sans que rien ne sorte. La réflexion
+  (`<|channel>thought…<channel|>`) est séparée par l'app ; un appel natif fait dans la réflexion est exécuté.
 - **Garde-fou** : si le modèle génère sans rien produire de visible, l'app le détecte (45 s après la lecture du
   prompt) et réessaie sans les notes de raisonnement.
 - **Cache du serveur préservé** : le début du prompt ne change jamais d'un appel à l'autre (sauf au compactage),
