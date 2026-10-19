@@ -8,7 +8,7 @@ import { listModels } from './agent/llm.js';
 import { ConversationStore } from './conversations.js';
 import { listDir, readFileForViewer } from './files.js';
 import { migrateLegacy, rebuildHistory } from './agent/rebuild.js';
-import { checkTor } from './agent/tor.js';
+import { checkTor, torStatus } from './agent/tor.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -212,6 +212,7 @@ ipcMain.handle('prompt:set', async (_, text) => {
   return { default: def, custom: a.systemPrompt, running: a.running };
 });
 
+ipcMain.handle('tor:status', () => torStatus(settings.config).catch((e) => ({ state: 'off', detail: e.message })));
 ipcMain.handle('tor:check', async () => {
   try {
     return { ok: true, ...(await checkTor(settings.config.torProxy)) };

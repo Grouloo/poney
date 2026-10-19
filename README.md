@@ -84,6 +84,9 @@ node src/cli.js --cwd ./mon-projet --model qwen2.5:14b "tâche"   # mode headles
   DuckDuckGo. Si Tor est injoignable, la requête est refusée, jamais envoyée en clair. En option, les commandes du
   terminal reçoivent les variables de proxy (efficace pour curl, git, wget… pas une garantie générale). Le serveur
   de modèles local n'est pas concerné. Bouton de test (IP de sortie vue par check.torproject.org) ; CLI : `--tor`.
+  État en direct à côté de l'interrupteur (vert connecté, orange « connexion 45 % », rouge arrêté ou bloqué) : via le
+  port de contrôle de Tor (9051 / 9151, authentification par cookie) s'il est activé, sinon par une connexion de test
+  au plus toutes les 30 s.
 - **Visualiseur** avec coloration syntaxique et aperçu d'images ; les chemins dans les actions de l'agent sont cliquables.
 
 ## Structure
@@ -104,6 +107,7 @@ mkdir -p /opt/homebrew/etc/tor/pt
 ln -sf "/Applications/Tor Browser.app/Contents/MacOS/Tor/PluggableTransports/lyrebird" /opt/homebrew/etc/tor/pt/lyrebird
 ```
 
-Puis, dans `/opt/homebrew/etc/tor/torrc` : `UseBridges 1`, les lignes `ClientTransportPlugin … exec
+Puis, dans `/opt/homebrew/etc/tor/torrc` : `ControlPort 127.0.0.1:9051` et `CookieAuthentication 1` (pour l'état de
+connexion dans l'app), `UseBridges 1`, les lignes `ClientTransportPlugin … exec
 /opt/homebrew/etc/tor/pt/lyrebird` et les lignes `Bridge …` (snowflake, meek, obfs4) de Tor Browser
 (`chrome/toolkit/content/global/pt_config.json` dans `Contents/Resources/omni.ja`), puis `brew services restart tor`.

@@ -89,6 +89,7 @@ function renderSettings() {
     else el.value = settings.config[el.name];
   }
   $('torEnabled').checked = Boolean(settings.config.torEnabled);
+  if (Boolean(torTimer) !== Boolean(settings.config.torEnabled)) scheduleTorStatus();
   const recent = $('recent');
   if (recent) {
     recent.innerHTML = '';
@@ -133,6 +134,7 @@ form.addEventListener('change', async (e) => {
   settings = await window.api.setConfig(patch);
   renderSettings();
   refreshGauge();
+  if (el.name === 'torProxy') scheduleTorStatus();
   if (['provider', 'baseUrl', 'apiKey'].includes(el.name)) refreshModels();
   if (el.name === 'model') refreshModels();
 });
@@ -152,6 +154,36 @@ for (const flag of ['webEnabled', 'shellEnabled', 'torEnabled']) {
     renderSettings();
   };
 }
+// ---------- Tor connection status ----------
+let torTimer = null;
+
+function renderTorStatus(s) {
+  for (const id of ['torState', 'torStateBig']) $(id).className = `tor-state ${s.state}`;
+  $('torState').textContent = s.state === 'bootstrapping' || s.state === 'stuck' ? ` ${s.progress} %` : '';
+  $('torToggleLabel').title = s.state === 'disabled'
+    ? 'Recherche web et lecture de pages via Tor (réglages : ⚙︎ › Confidentialité)'
+    : `${s.detail}${s.proxy ? ` — ${s.proxy.replace('socks5h://', '')}` : ''}`;
+  $('torStatusLine').textContent = s.detail;
+}
+
+async function refreshTorStatus() {
+  try {
+    renderTorStatus(await window.api.torStatus());
+  } catch {}
+}
+
+/** Polls Tor's state while it is enabled (local control port; a test connection at most every 30 s otherwise). */
+function scheduleTorStatus() {
+  clearInterval(torTimer);
+  torTimer = null;
+  if (!settings.config.torEnabled) {
+    renderTorStatus({ state: 'disabled', detail: 'Tor désactivé' });
+    return;
+  }
+  refreshTorStatus();
+  torTimer = setInterval(refreshTorStatus, 3000);
+}
+
 $('torTest').onclick = async () => {
   const out = $('torResult');
   out.textContent = 'Test en cours…';

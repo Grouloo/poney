@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld('api', {
   setSystemPrompt: (text) => ipcRenderer.invoke('prompt:set', text),
 
   checkTor: () => ipcRenderer.invoke('tor:check'),
+  torStatus: () => ipcRenderer.invoke('tor:status'),
   getContext: () => ipcRenderer.invoke('context:get'),
   compactContext: () => ipcRenderer.invoke('context:compact'),
 

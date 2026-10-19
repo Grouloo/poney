@@ -67,7 +67,7 @@
           <input type="checkbox" id="webEnabled"> Web
         </label>
         <label class="toggle" id="torToggleLabel" title="Recherche web et lecture de pages via Tor (réglages : ⚙︎ › Confidentialité)">
-          <input type="checkbox" id="torEnabled"> Tor
+          <input type="checkbox" id="torEnabled"> Tor<span id="torState" class="tor-state disabled"></span>
         </label>
         <label class="toggle" title="Autoriser l’agent à lancer des commandes dans le terminal">
           <input type="checkbox" id="shellEnabled"> Terminal
@@ -168,6 +168,7 @@
         </label>
         <label class="check"><input type="checkbox" name="torShell"> Aussi les commandes du terminal</label>
         <small>Par variables de proxy : seuls les programmes qui les respectent (curl, git, wget, pip…) passent par Tor. Ce n’est pas une garantie pour toutes les commandes.</small>
+        <p class="tor-status-line"><span id="torStateBig" class="tor-state disabled"></span><span id="torStatusLine">Tor désactivé</span></p>
         <div class="row tor-test"><button type="button" id="torTest" class="ghost">Tester la connexion Tor</button><span id="torResult" class="muted"></span></div>
       </fieldset>
     </form>

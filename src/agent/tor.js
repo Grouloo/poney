@@ -7,7 +7,9 @@ import http from 'node:http';
 import https from 'node:https';
 import net from 'node:net';
 import zlib from 'node:zlib';
+import fs from 'node:fs/promises';
 import { SocksProxyAgent } from 'socks-proxy-agent';
+import { SocksClient } from 'socks';
 
 /** tor daemon, then Tor Browser. */
 export const TOR_DEFAULT_PORTS = [9050, 9150];
@@ -149,4 +151,95 @@ export function proxyEnv(proxy) {
     HTTP_PROXY: proxy, http_proxy: proxy,
     NO_PROXY: local, no_proxy: local,
   };
+}
+
+// ---------- connection status ----------
+
+/**
+ * Talks to Tor's control port (local only): authenticates with the cookie file
+ * Tor names in PROTOCOLINFO, then asks for the bootstrap phase. Null if not available.
+ */
+export function torControlStatus(port, { timeoutMs = 3000 } = {}) {
+  return new Promise((resolve) => {
+    const socket = net.connect({ host: '127.0.0.1', port });
+    let buf = '';
+    let step = 0;
+    const done = (v) => { socket.destroy(); resolve(v); };
+    socket.setTimeout(timeoutMs, () => done(null));
+    socket.on('error', () => done(null));
+    socket.on('connect', () => socket.write('PROTOCOLINFO 1\r\n'));
+    socket.on('data', async (d) => {
+      buf += d.toString();
+      if (!/^\d{3} .*\r\n$/m.test(buf)) return; // wait for the final line of the reply
+      const reply = buf;
+      buf = '';
+      if (!reply.startsWith('250')) return done(null);
+      if (step === 0) {
+        step = 1;
+        const methods = (reply.match(/METHODS=(\S+)/) || [])[1] || '';
+        const cookieFile = (reply.match(/COOKIEFILE="((?:[^"\\]|\\.)*)"/) || [])[1];
+        let auth = '';
+        if (/COOKIE/.test(methods) && cookieFile) {
+          try { auth = (await fs.readFile(cookieFile.replace(/\\(.)/g, '$1'))).toString('hex'); } catch { return done(null); }
+        } else if (!/NULL/.test(methods)) return done(null); // password only: not supported
+        socket.write(`AUTHENTICATE ${auth}\r\n`);
+      } else if (step === 1) {
+        step = 2;
+        socket.write('GETINFO status/bootstrap-phase status/circuit-established\r\n');
+      } else {
+        const phase = (reply.match(/status\/bootstrap-phase=(.*)/) || [])[1] || '';
+        done({
+          progress: Number((phase.match(/PROGRESS=(\d+)/) || [])[1] ?? 0),
+          summary: (phase.match(/SUMMARY="([^"]*)"/) || [])[1] || '',
+          warning: /^WARN/.test(phase) ? ((phase.match(/WARNING="([^"]*)"/) || [])[1] || 'problème de connexion') : null,
+          circuit: /status\/circuit-established=1/.test(reply),
+        });
+      }
+    });
+  });
+}
+
+/** Opens (then closes) a connection through Tor: true if a circuit works. */
+export async function socksProbe(proxy, { host = 'check.torproject.org', port = 443, timeoutMs = 20_000 } = {}) {
+  const u = new URL(proxy);
+  try {
+    const { socket } = await SocksClient.createConnection({
+      proxy: { host: u.hostname, port: Number(u.port), type: 5 },
+      command: 'connect',
+      destination: { host, port },
+      timeout: timeoutMs,
+    });
+    socket.destroy();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+let probeCache = null; // { proxy, ok, at }: the probe opens a real connection, keep it rare
+
+/**
+ * State of the Tor connection, for the UI:
+ * { state: 'disabled' | 'off' | 'bootstrapping' | 'stuck' | 'connected' | 'no-circuit', proxy?, progress?, detail }
+ */
+export async function torStatus(config = {}, { probeEveryMs = 30_000 } = {}) {
+  if (!config.torEnabled) return { state: 'disabled', detail: 'Tor désactivé' };
+  const proxy = await findTorProxy(config.torProxy);
+  if (!proxy) {
+    const where = normalizeProxy(config.torProxy) || `127.0.0.1:${TOR_DEFAULT_PORTS.join(' / ')}`;
+    return { state: 'off', detail: `Tor ne tourne pas (${where}) : les requêtes web sont refusées` };
+  }
+  const socksPort = Number(new URL(proxy).port);
+  const control = await torControlStatus(socksPort + 1); // convention: 9050 -> 9051, 9150 -> 9151
+  if (control) {
+    if (control.progress >= 100 && control.circuit) return { state: 'connected', proxy, progress: 100, detail: 'Tor connecté' };
+    if (control.warning) return { state: 'stuck', proxy, progress: control.progress, detail: `Tor bloqué à ${control.progress} % (${control.summary}) : ${control.warning}` };
+    return { state: 'bootstrapping', proxy, progress: control.progress, detail: `Tor se connecte : ${control.progress} % (${control.summary})` };
+  }
+  if (!probeCache || probeCache.proxy !== proxy || Date.now() - probeCache.at > probeEveryMs) {
+    probeCache = { proxy, ok: await socksProbe(proxy), at: Date.now() };
+  }
+  return probeCache.ok
+    ? { state: 'connected', proxy, detail: 'Tor connecté (vérifié par une connexion de test)' }
+    : { state: 'no-circuit', proxy, detail: 'Tor tourne mais n’établit pas de circuit (réseau bloqué ? ponts ?) : les requêtes web sont refusées' };
 }

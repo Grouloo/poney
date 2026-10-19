@@ -104,3 +104,67 @@ test('DuckDuckGo results keep their snippets whatever the markup between title a
     ['Second', 'https://example.com/x', ''],
   ]);
 });
+
+// ---------- connection status ----------
+import { torControlStatus, torStatus } from '../src/agent/tor.js';
+
+/** Fake Tor control port: cookie authentication, then the given bootstrap phase. */
+async function fakeControl(phase, { circuit = true } = {}) {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-ctl-'));
+  const cookie = Buffer.alloc(32, 7);
+  const cookieFile = path.join(dir, 'control_auth_cookie');
+  await fs.writeFile(cookieFile, cookie);
+  const auths = [];
+  const server = net.createServer((c) => {
+    c.on('data', (d) => {
+      const line = d.toString().trim();
+      if (line.startsWith('PROTOCOLINFO')) c.write(`250-PROTOCOLINFO 1\r\n250-AUTH METHODS=COOKIE,SAFECOOKIE COOKIEFILE="${cookieFile}"\r\n250-VERSION Tor="0.4.9"\r\n250 OK\r\n`);
+      else if (line.startsWith('AUTHENTICATE')) { auths.push(line.split(' ')[1]); c.write(line.split(' ')[1] === cookie.toString('hex') ? '250 OK\r\n' : '515 Authentication failed\r\n'); }
+      else if (line.startsWith('GETINFO')) c.write(`250-status/bootstrap-phase=${phase}\r\n250-status/circuit-established=${circuit ? 1 : 0}\r\n250 OK\r\n`);
+    });
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  return { server, port: server.address().port, auths, cookie };
+}
+
+test('control port: cookie authentication and bootstrap progress', async () => {
+  const ctl = await fakeControl('NOTICE BOOTSTRAP PROGRESS=45 TAG=loading_descriptors SUMMARY="Loading relay descriptors"', { circuit: false });
+  const s = await torControlStatus(ctl.port);
+  ctl.server.close();
+  assert.deepEqual(s, { progress: 45, summary: 'Loading relay descriptors', warning: null, circuit: false });
+  assert.deepEqual(ctl.auths, [ctl.cookie.toString('hex')]);
+});
+
+test('status: off, connecting, stuck, connected', async () => {
+  // Tor not running.
+  const closed = await new Promise((r) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)); }); });
+  assert.equal((await torStatus({ torEnabled: true, torProxy: `127.0.0.1:${closed}` })).state, 'off');
+  assert.equal((await torStatus({ torEnabled: false })).state, 'disabled');
+
+  // A SOCKS port with its control port right after it (as Tor does: 9050/9051).
+  const pair = async (phase, circuit) => {
+    for (let tries = 0; tries < 20; tries++) {
+      const ctl = await fakeControl(phase, { circuit });
+      const socks = net.createServer();
+      const ok = await new Promise((r) => { socks.once('error', () => r(false)); socks.listen(ctl.port - 1, '127.0.0.1', () => r(true)); });
+      if (ok) return { proxy: `127.0.0.1:${ctl.port - 1}`, close: () => { ctl.server.close(); socks.close(); } };
+      ctl.server.close();
+    }
+    throw new Error('no free port pair');
+  };
+  let p = await pair('NOTICE BOOTSTRAP PROGRESS=62 TAG=loading_descriptors SUMMARY="Loading relay descriptors"', false);
+  let s = await torStatus({ torEnabled: true, torProxy: p.proxy });
+  p.close();
+  assert.deepEqual([s.state, s.progress], ['bootstrapping', 62]);
+
+  p = await pair('WARN BOOTSTRAP PROGRESS=10 TAG=conn_done SUMMARY="Connected to a relay" WARNING="Connection timed out"', false);
+  s = await torStatus({ torEnabled: true, torProxy: p.proxy });
+  p.close();
+  assert.equal(s.state, 'stuck');
+  assert.match(s.detail, /bloqué à 10 %.*Connection timed out/);
+
+  p = await pair('NOTICE BOOTSTRAP PROGRESS=100 TAG=done SUMMARY="Done"', true);
+  s = await torStatus({ torEnabled: true, torProxy: p.proxy });
+  p.close();
+  assert.equal(s.state, 'connected');
+});
