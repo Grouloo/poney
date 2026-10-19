@@ -62,19 +62,27 @@ function mergeRoles(msgs) {
   return merged;
 }
 
+// What a model writes when it imagines a tool result instead of waiting for it:
+// our result tag, numbered lines like the read tool, or an "Output:" line.
+const IMAGINED_RESULT = /<result\b|^\s*\d+\|\s|^\s*(?:output|result|résultat|sortie|response|réponse)\s*:/im;
+
 /**
- * First complete call to a reading tool (read, list, search, run, web) written
- * inside the reasoning, our tags or a native call. Mentions (`<read>` in
- * backticks, attribute-less tags mid-sentence) are ignored by the parser.
+ * A complete call to a reading tool (read, list, search, run, web) inside the
+ * reasoning, followed by an imitation of its result. A call merely listed in a
+ * plan ("1. <run>ls</run> 2. then…") is not enough: the reasoning goes on.
+ * Read-only tools in backticks count (Gemma often writes them so).
  */
-function firstObservingCall(thinking) {
+function imaginedCall(thinking) {
   if (!/<[a-z_|]/i.test(thinking)) return null;
-  // In its reasoning Gemma often writes the call in backticks: accepted for the
-  // read-only tools, which are harmless to run even if it was only a plan.
   const unquoted = thinking.replace(/`(<(?:read|list|search)\b[^`\n]*?\/?>)`/g, '$1');
   const normalized = normalizeToolCalls(unquoted);
-  const action = parseActions(normalized, { final: false }).actions.find((a) => a.complete && TOOLS[a.tool].observes);
-  return action ? { raw: action.raw, before: normalized.slice(0, action.end) } : null;
+  for (const action of parseActions(normalized, { final: false }).actions) {
+    if (!action.complete || !TOOLS[action.tool].observes) continue;
+    if (IMAGINED_RESULT.test(normalized.slice(action.end, action.end + 2000))) {
+      return { raw: action.raw, before: normalized.slice(0, action.end) };
+    }
+  }
+  return null;
 }
 
 /** The user request carried by a message (unwraps a compaction summary). */
@@ -471,9 +479,9 @@ export class Agent extends EventEmitter {
           thinking += chunk.text;
           this.emit('event', { type: 'delta', id, kind: 'thinking', text: chunk.text });
           // Gemma sometimes "calls" a tool inside its reasoning, then imagines
-          // the result and reasons on it for minutes. Stop at the call and run it
-          // for real (reading tools only: their result is what it needs).
-          const call = /[>}|]/.test(chunk.text) ? firstObservingCall(thinking) : null; // a call can only end on these
+          // the result and reasons on it for minutes. When a call is followed by
+          // an imitation of its result, stop and run it for real.
+          const call = /[>}|:\n]/.test(chunk.text) ? imaginedCall(thinking) : null;
           if (call) {
             thinkingCall = call;
             break;

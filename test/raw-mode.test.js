@@ -121,13 +121,17 @@ test('stopping keeps the partial output in the transcript', async () => {
   assert.equal(ends[0].thinking, 'partial reasoning');
 });
 
-test('a read in backticks inside the reasoning is run; a command in backticks is not', async () => {
+test('reasoning calls: run only when a result is imagined after them, never for a plan', async () => {
   const http = await import('node:http');
   const fs = await import('node:fs/promises');
   const os = await import('node:os');
   const path = await import('node:path');
   const { Agent } = await import('../src/agent/agent.js');
-  for (const [thought, expected] of [['Plan: `<read path="main.py" />` then decide.', ['read']], ['Maybe `<run>rm -rf build</run>` later.', []]]) {
+  for (const [thought, expected] of [
+    ['Plan: `<read path="main.py" />`\n1| x = 9\n2| imagined', ['read']], // followed by an imagined result
+    ['Maybe `<run>rm -rf build</run>` later.\nOutput: removed', []], // run in backticks: never
+    ['Plan:\n1. <run>ls -la</run> to see the files\n2. then read the config and decide.', []], // a plan, nothing imagined
+  ]) {
     const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-raw-'));
     await fs.writeFile(path.join(cwd, 'main.py'), 'x = 1\n');
     let n = 0;

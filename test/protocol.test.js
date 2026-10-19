@@ -131,3 +131,12 @@ test('a real write without path gets the exact format back', async () => {
   assert.match(r.output, /path="\.\.\."/);
   assert.match(r.output, /<write path="dir\/file\.py">/);
 });
+
+// Regression: a multi-line command glued to the end of a sentence was taken for a mention.
+test('a call glued to a sentence and spanning lines is a real call', () => {
+  const t = 'I will check the configuration files.<run>curl -X POST http://localhost:8081/v1/chat/completions \\\n-H "Content-Type: application/json" \\\n-d \'{\n"messages": [{"role": "user", "content": "Hello!"}]\n}\'</run>';
+  const { actions } = parseActions(t);
+  assert.equal(actions.length, 1);
+  assert.equal(actions[0].tool, 'run');
+  assert.match(actions[0].args.command, /^curl -X POST[\s\S]*"Hello!"[\s\S]*\}'$/);
+});

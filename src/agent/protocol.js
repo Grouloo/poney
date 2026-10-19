@@ -293,8 +293,10 @@ function replaceBraceCalls(t) {
  * Taking that for a call is harmful: a <write> without path fails, and having no
  * closing tag it swallows the real call that follows. A tag is a mere mention when:
  * - it touches a backtick (inline code), or
- * - it has no attributes, sits in the middle of a sentence, and is not closed on
- *   the same line (a real mid-sentence call looks like "Checking: <run>ls</run>").
+ * - it has no attributes, sits in the middle of a sentence, and is not closed
+ *   before the next tag of the same tool (or not closed at all). A real call can
+ *   be glued to a sentence and span lines: "…the files.<run>curl -X POST \
+ *   -d '{…}'</run>".
  */
 function isMention(text, m) {
   const start = m.index;
@@ -304,9 +306,10 @@ function isMention(text, m) {
   if (hasAttrs) return false;
   const lineBefore = text.slice(text.lastIndexOf('\n', start - 1) + 1, start);
   if (!/\S/.test(lineBefore) || /```[\w-]*\s*$/.test(lineBefore)) return false; // starts the line
-  const lineEnd = text.indexOf('\n', end);
-  const restOfLine = text.slice(end, lineEnd < 0 ? text.length : lineEnd);
-  return !new RegExp(`</${m[1]}\\s*>`).test(restOfLine);
+  const close = new RegExp(`</${m[1]}\\s*>`).exec(text.slice(end));
+  if (!close) return true;
+  const between = text.slice(end, end + close.index);
+  return new RegExp(`<${m[1]}[\\s/>]`).test(between); // another call of the same tool starts first
 }
 
 /**
