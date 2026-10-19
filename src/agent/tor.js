@@ -119,7 +119,10 @@ export function proxyFetch(url, { method = 'GET', headers = {}, body, signal, pr
     req.on('timeout', () => req.destroy(new Error(`Délai dépassé via Tor (${Math.round(timeoutMs / 1000)} s)`)));
     req.on('error', (e) => {
       signal?.removeEventListener('abort', onAbort);
-      if (/ECONNREFUSED|socks/i.test(e.message) && !/rejected|ttl|host unreachable/i.test(e.message)) {
+      if (/proxy connection timed out|general SOCKS server failure|TTL expired/i.test(e.message)) {
+        // The proxy answers but Tor has no circuit (often: network blocking Tor relays).
+        reject(new TorUnavailableError(`Tor ne parvient pas à établir de circuit (${proxy}) : le réseau bloque peut-être Tor ; des ponts (bridges) peuvent être nécessaires. La requête n'a pas été envoyée en clair.`));
+      } else if (/ECONNREFUSED|socks/i.test(e.message) && !/rejected|host unreachable/i.test(e.message)) {
         reject(new TorUnavailableError(`Connexion au proxy Tor impossible (${proxy}) : ${e.message}`));
       } else reject(e);
     });
