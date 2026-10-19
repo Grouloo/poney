@@ -92,3 +92,18 @@ node src/cli.js --cwd ./mon-projet --model qwen2.5:14b "tâche"   # mode headles
 - `src/main.js`, `src/preload.cjs`, `src/renderer/` — app Electron
 - `src/conversations.js`, `src/files.js` — sauvegarde des conversations, accès fichiers pour le visualiseur
 - `src/cli.js` — runner en ligne de commande
+
+## Tor sur un réseau qui bloque Tor
+
+Si le service `tor` reste bloqué à 10 % (« Connecting to a relay »), le réseau bloque les relais Tor : il faut des
+ponts. Avec Tor Browser installé, on peut réutiliser ses transports et ses ponts intégrés :
+
+```bash
+brew install tor
+mkdir -p /opt/homebrew/etc/tor/pt
+ln -sf "/Applications/Tor Browser.app/Contents/MacOS/Tor/PluggableTransports/lyrebird" /opt/homebrew/etc/tor/pt/lyrebird
+```
+
+Puis, dans `/opt/homebrew/etc/tor/torrc` : `UseBridges 1`, les lignes `ClientTransportPlugin … exec
+/opt/homebrew/etc/tor/pt/lyrebird` et les lignes `Bridge …` (snowflake, meek, obfs4) de Tor Browser
+(`chrome/toolkit/content/global/pt_config.json` dans `Contents/Resources/omni.ja`), puis `brew services restart tor`.

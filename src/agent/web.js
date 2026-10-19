@@ -27,6 +27,30 @@ export function decodeEntities(s) {
 
 const stripTags = (s) => decodeEntities(s.replace(/<[^>]+>/g, '')).replace(/\s+/g, ' ').trim();
 
+/** Results of a DuckDuckGo HTML page (clear-net or onion). */
+export function parseDuckDuckGo(html) {
+  // Titles and snippets are collected separately, then each snippet is attached
+  // to the title before it (the markup between them varies across layouts).
+  const titles = [...html.matchAll(/<a\b[^>]*class="result__a"[^>]*>([\s\S]*?)<\/a>/g)].map((m) => ({
+    at: m.index,
+    href: (m[0].match(/href="([^"]+)"/) || [])[1] || '',
+    title: m[1],
+  }));
+  const snippets = [...html.matchAll(/class="result__snippet"[^>]*>([\s\S]*?)<\/(?:a|td|div)>/g)].map((m) => ({ at: m.index, text: m[1] }));
+  const results = [];
+  titles.forEach((t, i) => {
+    const next = titles[i + 1]?.at ?? Infinity;
+    const snippet = snippets.find((sn) => sn.at > t.at && sn.at < next);
+    let url = decodeEntities(t.href);
+    const redirect = url.match(/[?&]uddg=([^&]+)/);
+    if (redirect) url = decodeURIComponent(redirect[1]);
+    if (url.startsWith('//')) url = `https:${url}`;
+    if (!url || /duckduckgo\.com\/y\.js/.test(url)) return; // ads
+    results.push({ title: stripTags(t.title), url, snippet: stripTags(snippet?.text || '') });
+  });
+  return results;
+}
+
 async function searchDuckDuckGo(query, signal, proxy) {
   // Through Tor: the onion service first (the clear-net endpoint often blocks Tor exits).
   const endpoints = proxy ? [`${DDG_ONION}/html/`, 'https://html.duckduckgo.com/html/'] : ['https://html.duckduckgo.com/html/'];
@@ -49,17 +73,7 @@ async function searchDuckDuckGo(query, signal, proxy) {
     }
   }
   if (html === null) throw lastError;
-  const results = [];
-  const blockRe = /<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?(?:class="result__snippet"[^>]*>([\s\S]*?)<\/a>|<\/div>\s*<\/div>)/g;
-  let m;
-  while ((m = blockRe.exec(html))) {
-    let url = decodeEntities(m[1]);
-    const redirect = url.match(/[?&]uddg=([^&]+)/);
-    if (redirect) url = decodeURIComponent(redirect[1]);
-    if (url.startsWith('//')) url = `https:${url}`;
-    if (/duckduckgo\.com\/y\.js/.test(url)) continue; // ads
-    results.push({ title: stripTags(m[2]), url, snippet: stripTags(m[3] || '') });
-  }
+  const results = parseDuckDuckGo(html);
   if (!results.length && /anomaly|captcha/i.test(html)) {
     throw new Error('DuckDuckGo refused the request (bot check). Configure a SearXNG URL in settings.');
   }

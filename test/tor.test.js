@@ -92,3 +92,15 @@ test('terminal commands get the proxy variables only when asked', async () => {
   assert.equal(withTor.meta.tor, true);
   assert.match(without.output, /^proxy=$/m);
 });
+
+test('DuckDuckGo results keep their snippets whatever the markup between title and snippet', async () => {
+  const { parseDuckDuckGo } = await import('../src/agent/web.js');
+  const html = `<div class="result"><h2><a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fnodejs.org%2Fen">Node.js</a></h2></div></div>
+    <div class="result__extras"></div></div>
+    <a class="result__snippet" href="https://nodejs.org/en"><b>Node.js</b> is a JavaScript runtime</a>
+    <div class="result"><h2><a class="result__a" href="https://example.com/x">Second</a></h2></div></div>`;
+  assert.deepEqual(parseDuckDuckGo(html).map((x) => [x.title, x.url, x.snippet]), [
+    ['Node.js', 'https://nodejs.org/en', 'Node.js is a JavaScript runtime'],
+    ['Second', 'https://example.com/x', ''],
+  ]);
+});
