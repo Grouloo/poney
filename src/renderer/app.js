@@ -43,9 +43,12 @@ function scrollDown(force) {
   if (force || nearBottom) transcript.scrollTop = transcript.scrollHeight;
 }
 
+// Where new elements go: the transcript, or a sub-agent's card while its events are drawn.
+let target = null;
+
 function add(el) {
   $('empty')?.remove();
-  transcript.appendChild(el);
+  (target || transcript).appendChild(el);
   scrollDown(true);
   return el;
 }
@@ -89,6 +92,7 @@ function renderSettings() {
     else el.value = settings.config[el.name];
   }
   $('torEnabled').checked = Boolean(settings.config.torEnabled);
+  $('subagentsEnabled').checked = settings.config.subagentsEnabled !== false;
   if (Boolean(torTimer) !== Boolean(settings.config.torEnabled)) scheduleTorStatus();
   const recent = $('recent');
   if (recent) {
@@ -148,7 +152,7 @@ $('autoApprove').onchange = async (e) => {
   settings = await window.api.setConfig({ approval: e.target.checked ? 'auto' : 'ask' });
   renderSettings();
 };
-for (const flag of ['webEnabled', 'shellEnabled', 'torEnabled']) {
+for (const flag of ['webEnabled', 'shellEnabled', 'torEnabled', 'subagentsEnabled']) {
   $(flag).onchange = async (e) => {
     settings = await window.api.setConfig({ [flag]: e.target.checked });
     renderSettings();
@@ -419,7 +423,7 @@ function summarize(tool, args) {
   }
 }
 
-const TOOL_LABEL = { list: 'Lister', read: 'Lire', search: 'Chercher', write: 'Écrire', edit: 'Modifier', run: 'Exécuter', web_search: 'Web', fetch: 'Page web' };
+const TOOL_LABEL = { list: 'Lister', read: 'Lire', search: 'Chercher', write: 'Écrire', edit: 'Modifier', run: 'Exécuter', web_search: 'Web', fetch: 'Page web', agent: 'Sous-agent' };
 
 function renderDiff(diff) {
   return `<pre class="diff">${diff.split('\n').map((l) => {
@@ -441,6 +445,24 @@ function streamingDisplay(raw) {
 }
 
 function onEvent(ev) {
+  // A sub-agent's events are drawn inside its card, with the same rendering.
+  if (ev.agentId) {
+    const card = cards.get(ev.agentId);
+    const log = card?.querySelector('.sub-log');
+    if (!log || ev.type === 'final') return;
+    if (ev.type === 'delta') {
+      card.dataset.tokens = Number(card.dataset.tokens || 0) + 1;
+      card.querySelector('.sub-tokens').textContent = `${card.dataset.tokens} tokens`;
+    }
+    const saved = target;
+    target = log;
+    try {
+      onEvent({ ...ev, agentId: undefined });
+    } finally {
+      target = saved;
+    }
+    return;
+  }
   switch (ev.type) {
     case 'assistant_start': {
       const el = div('msg assistant');
@@ -506,6 +528,20 @@ function onEvent(ev) {
       break;
     }
     case 'action_start': {
+      if (ev.tool === 'agent') {
+        // Sub-agent card: its task, a live log of its work, then its report.
+        const card = div('card subagent running open');
+        card.innerHTML = `<div class="card-head"><span class="status"><span class="spin">◌</span></span><span class="tool">Sous-agent</span><span class="summary"></span><span class="tag sub-tokens"></span></div>
+          <div class="card-body"><details class="sub-task"><summary>Tâche</summary><pre></pre></details>
+          <details class="sub-journal" open><summary>Journal</summary><div class="sub-log"></div></details><div class="sub-report"></div></div>`;
+        card.querySelector('.summary').textContent = ev.args.title || 'sous-agent';
+        card.querySelector('.sub-task pre').textContent = ev.args.task || '';
+        card.querySelector('.card-head').onclick = () => card.classList.toggle('open');
+        card.dataset.tool = 'agent';
+        cards.set(ev.id, card);
+        add(card);
+        break;
+      }
       const card = div('card running');
       card.innerHTML = `<div class="card-head"><span class="status"><span class="spin">◌</span></span><span class="tool">${esc(TOOL_LABEL[ev.tool] || ev.tool)}</span><span class="summary"></span>${ev.auto ? '<span class="tag">vérification auto</span>' : ''}</div><div class="card-body"><pre class="out"></pre></div>`;
       const summaryEl = card.querySelector('.summary');
@@ -540,6 +576,15 @@ function onEvent(ev) {
       card.classList.add(ev.ok ? 'ok' : 'fail');
       card.querySelector('.status').textContent = ev.ok ? '✓' : '✗';
       card.querySelector('.approval')?.remove();
+      if (card.dataset.tool === 'agent') {
+        // Keep the log (folded), show the report and the figures.
+        card.querySelector('.sub-journal').open = false;
+        card.querySelector('.sub-report').innerHTML = markdown(ev.output || '');
+        const m = ev.meta || {};
+        const parts = [m.ms ? fmtDuration(m.ms) : '', m.steps ? `${m.steps} étapes` : ''].filter(Boolean);
+        if (parts.length) card.querySelector('.sub-tokens').textContent = parts.join(' · ');
+        break;
+      }
       const body = card.querySelector('.card-body');
       if (ev.diff) {
         body.innerHTML = renderDiff(ev.diff) + (ev.ok ? '' : `<pre class="out">${esc(ev.output)}</pre>`);
@@ -612,7 +657,8 @@ function onApproval(req) {
   if (!card) return;
   card.classList.add('open');
   const bar = div('approval');
-  bar.innerHTML = '<span>Exécuter cette commande ?</span><button class="no">Refuser</button><button class="always">Toujours autoriser</button><button class="yes">Exécuter</button>';
+  bar.innerHTML = '<span></span><button class="no">Refuser</button><button class="always">Toujours autoriser</button><button class="yes">Exécuter</button>';
+  bar.querySelector('span').textContent = req.agentTitle ? `Sous-agent « ${req.agentTitle} » : exécuter cette commande ?` : 'Exécuter cette commande ?';
   bar.querySelector('.yes').onclick = () => { bar.remove(); window.api.approve(req.id, true, false); };
   bar.querySelector('.no').onclick = () => { bar.remove(); window.api.approve(req.id, false, false); };
   bar.querySelector('.always').onclick = async () => {

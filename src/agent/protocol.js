@@ -22,6 +22,8 @@ export const TOOLS = {
   run: { args: ['timeout'], bodyArg: 'command', needsBody: true, observes: true },
   web_search: { args: ['query'], bodyArg: 'query', needsBody: false, observes: true },
   fetch: { args: ['url'], bodyArg: 'url', needsBody: false, observes: true },
+  // Delegates a task to a sub-agent. Consecutive <agent> tags run at the same time.
+  agent: { args: ['title'], bodyArg: 'task', needsBody: true, observes: true },
 };
 
 // Common aliases small models reach for. Mapped to canonical names.
@@ -34,6 +36,7 @@ const ALIASES = {
   bash: 'run', shell: 'run', exec: 'run', execute: 'run', command: 'run', terminal: 'run',
   search_web: 'web_search', websearch: 'web_search', google: 'web_search',
   fetch_url: 'fetch', browse: 'fetch', open_url: 'fetch',
+  subagent: 'agent', sub_agent: 'agent', delegate: 'agent', spawn_agent: 'agent', task: 'agent',
 };
 
 const ALL_NAMES = [...Object.keys(TOOLS), ...Object.keys(ALIASES)];
@@ -65,19 +68,41 @@ export function toolSchemas(config = {}) {
     fn('run', 'Run a shell command (scripts, tests, installs)', { command: 'shell command' }, ['command']),
     fn('web_search', 'Search the internet', { query: 'search query' }, ['query']),
     fn('fetch', 'Read a web page', { url: 'full URL' }, ['url']),
+    {
+      type: 'function',
+      function: {
+        name: 'agent',
+        description: 'Delegate independent tasks to sub-agents. Put ALL the tasks to run at the same time in one call (one item each).',
+        parameters: {
+          type: 'object',
+          properties: {
+            tasks: {
+              type: 'array',
+              description: 'one item per sub-agent; they all run at the same time',
+              items: {
+                type: 'object',
+                properties: { title: { type: 'string', description: 'short name' }, task: { type: 'string', description: 'complete task with all the context it needs' } },
+                required: ['title', 'task'],
+              },
+            },
+          },
+          required: ['tasks'],
+        },
+      },
+    },
   ];
   return all.filter((t) => isToolEnabled(t.function.name, config));
 }
 
 /** Tools that can be switched off in the settings, and the config flag for each. */
-export const TOOL_FLAGS = { run: 'shellEnabled', web_search: 'webEnabled', fetch: 'webEnabled' };
+export const TOOL_FLAGS = { run: 'shellEnabled', web_search: 'webEnabled', fetch: 'webEnabled', agent: 'subagentsEnabled' };
 
 export function isToolEnabled(tool, config) {
   const flag = TOOL_FLAGS[tool];
   return !flag || config[flag] !== false;
 }
 
-export function buildSystemPrompt({ cwd, platform, projectNotes, testCommand, shell = true, web = true }) {
+export function buildSystemPrompt({ cwd, platform, projectNotes, testCommand, shell = true, web = true, subagents = false, subagentRole = false }) {
   const notes = projectNotes ? `\nPROJECT NOTES (from the repo):\n${projectNotes}\n` : '';
   const testLine = testCommand && shell
     ? `\nThe project test command is: ${testCommand}\nIt is run automatically when you finish; make it pass.`
@@ -95,6 +120,9 @@ export function buildSystemPrompt({ cwd, platform, projectNotes, testCommand, sh
     tools.push('<web_search>query</web_search>          search the internet');
     tools.push('<fetch>https://url</fetch>              read a web page');
   }
+  if (subagents) {
+    tools.push('<agent title="short name">\ncomplete task, with all the context it needs\n</agent>                                delegate an independent task to a sub-agent');
+  }
 
   const rules = ['Read the files you need before changing them. Never guess file contents.'];
   if (shell) {
@@ -106,7 +134,12 @@ export function buildSystemPrompt({ cwd, platform, projectNotes, testCommand, sh
   rules.push('Use <write> for new files, <edit> to change existing files. Never <write> over a file you have not read.');
   if (shell) rules.push('Commands time out; do not start servers that never stop.');
   if (!web) rules.push('You have no internet access.');
-  rules.push(`When the task is finished${shell ? ' and tested' : ''}, answer WITHOUT any tool tag: a short summary for the user, in the user's language.`);
+  if (subagents) {
+    rules.push('Sub-agents: put ALL the independent tasks in ONE message (one <agent> tag each, one after the other): they run at the same time, then you get all the reports. Do not launch them one by one. Use them only for tasks that touch different files. A sub-agent cannot see this conversation: write in the task everything it needs (files, goal, constraints).');
+  }
+  rules.push(subagentRole
+    ? `When your task is finished${shell ? ' and tested' : ''}, answer WITHOUT any tool tag: a short report for the main agent (what you did, files changed, test results, problems left).`
+    : `When the task is finished${shell ? ' and tested' : ''}, answer WITHOUT any tool tag: a short summary for the user, in the user's language.`);
 
   const example = shell
     ? `<write path="hello.py">
@@ -121,7 +154,10 @@ print("hi")
 User: <result tool="write" path="hello.py">Created hello.py (1 lines).</result>
 Assistant: Created hello.py, it prints "hi". Run it with: python3 hello.py`;
 
-  return `You are a coding agent. You work inside the folder ${cwd} (${platform}).
+  const who = subagentRole
+    ? 'You are a sub-agent: a main agent gave you one task. Do only that task.'
+    : 'You are a coding agent.';
+  return `${who} You work inside the folder ${cwd} (${platform}).
 You act by writing tool tags. The results come back in the next message.
 
 TOOLS
@@ -168,12 +204,88 @@ const tryJson = (s) => {
 };
 
 /**
+ * Gemma's native argument syntax, nested: {tasks:[{title:<|"|>a<|"|>,task:<|"|>…<|"|>}]}.
+ * Keys are bare words, strings are <|"|>…<|"|> (or "…"). Returns null if it is not that.
+ */
+function parseGemmaValue(src) {
+  let i = 0;
+  const ws = () => { while (i < src.length && /\s/.test(src[i])) i++; };
+  const fail = () => { throw new Error('not gemma args'); };
+  const value = () => {
+    ws();
+    if (src.startsWith('<|"|>', i)) {
+      const end = src.indexOf('<|"|>', i + 5);
+      if (end < 0) fail();
+      const v = src.slice(i + 5, end);
+      i = end + 5;
+      return v;
+    }
+    const c = src[i];
+    if (c === '"') {
+      let j = i + 1;
+      while (j < src.length && src[j] !== '"') j += src[j] === '\\' ? 2 : 1;
+      const v = JSON.parse(src.slice(i, j + 1));
+      i = j + 1;
+      return v;
+    }
+    if (c === '{') {
+      i++;
+      const obj = {};
+      ws();
+      if (src[i] === '}') { i++; return obj; }
+      while (i < src.length) {
+        ws();
+        const key = /^[A-Za-z_][\w-]*/.exec(src.slice(i));
+        if (!key) fail();
+        i += key[0].length;
+        ws();
+        if (src[i] !== ':') fail();
+        i++;
+        obj[key[0]] = value();
+        ws();
+        if (src[i] === ',') { i++; continue; }
+        if (src[i] === '}') { i++; return obj; }
+        fail();
+      }
+      fail();
+    }
+    if (c === '[') {
+      i++;
+      const arr = [];
+      ws();
+      if (src[i] === ']') { i++; return arr; }
+      while (i < src.length) {
+        arr.push(value());
+        ws();
+        if (src[i] === ',') { i++; continue; }
+        if (src[i] === ']') { i++; return arr; }
+        fail();
+      }
+      fail();
+    }
+    const lit = /^(-?\d+(?:\.\d+)?|true|false|null)/.exec(src.slice(i));
+    if (!lit) fail();
+    i += lit[0].length;
+    return JSON.parse(lit[0]);
+  };
+  try {
+    const v = value();
+    ws();
+    return i === src.length ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Gemma's native arguments are not JSON: {command:"ls -la"} or with its own
  * string delimiter, {command:<|"|>ls -la<|"|>}. Normalized, then parsed.
  */
 function parseLooseArgs(s) {
   const strict = tryJson(s);
   if (strict && typeof strict === 'object') return strict;
+  const loose = parseGemmaValue(s.trim());
+  if (loose && typeof loose === 'object') return loose;
   if (s.includes('<|"|>')) {
     // Values between <|"|> delimiters may contain anything, quotes included.
     const out = {};
@@ -207,6 +319,12 @@ function jsonToTag(name, a = {}) {
     case 'run': return `<run>${a.command ?? a.cmd ?? ''}</run>`;
     case 'web_search': return `<web_search>${a.query ?? a.q ?? ''}</web_search>`;
     case 'fetch': return `<fetch>${a.url ?? ''}</fetch>`;
+    case 'agent': {
+      // Several sub-agents in one call (models that make one call per turn): a list of tasks.
+      const list = Array.isArray(a.tasks) ? a.tasks : [a];
+      return list.map((t) => (typeof t === 'string' ? { task: t } : t))
+        .map((t) => `<agent${quoteAttr('title', t.title ?? t.name)}>\n${t.task ?? t.prompt ?? t.description ?? ''}\n</agent>`).join('\n');
+    }
     default: return `<${tool}${['path', 'start', 'end', 'pattern', 'depth'].map((k) => quoteAttr(k, a[k])).join('')} />`;
   }
 }

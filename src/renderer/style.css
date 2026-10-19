@@ -312,3 +312,14 @@ fieldset label.check input { width: auto; }
 .tor-state.stuck::before, .tor-state.off::before, .tor-state.no-circuit::before { background: var(--err); }
 .tor-status-line { display: flex; align-items: center; gap: 2px; margin: 10px 0 0; font-size: 12.5px; }
 .tor-status-line .tor-state::before { margin-left: 0; }
+
+/* ---------- sub-agents ---------- */
+.card.subagent { border-left: 3px solid var(--accent-2); }
+.card.subagent .card-body { padding: 6px 12px 10px; }
+.card.subagent details summary { cursor: pointer; color: var(--muted); font-size: 12px; margin: 4px 0; user-select: none; }
+.card.subagent .sub-task pre { margin: 4px 0; max-height: 200px; white-space: pre-wrap; }
+.card.subagent .sub-log { border-left: 1px dashed var(--border); padding-left: 10px; margin: 4px 0 8px; }
+.card.subagent .sub-log > * { max-width: none; margin-left: 0; margin-right: 0; padding-left: 0; padding-right: 0; }
+.card.subagent .sub-log .card { width: 100%; }
+.card.subagent .sub-report { font-size: 13.5px; }
+.card.subagent .sub-report:not(:empty) { border-top: 1px solid var(--border); padding-top: 8px; }

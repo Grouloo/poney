@@ -58,11 +58,22 @@ const summarize = (tool, args) => {
   if (tool === 'run') return args.command;
   if (tool === 'web_search') return args.query;
   if (tool === 'fetch') return args.url;
+  if (tool === 'agent') return args.title;
   if (tool === 'search') return `${args.pattern} in ${args.path || '.'}`;
   return args.path || '.';
 };
 
+const subTitles = new Map(); // sub-agent card id -> title
 agent.on('event', (ev) => {
+  if (ev.type === 'action_start' && ev.tool === 'agent') subTitles.set(ev.id, ev.args.title);
+  if (ev.agentId) {
+    // Sub-agents run at the same time: one prefixed line per action, no streamed text.
+    const who = `${c.dim}[${subTitles.get(ev.agentId) || 'sous-agent'}]${c.reset} `;
+    if (ev.type === 'action_start') console.log(`${who}${c.cyan}▶ ${ev.tool}: ${summarize(ev.tool, ev.args)}${c.reset}`);
+    else if (ev.type === 'action_end') console.log(`${who}${ev.ok ? c.green + '✓' : c.red + '✗'}${c.reset} ${c.dim}${ev.output.split('\n')[0].slice(0, 120)}${c.reset}`);
+    else if (ev.type === 'notice' || ev.type === 'error') console.log(`${who}${c.yellow}• ${ev.text || ev.message}${c.reset}`);
+    return;
+  }
   switch (ev.type) {
     case 'delta':
       if (opts.verbose || ev.kind === 'text') process.stdout.write(ev.kind === 'thinking' ? c.dim + ev.text + c.reset : ev.text);

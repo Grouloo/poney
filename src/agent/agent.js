@@ -28,6 +28,8 @@ export const DEFAULT_CONFIG = {
   torEnabled: false, // web requests go through Tor (refused if Tor is unreachable)
   torProxy: '', // empty: auto (127.0.0.1:9050 tor daemon, then 9150 Tor Browser)
   torShell: false, // also give terminal commands the proxy variables
+  subagentsEnabled: true, // the agent may delegate tasks to sub-agents (<agent>)
+  maxParallelAgents: 2, // sub-agents running at the same time (one GPU: speed is shared)
   testCommand: '',
   searxngUrl: '',
 };
@@ -99,11 +101,16 @@ const NARRATION_LIMIT = 400;
 let nextId = Date.now(); // unique across restarts, since saved conversations are replayed by id
 
 export class Agent extends EventEmitter {
-  constructor({ cwd, config, approve }) {
+  constructor({ cwd, config, approve, shared, role = 'main' }) {
     super();
     this.cwd = cwd;
-    this.config = { ...DEFAULT_CONFIG, ...config };
+    this.role = role; // 'main' or 'sub' (a sub-agent cannot start sub-agents)
+    this.config = { ...DEFAULT_CONFIG, ...config, ...(role === 'sub' ? { subagentsEnabled: false } : {}) };
     this.approve = approve || (async () => true);
+    // State shared by an agent and its sub-agents: versions of the files they
+    // write (to refuse writing over another agent's changes) and per-file locks.
+    this.shared = shared || { versions: new Map(), locks: new Map() };
+    this.readVersions = new Map(); // file -> version this agent last read or wrote
     this.messages = [];
     this.untested = false; // files changed since the last successful command
     this.running = false;
@@ -167,6 +174,8 @@ export class Agent extends EventEmitter {
       testCommand: this.config.testCommand,
       shell: this.config.shellEnabled !== false,
       web: this.config.webEnabled !== false,
+      subagents: this.config.subagentsEnabled !== false,
+      subagentRole: this.role === 'sub',
     });
   }
 
@@ -394,6 +403,71 @@ export class Agent extends EventEmitter {
     }
   }
 
+  // ----- sub-agents -----
+
+  /**
+   * Runs a group of <agent> actions, at most maxParallelAgents at a time, and
+   * returns their reports as results (in the order of the tags).
+   */
+  async runSubAgents(group, signal) {
+    const limit = Math.max(1, Math.min(Number(this.config.maxParallelAgents) || 2, 8));
+    const results = new Array(group.length);
+    let next = 0;
+    const share = Math.floor(this.maxResultChars / group.length);
+    const worker = async () => {
+      while (next < group.length && !signal.aborted) {
+        const k = next++;
+        results[k] = await this.runSubAgent(group[k], signal, share);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(limit, group.length) }, worker));
+    if (signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+    return results;
+  }
+
+  async runSubAgent(action, signal, maxReportChars) {
+    const id = nextId++;
+    const title = String(action.args.title || 'sous-agent').slice(0, 60);
+    const task = String(action.args.task || '').trim();
+    this.emit('event', { type: 'action_start', id, tool: 'agent', args: { title, task } });
+    if (!task) {
+      this.emit('event', { type: 'action_end', id, ok: false, output: 'Tâche vide.', meta: { title } });
+      return formatResult('agent', { title }, 'Empty task: write the task between <agent> and </agent>.');
+    }
+    const child = new Agent({
+      cwd: this.cwd,
+      config: this.config,
+      role: 'sub',
+      shared: this.shared,
+      approve: (req) => this.approve({ ...req, agentTitle: title }),
+    });
+    child.serverCtx = this.serverCtx;
+    child.serverCtxKey = this.serverCtxKey;
+    child.serverCtxAt = this.serverCtxAt;
+    let report = null;
+    let error = null;
+    let stats = null;
+    let endReason = null;
+    child.on('event', (ev) => {
+      if (ev.type === 'final') report = ev.text;
+      if (ev.type === 'error') error = ev.message;
+      if (ev.type === 'turn_end') { stats = ev.stats; endReason = ev.reason; return; }
+      if (ev.type === 'turn_start' || ev.type === 'context') return;
+      this.emit('event', { ...ev, agentId: id }); // shown inside the sub-agent's card
+    });
+    const onAbort = () => child.stop();
+    signal.addEventListener('abort', onAbort);
+    try {
+      await child.send(task);
+    } finally {
+      signal.removeEventListener('abort', onAbort);
+    }
+    const ok = Boolean(report) && endReason === 'done';
+    const text = report || (error ? `Error: ${error}` : endReason === 'max_steps' ? 'Stopped: step limit reached before the end.' : '(no report)');
+    this.emit('event', { type: 'action_end', id, ok, output: text, meta: { title, steps: stats?.steps, tokens: stats?.tokens, ms: stats?.totalMs } });
+    return formatResult('agent', { title, status: ok ? 'done' : endReason || 'failed' }, truncateMiddle(text, Math.max(1000, maxReportChars)));
+  }
+
   // ----- generation -----
 
   /** Assistant message for the history: the answer, preceded by its reasoning (capped). */
@@ -505,7 +579,8 @@ export class Agent extends EventEmitter {
         const fake = visible.search(/<result\b|^\s*(User|Human):/m);
         if (fake >= 0) { cutAt = fake; break; }
         const { actions } = parseActions(visible, { final: false });
-        const obs = actions.find((a) => a.complete && TOOLS[a.tool].observes);
+        // (<agent> excepted: several in a row form one group, run together.)
+        const obs = actions.find((a) => a.complete && TOOLS[a.tool].observes && a.tool !== 'agent');
         if (obs) { cutAt = obs.end; break; }
         // After a <write>/<edit>, small models often go on narrating ("the tests
         // pass...") instead of waiting for the result: minutes of invented text
@@ -734,8 +809,11 @@ export class Agent extends EventEmitter {
         // the model must see (it cannot know the result yet).
         const toRun = [];
         for (const a of actions) {
+          // Consecutive <agent> tags form a group run at the same time; other
+          // actions run in order until the first one whose result is needed.
+          if (toRun.length && (toRun[0].tool === 'agent') !== (a.tool === 'agent')) break;
           toRun.push(a);
-          if (TOOLS[a.tool].observes) break;
+          if (TOOLS[a.tool].observes && a.tool !== 'agent') break;
         }
         const last = toRun[toRun.length - 1];
         this.messages.push({ role: 'assistant', content: this.assistantContent(gen, gen.text.slice(0, last.end).trim()) });
@@ -744,6 +822,20 @@ export class Agent extends EventEmitter {
         let stopBatch = false;
         // Files the model can see the content of (the current message has no results yet).
         const seenFiles = filesInContext(this.messages);
+        if (toRun[0].tool === 'agent') {
+          if (!isToolEnabled('agent', config)) {
+            for (const action of toRun) {
+              const actId = nextId++;
+              this.emit('event', { type: 'action_start', id: actId, tool: 'agent', args: action.args });
+              this.emit('event', { type: 'action_end', id: actId, ok: false, output: 'Sous-agents désactivés.', meta: {} });
+              results.push(formatResult('agent', { title: action.args.title }, 'Sub-agents are disabled. Do the task yourself.'));
+            }
+          } else {
+            results.push(...await this.runSubAgents(toRun, signal));
+            changedThisTurn = true; // sub-agents may have changed files
+          }
+          toRun.length = 0;
+        }
         for (const action of toRun) {
           if (stopBatch) break;
           const actId = nextId++;
@@ -771,6 +863,8 @@ export class Agent extends EventEmitter {
             signal,
             maxResultChars: this.maxResultChars,
             seenFiles,
+            shared: this.shared,
+            readVersions: this.readVersions,
             onOutput: (t) => this.emit('event', { type: 'action_output', id: actId, text: t }),
           });
           this.emit('event', { type: 'action_end', id: actId, ok: r.ok, output: r.output, diff: r.diff, meta: r.meta });

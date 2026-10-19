@@ -87,6 +87,12 @@ node src/cli.js --cwd ./mon-projet --model qwen2.5:14b "tâche"   # mode headles
   État en direct à côté de l'interrupteur (vert connecté, orange « connexion 45 % », rouge arrêté ou bloqué) : via le
   port de contrôle de Tor (9051 / 9151, authentification par cookie) s'il est activé, sinon par une connexion de test
   au plus toutes les 30 s.
+- **Sous-agents** : l'agent peut déléguer des tâches indépendantes (`<agent title="…">tâche</agent>`, plusieurs à la
+  suite, ou une liste `tasks` en un seul appel natif) ; elles tournent en même temps (2 par défaut, réglable), chacune
+  avec son historique, puis l'agent reçoit tous les rapports. Pas de sous-sous-agents. Écrire sur un fichier modifié
+  par un autre agent depuis sa lecture est refusé (relecture obligatoire), et les écritures d'un même fichier sont
+  sérialisées. Carte par sous-agent dans le fil (tâche, journal en direct, rapport) ; interrupteur « Sous-agents ».
+  Un seul GPU : la vitesse est partagée ; mesuré avec gemma-4 sur deux modules + tests : 6 min 56 au lieu de 10 min 41.
 - **Visualiseur** avec coloration syntaxique et aperçu d'images ; les chemins dans les actions de l'agent sont cliquables.
 
 ## Structure

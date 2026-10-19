@@ -64,7 +64,7 @@ async function listTool(cwd, args) {
 }
 
 // ---------- read ----------
-async function readTool(cwd, args) {
+async function readTool(cwd, args, ctx = {}) {
   const { abs, rel } = resolveInside(cwd, args.path);
   let content;
   try { content = await fs.readFile(abs, 'utf8'); } catch (e) {
@@ -81,6 +81,7 @@ async function readTool(cwd, args) {
   const body = all.slice(start - 1, end).map((l, i) => `${String(start + i).padStart(width)}| ${l}`).join('\n');
   let note = '';
   if (end < all.length) note = `\n[showing lines ${start}-${end} of ${all.length}. Use <read path="${rel}" start="${end + 1}" /> for more]`;
+  ctx.readVersions?.set(rel, ctx.shared?.versions.get(rel) ?? 0); // the version this agent has seen
   return { output: (body || '(empty file)') + note, meta: { path: rel, lines: `${start}-${end}` } };
 }
 
@@ -375,7 +376,48 @@ async function fetchTool(cwd, args, ctx) {
   return { output: truncateMiddle(text, ctx.maxResultChars), meta: { url, ...(proxy ? { tor: true } : {}) } };
 }
 
-const IMPL = { list: listTool, read: readTool, search: searchTool, write: writeTool, edit: editTool, run: runTool, web_search: webSearchTool, fetch: fetchTool };
+// ---------- several agents on the same files ----------
+// An agent and its sub-agents share a version number per file, bumped by each
+// write. Writing over a file another agent changed since this one read it is
+// refused (it must read it again); writes to one file run one at a time.
+
+function withFileLock(ctx, rel, fn) {
+  const locks = ctx.shared?.locks;
+  if (!locks) return fn();
+  const previous = locks.get(rel) || Promise.resolve();
+  const run = previous.then(fn, fn);
+  locks.set(rel, run.catch(() => {}));
+  return run;
+}
+
+function checkNotChangedByOther(ctx, rel) {
+  if (!ctx.shared || !ctx.readVersions) return;
+  const seen = ctx.readVersions.get(rel);
+  const current = ctx.shared.versions.get(rel) ?? 0;
+  if (seen !== undefined && seen !== current) {
+    throw new ToolError(`${rel} was changed by another agent since you read it. Read it again with <read path="${rel}" /> before changing it.`);
+  }
+}
+
+function recordWrite(ctx, rel) {
+  if (!ctx.shared) return;
+  const v = (ctx.shared.versions.get(rel) ?? 0) + 1;
+  ctx.shared.versions.set(rel, v);
+  ctx.readVersions?.set(rel, v); // its own change counts as seen
+}
+
+const guarded = (impl) => (cwd, args, ctx = {}) => {
+  let rel;
+  try { ({ rel } = resolveInside(cwd, args.path)); } catch { return impl(cwd, args, ctx); }
+  return withFileLock(ctx, rel, async () => {
+    checkNotChangedByOther(ctx, rel);
+    const r = await impl(cwd, args, ctx);
+    if (r.changed) recordWrite(ctx, rel);
+    return r;
+  });
+};
+
+const IMPL = { list: listTool, read: readTool, search: searchTool, write: guarded(writeTool), edit: guarded(editTool), run: runTool, web_search: webSearchTool, fetch: fetchTool };
 
 /** Executes an action. Never throws: errors become a failed result the model can read. */
 export async function executeAction(action, ctx) {

@@ -366,7 +366,7 @@ test('the summary request continues the cached conversation (same prefix, no re-
     : { content: fake.requests.filter((r) => !isSummaryReq(r)).length === 1 ? '<read path="big.txt" />' : 'Done.', promptTokens: 0 }));
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-ctx-'));
   await fs.writeFile(path.join(cwd, 'big.txt'), `${'data '.repeat(1000)}\n`);
-  const agent = new Agent({ cwd, config: { baseUrl: fake.url, model: 'fake', numCtx: 8192, maxTokens: 4096 } });
+  const agent = new Agent({ cwd, config: { baseUrl: fake.url, model: 'fake', numCtx: 8192, maxTokens: 4096, subagentsEnabled: false } });
   bigHistory(agent, 10, 270); // just under the budget; reading big.txt pushes it over
   const events = [];
   agent.on('event', (e) => events.push(e));
