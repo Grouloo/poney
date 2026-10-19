@@ -43,7 +43,10 @@ node src/cli.js --cwd ./mon-projet --model qwen2.5:14b "tâche"   # mode headles
 - **Mode brut pour Gemma dans LM Studio** : le prompt est mis en forme avec le gabarit du modèle (SDK) et généré via
   `/v1/completions`, qui renvoie chaque token. L'endpoint chat de LM Studio retenait tout ce qui suivait un début
   d'appel d'outil (parfois ouvert dans la réflexion) : la génération continuait sans que rien ne sorte. La réflexion
-  (`<|channel>thought…<channel|>`) est séparée par l'app ; un appel natif fait dans la réflexion est exécuté.
+  (`<|channel>thought…<channel|>`) est séparée par l'app.
+- **Appel en fin de réflexion puis silence** : si le modèle termine sa réflexion (ou sa réponse) par un appel complet
+  et que plus rien de visible ne sort pendant 10 s, la génération est arrêtée et l'appel exécuté. Un plan qui cite
+  une commande puis continue n'est pas interrompu.
 - **Garde-fou** : si le modèle génère sans rien produire de visible, l'app le détecte (45 s après la lecture du
   prompt) et réessaie sans les notes de raisonnement.
 - **Cache du serveur préservé** : le début du prompt ne change jamais d'un appel à l'autre (sauf au compactage),

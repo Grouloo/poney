@@ -62,28 +62,23 @@ function mergeRoles(msgs) {
   return merged;
 }
 
-// What a model writes when it imagines a tool result instead of waiting for it:
-// our result tag, numbered lines like the read tool, or an "Output:" line.
-const IMAGINED_RESULT = /<result\b|^\s*\d+\|\s|^\s*(?:output|result|résultat|sortie|response|réponse)\s*:/im;
-
 /**
- * A complete call to a reading tool (read, list, search, run, web) inside the
- * reasoning, followed by an imitation of its result. A call merely listed in a
- * plan ("1. <run>ls</run> 2. then…") is not enough: the reasoning goes on.
- * Read-only tools in backticks count (Gemma often writes them so).
+ * The complete tool call that ends the reasoning (nothing written after it), our
+ * tags or a native call. Gemma sometimes "calls" a tool at the end of its
+ * reasoning and then produces nothing visible any more. Read-only tools in
+ * backticks count (Gemma often writes them so).
  */
-function imaginedCall(thinking) {
+function trailingCall(thinking) {
   if (!/<[a-z_|]/i.test(thinking)) return null;
   const unquoted = thinking.replace(/`(<(?:read|list|search)\b[^`\n]*?\/?>)`/g, '$1');
   const normalized = normalizeToolCalls(unquoted);
-  for (const action of parseActions(normalized, { final: false }).actions) {
-    if (!action.complete || !TOOLS[action.tool].observes) continue;
-    if (IMAGINED_RESULT.test(normalized.slice(action.end, action.end + 2000))) {
-      return { raw: action.raw, before: normalized.slice(0, action.end) };
-    }
-  }
-  return null;
+  const last = parseActions(normalized, { final: false }).actions.at(-1);
+  if (!last?.complete || normalized.slice(last.end).trim()) return null;
+  return { raw: last.raw, before: normalized.slice(0, last.end) };
 }
+
+// Silence after a call (in the reasoning or the answer) before we stop waiting and run it.
+const STALL_MS = 10_000;
 
 /** The user request carried by a message (unwraps a compaction summary). */
 function taskFromMessage(content) {
@@ -424,7 +419,16 @@ export class Agent extends EventEmitter {
     let narrationCut = false;
     let streamError = null;
     let visibleSeen = false;
-    let thinkingCall = null; // { raw, end } of a call found in the reasoning
+    // A call ends the output so far: if nothing visible follows for stallMs, stop and run it.
+    let stallTimer = null;
+    let stallCall = null; // call ending the reasoning, if that is where it is
+    let stalled = false;
+    const armStall = (call) => {
+      clearTimeout(stallTimer);
+      stallCall = call;
+      stallTimer = setTimeout(() => { stalled = true; ctrl.abort(); }, this.stallMs ?? STALL_MS);
+    };
+    const disarmStall = () => { clearTimeout(stallTimer); stallTimer = null; stallCall = null; };
     let invisibleTimeout = false;
     let watchdog = null;
     let doneReason = null;
@@ -478,13 +482,12 @@ export class Agent extends EventEmitter {
         if (chunk.type === 'thinking') {
           thinking += chunk.text;
           this.emit('event', { type: 'delta', id, kind: 'thinking', text: chunk.text });
-          // Gemma sometimes "calls" a tool inside its reasoning, then imagines
-          // the result and reasons on it for minutes. When a call is followed by
-          // an imitation of its result, stop and run it for real.
-          const call = /[>}|:\n]/.test(chunk.text) ? imaginedCall(thinking) : null;
-          if (call) {
-            thinkingCall = call;
-            break;
+          // A call at the very end of the reasoning arms the stall timer; any
+          // further writing (a plan that goes on) disarms it.
+          if (/\S/.test(chunk.text)) {
+            const call = /[>}|]/.test(chunk.text) ? trailingCall(thinking) : null;
+            if (call) armStall(call);
+            else disarmStall();
           }
           continue;
         }
@@ -506,6 +509,11 @@ export class Agent extends EventEmitter {
         // on local hardware. Stop once a long text follows the last action
         // without starting a new one.
         const last = actions[actions.length - 1];
+        // Same stall rule when the answer ends with a complete action.
+        if (/\S/.test(chunk.text)) {
+          if (last?.complete && !visible.slice(last.end).trim()) armStall(null);
+          else disarmStall();
+        }
         if (last?.complete) {
           const after = visible.slice(last.end);
           if (after.replace(/\s/g, '').length > NARRATION_LIMIT && !/<[a-z_|]/i.test(after)) {
@@ -532,6 +540,7 @@ export class Agent extends EventEmitter {
       }
     } finally {
       clearTimeout(watchdog);
+      clearTimeout(stallTimer);
       ctrl.abort();
       signal.removeEventListener('abort', onAbort);
     }
@@ -541,11 +550,20 @@ export class Agent extends EventEmitter {
     let visible = normalizeToolCalls(split.text);
     if (cutAt >= 0) visible = visible.slice(0, cutAt);
     thinking += split.thinking;
-    if (thinkingCall && !parseActions(visible).actions.length) {
-      // Keep the reasoning up to the call only: what follows was imagined.
-      thinking = thinkingCall.before;
-      visible = `${visible.trim()}\n${thinkingCall.raw}`.trim();
-      this.emit('event', { type: 'notice', text: 'Le modèle a appelé un outil dans sa réflexion : génération arrêtée, l’appel est exécuté pour de vrai.' });
+    // After a stall, the call ending the reasoning; at a normal end, only if the
+    // model wrote no real answer (a call left at the end of a plan is not run).
+    const noAction = !parseActions(visible).actions.length;
+    const endCall = noAction ? (stallCall || (visible.trim().length < 200 ? trailingCall(thinking) : null)) : null;
+    if (endCall) {
+      // The reasoning ended with a call and the answer has none (or nothing
+      // came out after it): that call is what the model meant to do.
+      thinking = endCall.before;
+      visible = `${visible.trim()}\n${endCall.raw}`.trim();
+      this.emit('event', { type: 'notice', text: stalled
+        ? 'Le modèle a appelé un outil à la fin de sa réflexion puis n’a plus rien produit : génération arrêtée, l’appel est exécuté.'
+        : 'Appel d’outil à la fin de la réflexion du modèle : il est exécuté.' });
+    } else if (stalled) {
+      this.emit('event', { type: 'notice', text: 'Plus rien ne sortait après l’action : génération arrêtée, l’action est exécutée.' });
     } else if (!parseActions(visible).actions.length) {
       // Gemma sometimes makes its tool call inside its reasoning: if the answer has
       // no action, use the first complete native call found there.

@@ -62,43 +62,6 @@ test('a native call made inside the reasoning is executed', async () => {
   assert.deepEqual(actions, ['list']);
 });
 
-test('a tag call in the reasoning stops the generation; the invented result is dropped', async () => {
-  const http = await import('node:http');
-  const fs = await import('node:fs/promises');
-  const os = await import('node:os');
-  const path = await import('node:path');
-  const { Agent } = await import('../src/agent/agent.js');
-  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-raw-'));
-  await fs.writeFile(path.join(cwd, 'main.py'), 'REAL = 1\n');
-  const requests = [];
-  let n = 0;
-  const server = http.createServer((req, res) => {
-    let body = '';
-    req.on('data', (d) => (body += d));
-    req.on('end', () => {
-      requests.push(JSON.parse(body));
-      if (++n === 1) {
-        // Reasoning: a call, then an imagined result, streamed in pieces.
-        const pieces = ['I need the file. <read path="main.py" />', '\n1| IMAGINED = 2\n', '2| more invented code\n'.repeat(20)];
-        res.end(pieces.map((p) => JSON.stringify({ message: { thinking: p }, done: false })).join('\n') + `\n${JSON.stringify({ message: { content: '' }, done: true })}\n`);
-      } else {
-        res.end(`${JSON.stringify({ message: { content: 'Done.' }, done: true, done_reason: 'stop' })}\n`);
-      }
-    });
-  });
-  await new Promise((r) => server.listen(0, r));
-  const agent = new Agent({ cwd, config: { baseUrl: `http://localhost:${server.address().port}`, model: 'm' } });
-  const events = [];
-  agent.on('event', (e) => events.push(e));
-  await agent.send('what is in main.py?');
-  server.close();
-  assert.deepEqual(events.filter((e) => e.type === 'action_start').map((e) => e.tool), ['read']);
-  assert.ok(events.some((e) => e.type === 'notice' && /dans sa réflexion/.test(e.text)));
-  const second = JSON.stringify(requests[1].messages);
-  assert.match(second, /REAL = 1/, 'the real file content is given back');
-  assert.doesNotMatch(second, /IMAGINED/, 'the imagined result is not kept');
-});
-
 test('stopping keeps the partial output in the transcript', async () => {
   const http = await import('node:http');
   const fs = await import('node:fs/promises');
@@ -121,30 +84,68 @@ test('stopping keeps the partial output in the transcript', async () => {
   assert.equal(ends[0].thinking, 'partial reasoning');
 });
 
-test('reasoning calls: run only when a result is imagined after them, never for a plan', async () => {
+// A server that streams the given pieces, then either ends or stays silent (connection kept open).
+async function streamer(firstReply, { silentAfter = false } = {}) {
   const http = await import('node:http');
+  const requests = [];
+  let n = 0;
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (d) => (body += d));
+    req.on('end', () => {
+      requests.push(JSON.parse(body));
+      if (++n === 1) {
+        for (const p of firstReply) res.write(`${JSON.stringify({ message: p, done: false })}\n`);
+        if (!silentAfter) res.end(`${JSON.stringify({ message: { content: '' }, done: true, done_reason: 'stop' })}\n`);
+      } else {
+        res.end(`${JSON.stringify({ message: { content: 'Done.' }, done: true, done_reason: 'stop' })}\n`);
+      }
+    });
+  });
+  await new Promise((r) => server.listen(0, r));
+  return { server, requests, url: `http://localhost:${server.address().port}` };
+}
+
+async function runAgent(reply, opts) {
   const fs = await import('node:fs/promises');
   const os = await import('node:os');
   const path = await import('node:path');
   const { Agent } = await import('../src/agent/agent.js');
-  for (const [thought, expected] of [
-    ['Plan: `<read path="main.py" />`\n1| x = 9\n2| imagined', ['read']], // followed by an imagined result
-    ['Maybe `<run>rm -rf build</run>` later.\nOutput: removed', []], // run in backticks: never
-    ['Plan:\n1. <run>ls -la</run> to see the files\n2. then read the config and decide.', []], // a plan, nothing imagined
-  ]) {
-    const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-raw-'));
-    await fs.writeFile(path.join(cwd, 'main.py'), 'x = 1\n');
-    let n = 0;
-    const server = http.createServer((req, res) => {
-      req.resume();
-      req.on('end', () => res.end(`${JSON.stringify(++n === 1 ? { message: { thinking: thought, content: 'Done.' }, done: true, done_reason: 'stop' } : { message: { content: 'Done.' }, done: true, done_reason: 'stop' })}\n`));
-    });
-    await new Promise((r) => server.listen(0, r));
-    const agent = new Agent({ cwd, config: { baseUrl: `http://localhost:${server.address().port}`, model: 'm', approval: 'auto' } });
-    const actions = [];
-    agent.on('event', (e) => e.type === 'action_start' && actions.push(e.tool));
-    await agent.send('go');
-    server.close();
-    assert.deepEqual(actions, expected, thought);
-  }
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-stall-'));
+  await fs.writeFile(path.join(cwd, 'main.py'), 'REAL = 1\n');
+  const s = await streamer(reply, opts);
+  const agent = new Agent({ cwd, config: { baseUrl: s.url, model: 'm', approval: 'auto' } });
+  agent.stallMs = 300;
+  const events = [];
+  agent.on('event', (e) => events.push(e));
+  await agent.send('go');
+  s.server.closeAllConnections?.();
+  s.server.close();
+  return { events, cwd, actions: events.filter((e) => e.type === 'action_start').map((e) => e.tool), notices: events.filter((e) => e.type === 'notice').map((e) => e.text) };
+}
+
+// Regression: Gemma "calls" a tool at the end of its reasoning, then nothing comes out any more.
+test('a call ending the reasoning followed by silence is run', async () => {
+  const r = await runAgent([{ thinking: 'I need the file. ' }, { thinking: '<read path="main.py" />' }], { silentAfter: true });
+  assert.deepEqual(r.actions, ['read']);
+  assert.ok(r.notices.some((n) => /n’a plus rien produit/.test(n)));
+});
+
+test('a plan listing a command and going on is not cut', async () => {
+  const r = await runAgent([{ thinking: 'Plan:\n1. <run>ls -la</run>' }, { thinking: ' to see the files\n2. then read the config.' }, { content: 'Here is my plan.' }]);
+  assert.deepEqual(r.actions, []);
+  assert.equal(r.events.find((e) => e.type === 'final')?.text, 'Here is my plan.');
+});
+
+test('an answer ending with a write followed by silence is run', async () => {
+  const fs = await import('node:fs/promises');
+  const path = await import('node:path');
+  const r = await runAgent([{ content: '<write path="new.py">\nx = 2\n</write>' }], { silentAfter: true });
+  assert.deepEqual(r.actions, ['write']);
+  assert.equal(await fs.readFile(path.join(r.cwd, 'new.py'), 'utf8'), 'x = 2\n');
+});
+
+test('a call left at the end of the reasoning is not run when the model wrote a real answer', async () => {
+  const r = await runAgent([{ thinking: 'Maybe later <run>ls</run>' }, { content: 'Voici une réponse complète. '.repeat(10) }]);
+  assert.deepEqual(r.actions, []);
 });
