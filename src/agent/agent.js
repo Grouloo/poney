@@ -25,6 +25,9 @@ export const DEFAULT_CONFIG = {
   approval: 'ask', // 'ask' | 'auto'
   shellEnabled: true, // the agent may run terminal commands
   webEnabled: true, // the agent may search the web and fetch pages
+  torEnabled: false, // web requests go through Tor (refused if Tor is unreachable)
+  torProxy: '', // empty: auto (127.0.0.1:9050 tor daemon, then 9150 Tor Browser)
+  torShell: false, // also give terminal commands the proxy variables
   testCommand: '',
   searxngUrl: '',
 };

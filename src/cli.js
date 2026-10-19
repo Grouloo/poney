@@ -13,7 +13,7 @@ for (let i = 0; i < argv.length; i++) {
   if (a.startsWith('--')) {
     const key = a.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
     const next = argv[i + 1];
-    if (['yes', 'verbose', 'help', 'noWeb', 'noShell'].includes(key) || next === undefined || next.startsWith('--')) opts[key] = true;
+    if (['yes', 'verbose', 'help', 'noWeb', 'noShell', 'tor'].includes(key) || next === undefined || next.startsWith('--')) opts[key] = true;
     else { opts[key] = next; i++; }
   } else words.push(a);
 }
@@ -29,6 +29,8 @@ if (!words.length || opts.help) {
   --yes                run commands without asking
   --no-web             disable web search and page fetching
   --no-shell           disable terminal commands
+  --tor                web search and page reading through Tor (refused if Tor is down)
+  --tor-proxy ADDR     Tor SOCKS proxy (default: auto, 127.0.0.1:9050 then 9150)
   --verbose            print full tool outputs`);
   process.exit(words.length ? 0 : 1);
 }
@@ -41,6 +43,8 @@ if (opts.provider === 'openai' && !opts.baseUrl) config.baseUrl = 'http://localh
 config.approval = opts.yes ? 'auto' : 'ask';
 if (opts.noWeb) config.webEnabled = false;
 if (opts.noShell) config.shellEnabled = false;
+if (opts.tor) config.torEnabled = true;
+if (opts.torProxy) config.torProxy = opts.torProxy;
 
 const c = { dim: '\x1b[2m', red: '\x1b[31m', green: '\x1b[32m', yellow: '\x1b[33m', cyan: '\x1b[36m', reset: '\x1b[0m' };
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });

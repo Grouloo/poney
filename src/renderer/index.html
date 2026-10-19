@@ -66,6 +66,9 @@
         <label class="toggle" title="Autoriser l’agent à chercher sur le web et lire des pages">
           <input type="checkbox" id="webEnabled"> Web
         </label>
+        <label class="toggle" id="torToggleLabel" title="Recherche web et lecture de pages via Tor (réglages : ⚙︎ › Confidentialité)">
+          <input type="checkbox" id="torEnabled"> Tor
+        </label>
         <label class="toggle" title="Autoriser l’agent à lancer des commandes dans le terminal">
           <input type="checkbox" id="shellEnabled"> Terminal
         </label>
@@ -155,6 +158,17 @@
           <input name="searxngUrl" placeholder="http://localhost:8080">
           <small>Sinon la recherche passe par DuckDuckGo.</small>
         </label>
+      </fieldset>
+      <fieldset>
+        <legend>Confidentialité</legend>
+        <label class="check"><input type="checkbox" name="torEnabled"> Faire passer la recherche web et la lecture de pages par Tor</label>
+        <small>Recherche via le service .onion de DuckDuckGo. Si Tor est injoignable, la requête est refusée (jamais envoyée en clair). Le serveur de modèles local n’est pas concerné.</small>
+        <label>Proxy Tor
+          <input name="torProxy" placeholder="auto : 127.0.0.1:9050 (tor) puis 9150 (Tor Browser)">
+        </label>
+        <label class="check"><input type="checkbox" name="torShell"> Aussi les commandes du terminal</label>
+        <small>Par variables de proxy : seuls les programmes qui les respectent (curl, git, wget, pip…) passent par Tor. Ce n’est pas une garantie pour toutes les commandes.</small>
+        <div class="row tor-test"><button type="button" id="torTest" class="ghost">Tester la connexion Tor</button><span id="torResult" class="muted"></span></div>
       </fieldset>
     </form>
   </aside>

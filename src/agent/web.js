@@ -1,5 +1,14 @@
 // Web search without API keys: DuckDuckGo's HTML endpoint, or a SearXNG instance
-// if one is configured (more reliable, self-hostable).
+// if one is configured (more reliable, self-hostable). With a Tor proxy, every
+// request goes through Tor (DuckDuckGo through its onion service first).
+import { proxyFetch, DDG_ONION } from './tor.js';
+
+/** fetch, or the SOCKS one when a Tor proxy is given (never a silent clear-net fallback). */
+const doFetch = (url, opts, proxy) => (proxy ? proxyFetch(url, { ...opts, proxy }) : fetch(url, opts));
+
+const isLocalUrl = (u) => {
+  try { return /^(localhost|127\.\d+\.\d+\.\d+|\[::1\]|.*\.local)$/i.test(new URL(u).hostname); } catch { return false; }
+};
 
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36';
 
@@ -18,15 +27,28 @@ export function decodeEntities(s) {
 
 const stripTags = (s) => decodeEntities(s.replace(/<[^>]+>/g, '')).replace(/\s+/g, ' ').trim();
 
-async function searchDuckDuckGo(query, signal) {
-  const res = await fetch('https://html.duckduckgo.com/html/', {
-    method: 'POST',
-    headers: { 'User-Agent': UA, 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ q: query }).toString(),
-    signal,
-  });
-  if (!res.ok) throw new Error(`DuckDuckGo HTTP ${res.status}`);
-  const html = await res.text();
+async function searchDuckDuckGo(query, signal, proxy) {
+  // Through Tor: the onion service first (the clear-net endpoint often blocks Tor exits).
+  const endpoints = proxy ? [`${DDG_ONION}/html/`, 'https://html.duckduckgo.com/html/'] : ['https://html.duckduckgo.com/html/'];
+  let html = null;
+  let lastError = null;
+  for (const endpoint of endpoints) {
+    try {
+      const res = await doFetch(endpoint, {
+        method: 'POST',
+        headers: { 'User-Agent': UA, 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ q: query }).toString(),
+        signal,
+      }, proxy);
+      if (!res.ok) throw new Error(`DuckDuckGo HTTP ${res.status}`);
+      html = await res.text();
+      break;
+    } catch (e) {
+      if (signal?.aborted || e.name === 'TorUnavailableError') throw e;
+      lastError = e;
+    }
+  }
+  if (html === null) throw lastError;
   const results = [];
   const blockRe = /<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?(?:class="result__snippet"[^>]*>([\s\S]*?)<\/a>|<\/div>\s*<\/div>)/g;
   let m;
@@ -44,17 +66,18 @@ async function searchDuckDuckGo(query, signal) {
   return results;
 }
 
-async function searchSearxng(base, query, signal) {
+async function searchSearxng(base, query, signal, proxy) {
   const url = `${base.replace(/\/+$/, '')}/search?format=json&q=${encodeURIComponent(query)}`;
-  const res = await fetch(url, { headers: { 'User-Agent': UA }, signal });
+  // A local instance is reached directly (it is on this machine).
+  const res = await doFetch(url, { headers: { 'User-Agent': UA }, signal }, isLocalUrl(base) ? null : proxy);
   if (!res.ok) throw new Error(`SearXNG HTTP ${res.status}`);
   const data = await res.json();
   return (data.results || []).map((r) => ({ title: r.title || '', url: r.url, snippet: (r.content || '').slice(0, 300) }));
 }
 
-export async function webSearch(query, { searxngUrl, signal } = {}) {
-  if (searxngUrl) return searchSearxng(searxngUrl, query, signal);
-  return searchDuckDuckGo(query, signal);
+export async function webSearch(query, { searxngUrl, signal, proxy } = {}) {
+  if (searxngUrl) return searchSearxng(searxngUrl, query, signal, proxy);
+  return searchDuckDuckGo(query, signal, proxy);
 }
 
 export function htmlToText(html) {
@@ -75,8 +98,8 @@ export function htmlToText(html) {
   return title ? `# ${stripTags(title)}\n\n${s}` : s;
 }
 
-export async function fetchUrl(url, { signal } = {}) {
-  const res = await fetch(url, { headers: { 'User-Agent': UA, Accept: 'text/html,application/json,text/plain,*/*' }, signal, redirect: 'follow' });
+export async function fetchUrl(url, { signal, proxy } = {}) {
+  const res = await doFetch(url, { headers: { 'User-Agent': UA, Accept: 'text/html,application/json,text/plain,*/*' }, signal, redirect: 'follow' }, proxy);
   if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
   const type = res.headers.get('content-type') || '';
   const body = await res.text();

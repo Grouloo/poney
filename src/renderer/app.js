@@ -84,8 +84,11 @@ function renderSettings() {
   $('autoApprove').disabled = !shellOn;
   $('autoApproveLabel').classList.toggle('disabled', !shellOn);
   for (const el of form.elements) {
-    if (el.name && settings.config[el.name] !== undefined) el.value = settings.config[el.name];
+    if (!el.name || settings.config[el.name] === undefined) continue;
+    if (el.type === 'checkbox') el.checked = Boolean(settings.config[el.name]);
+    else el.value = settings.config[el.name];
   }
+  $('torEnabled').checked = Boolean(settings.config.torEnabled);
   const recent = $('recent');
   if (recent) {
     recent.innerHTML = '';
@@ -121,7 +124,7 @@ async function refreshModels() {
 form.addEventListener('change', async (e) => {
   const el = e.target;
   if (!el.name) return;
-  let value = el.type === 'number' ? Number(el.value) : el.value;
+  let value = el.type === 'number' ? Number(el.value) : el.type === 'checkbox' ? el.checked : el.value;
   const patch = { [el.name]: value };
   if (el.name === 'provider') {
     patch.baseUrl = value === 'ollama' ? 'http://localhost:11434' : 'http://localhost:1234/v1';
@@ -143,12 +146,20 @@ $('autoApprove').onchange = async (e) => {
   settings = await window.api.setConfig({ approval: e.target.checked ? 'auto' : 'ask' });
   renderSettings();
 };
-for (const flag of ['webEnabled', 'shellEnabled']) {
+for (const flag of ['webEnabled', 'shellEnabled', 'torEnabled']) {
   $(flag).onchange = async (e) => {
     settings = await window.api.setConfig({ [flag]: e.target.checked });
     renderSettings();
   };
 }
+$('torTest').onclick = async () => {
+  const out = $('torResult');
+  out.textContent = 'Test en cours…';
+  const r = await window.api.checkTor();
+  out.textContent = r.ok
+    ? (r.isTor ? `✓ Connecté via Tor (${r.proxy.replace('socks5h://', '')}), IP de sortie ${r.ip}` : `⚠ Le proxy répond mais le trafic ne sort pas par Tor (IP ${r.ip})`)
+    : `✗ ${r.error}`;
+};
 $('settingsBtn').onclick = () => $('settings').classList.toggle('hidden');
 $('closeSettings').onclick = () => $('settings').classList.add('hidden');
 $('workspaceBtn').onclick = async () => {
@@ -506,6 +517,7 @@ function onEvent(ev) {
       } else {
         body.innerHTML = `<pre class="out">${esc(ev.output)}</pre>`;
       }
+      if (ev.meta?.tor) card.querySelector('.card-head').insertAdjacentHTML('beforeend', '<span class="tag" title="Requête passée par Tor">🧅 Tor</span>');
       if (ev.meta?.exit !== undefined) {
         card.querySelector('.card-head').insertAdjacentHTML('beforeend', `<span class="tag">exit ${ev.meta.exit}</span>`);
       }

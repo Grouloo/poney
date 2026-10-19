@@ -296,3 +296,9 @@ body.running .edit-msg { display: none; }
 }
 .edit-note { margin: 0; color: var(--warn); font-size: 12px; }
 .edit-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+/* ---------- privacy settings ---------- */
+fieldset label.check { flex-direction: row; align-items: center; gap: 8px; }
+fieldset label.check input { width: auto; }
+.tor-test { align-items: center; margin-top: 10px; }
+.tor-test span { font-size: 12px; }

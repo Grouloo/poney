@@ -3,6 +3,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { parseEditBody } from './protocol.js';
 import { webSearch, fetchUrl } from './web.js';
+import { requireTor, proxyEnv } from './tor.js';
 import { unifiedDiff } from './diff.js';
 
 export const IGNORED_DIRS = new Set(['.git', 'node_modules', '__pycache__', '.venv', 'venv', 'dist', 'build', '.next', 'target', '.cache', '.idea', '.vscode']);
@@ -293,14 +294,14 @@ async function editTool(cwd, args) {
 }
 
 // ---------- run ----------
-export function runShell(command, { cwd, timeoutSec = 120, signal, onOutput }) {
+export function runShell(command, { cwd, timeoutSec = 120, signal, onOutput, env: extraEnv = {} }) {
   return new Promise((resolve) => {
     const shell = process.platform === 'win32' ? 'cmd.exe' : (process.env.SHELL || '/bin/bash');
     const argv = process.platform === 'win32' ? ['/d', '/s', '/c', command] : ['-lc', command];
     const child = spawn(shell, argv, {
       cwd,
       detached: process.platform !== 'win32',
-      env: { ...process.env, CI: '1', PYTHONUNBUFFERED: '1', NO_COLOR: '1', FORCE_COLOR: '0', PAGER: 'cat', GIT_PAGER: 'cat' },
+      env: { ...process.env, CI: '1', PYTHONUNBUFFERED: '1', NO_COLOR: '1', FORCE_COLOR: '0', PAGER: 'cat', GIT_PAGER: 'cat', ...extraEnv },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let out = '';
@@ -334,28 +335,44 @@ async function runTool(cwd, args, ctx) {
   const command = (args.command || '').trim();
   if (!command) throw new ToolError('Empty command. Put the command between <run> and </run>.');
   const timeoutSec = Math.min(parseInt(args.timeout, 10) || ctx.config.commandTimeout, 1800);
-  const r = await runShell(command, { cwd, timeoutSec, signal: ctx.signal, onOutput: ctx.onOutput });
+  // Tor for commands: proxy variables (honored by curl, git, wget…). Refused if Tor is down.
+  const viaTor = ctx.config.torEnabled && ctx.config.torShell;
+  const env = viaTor ? proxyEnv(await torProxyOrRefuse(ctx.config)) : {};
+  const r = await runShell(command, { cwd, timeoutSec, signal: ctx.signal, onOutput: ctx.onOutput, env });
   let output = r.out.trim() || '(no output)';
   output = truncateMiddle(output, ctx.maxResultChars);
   if (r.timedOut) output += `\n[command killed after ${timeoutSec}s timeout]`;
-  return { output, ok: r.code === 0, exitCode: r.code, meta: { exit: r.code } };
+  return { output, ok: r.code === 0, exitCode: r.code, meta: { exit: r.code, ...(viaTor ? { tor: true } : {}) } };
 }
 
 // ---------- web ----------
+/** Tor proxy when enabled; refuses (ToolError) rather than going out in the clear. */
+async function torProxyOrRefuse(config) {
+  if (!config.torEnabled) return null;
+  try {
+    return await requireTor(config.torProxy);
+  } catch (e) {
+    throw new ToolError(`${e.message} (Tell the user; do not retry this request.)`);
+  }
+}
+
 async function webSearchTool(cwd, args, ctx) {
   const q = (args.query || '').trim();
   if (!q) throw new ToolError('Empty query.');
-  const results = await webSearch(q, { searxngUrl: ctx.config.searxngUrl, signal: ctx.signal });
-  if (!results.length) return { output: 'No results.', meta: { query: q } };
+  const proxy = await torProxyOrRefuse(ctx.config);
+  const results = await webSearch(q, { searxngUrl: ctx.config.searxngUrl, signal: ctx.signal, proxy });
+  const meta = { query: q, ...(proxy ? { tor: true } : {}) };
+  if (!results.length) return { output: 'No results.', meta };
   const output = results.slice(0, 6).map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}\n   ${r.snippet}`).join('\n');
-  return { output: output + '\nUse <fetch>url</fetch> to read a page.', meta: { query: q } };
+  return { output: output + '\nUse <fetch>url</fetch> to read a page.', meta };
 }
 
 async function fetchTool(cwd, args, ctx) {
   const url = (args.url || '').trim();
   if (!/^https?:\/\//i.test(url)) throw new ToolError('Give a full URL starting with http:// or https://');
-  const text = await fetchUrl(url, { signal: ctx.signal });
-  return { output: truncateMiddle(text, ctx.maxResultChars), meta: { url } };
+  const proxy = await torProxyOrRefuse(ctx.config);
+  const text = await fetchUrl(url, { signal: ctx.signal, proxy });
+  return { output: truncateMiddle(text, ctx.maxResultChars), meta: { url, ...(proxy ? { tor: true } : {}) } };
 }
 
 const IMPL = { list: listTool, read: readTool, search: searchTool, write: writeTool, edit: editTool, run: runTool, web_search: webSearchTool, fetch: fetchTool };
