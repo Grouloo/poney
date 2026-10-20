@@ -341,3 +341,4 @@ fieldset label.check input { width: auto; }
 .card-head:hover .resume-btn { visibility: visible; }
 .resume-btn:hover { color: var(--accent); border-color: var(--border); }
 body.running .resume-btn { display: none; }
+.msg-editor .edit-error { margin: 6px 0; }

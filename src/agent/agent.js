@@ -198,20 +198,21 @@ export class Agent extends EventEmitter {
    * Puts the conversation back as it was just before the user message `turnId`
    * (that message and everything after it are removed). Files are not restored.
    */
-  rewind(turnId, { rebuilt } = {}) {
+  rewind(turnId, { rebuilt, keepTurnIds } = {}) {
     if (this.running) throw new Error('Agent is running.');
     const i = this.checkpoints.findIndex((c) => c.turnId === turnId);
-    if (i < 0) throw new Error('Ce message ne peut pas servir de point de reprise.');
-    const cp = this.checkpoints[i];
-    if (cp.rebuild) {
-      // Old conversation whose exact history is gone: use the history rebuilt
-      // from the transcript (given by the caller). Earlier checkpoints can no
-      // longer point into an exact history, so they rebuild too.
+    if (i < 0 && !rebuilt) throw new Error('Ce message ne peut pas servir de point de reprise.');
+    if (i < 0 || this.checkpoints[i].rebuild) {
+      // Exact history gone (old conversation, or rewind point lost in a crash):
+      // use the history rebuilt from the transcript (given by the caller).
+      // Earlier checkpoints can no longer point into an exact history, so they
+      // rebuild too; without a checkpoint, the caller says which messages came before.
       if (!rebuilt) throw new Error('Rebuilt history required.');
+      const earlier = i >= 0 ? this.checkpoints.slice(0, i) : this.checkpoints.filter((c) => keepTurnIds?.has(c.turnId));
       this.messages = rebuilt;
       this.untested = false;
       // (action resume points cannot be rebuilt: they are dropped)
-      this.checkpoints = this.checkpoints.slice(0, i).filter((c) => c.turnId).map((c) => ({ turnId: c.turnId, rebuild: true }));
+      this.checkpoints = earlier.filter((c) => c.turnId).map((c) => ({ turnId: c.turnId, rebuild: true }));
       this.archives = [];
       this.lastUsage = null;
       this.currentTask = null;

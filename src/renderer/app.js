@@ -257,12 +257,16 @@ function startEditMessage(m, turnId, text) {
       const { events } = await window.api.rewind(turnId);
       replayTranscript(events);
     } catch (e) {
-      close();
-      add(div('error', esc(errorText(e))));
+      // The editor stays open with the text: nothing typed is lost.
+      editor.querySelector('.edit-error')?.remove();
+      editor.querySelector('.edit-actions').before(div('edit-error error', esc(errorText(e))));
       return;
     }
     refreshGauge();
-    await sendMessage(newText);
+    if (!(await sendMessage(newText))) {
+      input.value = newText;
+      autosize();
+    }
   };
   editor.querySelector('.cancel').onclick = close;
   editor.querySelector('.relaunch').onclick = relaunch;
@@ -329,7 +333,11 @@ async function submit() {
   }
   input.value = '';
   autosize();
-  await sendMessage(text);
+  // Not sent: the text goes back into the box (unless something new was typed).
+  if (!(await sendMessage(text)) && !input.value) {
+    input.value = text;
+    autosize();
+  }
 }
 
 async function sendMessage(text) {
@@ -338,9 +346,11 @@ async function sendMessage(text) {
   setRunning(true);
   try {
     await window.api.send(text, turnId);
+    return true;
   } catch (e) {
     add(div('error', esc(e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''))));
     setRunning(false);
+    return false;
   }
 }
 

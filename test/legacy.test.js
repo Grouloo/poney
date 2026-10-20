@@ -81,6 +81,22 @@ test('rewinding to a rebuilt checkpoint restores the rebuilt history', async () 
   assert.throws(() => agent.rewind('legacy-0'), /Rebuilt history required/);
 });
 
+test('a message whose rewind point was lost (crash) can still be edited: history rebuilt', async () => {
+  const agent = new Agent({ cwd: await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-legacy-')), config: { model: 'm' } });
+  const evs = [
+    { type: 'user_message', text: 'Crée hello.py', turnId: 't1' },
+    ...events.slice(1, 9),
+    { type: 'user_message', text: 'Récapitule', turnId: 't2' }, // saved without its checkpoint
+  ];
+  agent.messages = [{ role: 'user', content: 'x' }];
+  agent.checkpoints = [{ turnId: 't1', archive: null, length: 0, untested: false }, { kind: 'action', actIds: [2], length: 1 }];
+  assert.throws(() => agent.rewind('t2'), /point de reprise/);
+  const before = evs.slice(0, -1);
+  agent.rewind('t2', { rebuilt: rebuildHistory(before), keepTurnIds: new Set(['t1']) });
+  assert.deepEqual(agent.messages.map((m) => m.role), ['user', 'assistant', 'user', 'assistant']);
+  assert.deepEqual(agent.checkpoints, [{ turnId: 't1', rebuild: true }]);
+});
+
 // ---------- resuming from an old action (no resume point) ----------
 import { rebuildForAction } from '../src/agent/rebuild.js';
 import http from 'node:http';

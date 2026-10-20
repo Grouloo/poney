@@ -155,10 +155,9 @@ ipcMain.handle('agent:send', async (_, text, turnId) => {
     conv.systemPrompt = a.systemPrompt; // edited before the first message
   }
   store.record(conv, { type: 'user_message', text, turnId });
-  store.save(conv);
-  send('conversations:changed', conv.id);
   // Events stream back through 'agent:event'.
   a.send(text, { turnId }).catch((e) => send('agent:event', { type: 'error', message: e.message }));
+  saveConversation(); // after send() has set this message's rewind point, so that it is saved with it
   return true;
 });
 // Restart the conversation from an earlier user message (edited by the user):
@@ -170,7 +169,12 @@ ipcMain.handle('agent:rewind', (_, turnId) => {
   const at = conv.events.findIndex((e) => e.type === 'user_message' && e.turnId === turnId);
   if (at < 0) throw new Error('Message introuvable dans cette conversation.');
   const cp = a.checkpoints.find((c) => c.turnId === turnId);
-  a.rewind(turnId, cp?.rebuild ? { rebuilt: rebuildHistory(conv.events.slice(0, at)) } : {});
+  // No exact rewind point (lost in a crash, old conversation): rebuild from the transcript.
+  const before = conv.events.slice(0, at);
+  a.rewind(turnId, !cp || cp.rebuild ? {
+    rebuilt: rebuildHistory(before),
+    keepTurnIds: new Set(before.filter((e) => e.type === 'user_message' && e.turnId).map((e) => e.turnId)),
+  } : {});
   conv.events = conv.events.slice(0, at);
   saveConversation();
   return { events: conv.events };
