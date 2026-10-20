@@ -149,3 +149,41 @@ test('a call left at the end of the reasoning is not run when the model wrote a 
   const r = await runAgent([{ thinking: 'Maybe later <run>ls</run>' }, { content: 'Voici une réponse complète. '.repeat(10) }]);
   assert.deepEqual(r.actions, []);
 });
+
+// Regression: Gemma reopening its reasoning channel while reasoning, over and over (a loop),
+// and stray closing markers in the answer: both showed as raw text and fed the loop.
+test('a reasoning channel reopened while reasoning is removed and reported; a stray close in the answer is dropped', () => {
+  const split = makeChannelSplitter();
+  const out = [];
+  for (const p of ['<|channel>thought\nPlan A.<|channel>thought\nPlan A again.<|channel><|chan', 'nel>thought\nAgain.<channel|>Answer.<channel|> End.']) out.push(...split(p));
+  out.push(...split('', true));
+  assert.deepEqual(out.filter((c) => c.type === 'reopen').length, 2);
+  assert.equal(out.filter((c) => c.type === 'thinking').map((c) => c.text).join(''), 'Plan A.Plan A again.Again.');
+  assert.equal(out.filter((c) => c.type === 'text').map((c) => c.text).join(''), 'Answer. End.');
+});
+
+test('a model restarting its reasoning three times is stopped; the reasoning is kept up to the first restart', async () => {
+  const fs = await import('node:fs/promises');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { Agent } = await import('../src/agent/agent.js');
+  const agent = new Agent({ cwd: await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-reopen-')), config: { model: 'm' } });
+  let calls = 0;
+  let restartsSent = 0;
+  agent.streamChat = async function* () {
+    if (++calls > 1) { yield { type: 'text', text: 'Done.' }; return; }
+    yield { type: 'thinking', text: 'I will create the file. ' };
+    for (let i = 0; i < 50; i++) { restartsSent++; yield { type: 'reopen' }; yield { type: 'thinking', text: 'I will create the file. ' }; }
+  };
+  const events = [];
+  agent.on('event', (e) => events.push(e));
+  await agent.send('go');
+  assert.equal(restartsSent, 3); // stopped at the third restart
+  assert.equal(events.find((e) => e.type === 'assistant_end').thinking, 'I will create the file. ');
+  assert.ok(events.some((e) => e.type === 'notice' && /en boucle/.test(e.text)));
+});
+
+test('leaked channel markers are removed from the history', async () => {
+  const { stripChannelMarkers } = await import('../src/agent/protocol.js');
+  assert.equal(stripChannelMarkers('Done.<channel|>\n\nNext.<|channel><|channel>thought\nAgain.'), 'Done.\n\nNext.Again.');
+});

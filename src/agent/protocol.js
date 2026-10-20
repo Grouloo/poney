@@ -595,6 +595,11 @@ export function findRepetition(s, { minRun = 300, maxPeriod = 2000 } = {}) {
   return -1;
 }
 
+/** Gemma's channel markers, when they leak into an answer or a reasoning (see makeChannelSplitter). */
+export function stripChannelMarkers(s) {
+  return String(s ?? '').replace(/(?:<\|channel>)+(?:[a-z_]+\n)?|<channel\|>/g, '');
+}
+
 export function stripReasoning(content) {
   return content.replace(/<reasoning>[\s\S]*?<\/reasoning>\n?/g, '').replace(/^\(My notes: .*\)\n?/m, '');
 }

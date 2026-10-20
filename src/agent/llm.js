@@ -98,28 +98,21 @@ function partialTail(s, marker) {
   return 0;
 }
 
-/** Splits a raw Gemma stream into text and thinking, markers possibly cut across pieces. */
+/**
+ * Splits a raw Gemma stream into text and thinking, markers possibly cut across
+ * pieces. Gemma sometimes reopens a reasoning channel while already reasoning
+ * ("…sentence.<|channel>thought\n…", often to start the same passage again: a
+ * loop): the marker is removed and reported as { type: 'reopen' }. A stray
+ * closing marker in the answer is removed too. Both used to show as raw text.
+ */
 export function makeChannelSplitter() {
   let buf = '';
   let mode = 'text'; // 'text' | 'header' (channel name line) | 'thinking'
+  let headerThen = 'thinking';
   return function* split(piece, final = false) {
     buf += piece;
     for (const end of END_MARKERS) buf = buf.split(end).join('');
     while (true) {
-      if (mode === 'text') {
-        const i = buf.indexOf(CHANNEL_OPEN);
-        if (i >= 0) {
-          if (i) yield { type: 'text', text: buf.slice(0, i) };
-          buf = buf.slice(i + CHANNEL_OPEN.length);
-          mode = 'header';
-          continue;
-        }
-        const keep = final ? 0 : Math.max(partialTail(buf, CHANNEL_OPEN), ...END_MARKERS.map((m) => partialTail(buf, m)));
-        const out = buf.slice(0, buf.length - keep);
-        if (out) yield { type: 'text', text: out };
-        buf = buf.slice(buf.length - keep);
-        return;
-      }
       if (mode === 'header') {
         const nl = buf.indexOf('\n');
         if (nl < 0) {
@@ -127,19 +120,29 @@ export function makeChannelSplitter() {
           return;
         }
         buf = buf.slice(nl + 1);
-        mode = 'thinking';
+        mode = headerThen;
         continue;
       }
-      const j = buf.indexOf(CHANNEL_CLOSE);
-      if (j >= 0) {
-        if (j) yield { type: 'thinking', text: buf.slice(0, j) };
-        buf = buf.slice(j + CHANNEL_CLOSE.length);
-        mode = 'text';
+      const thinking = mode === 'thinking';
+      const open = buf.indexOf(CHANNEL_OPEN);
+      const close = buf.indexOf(CHANNEL_CLOSE);
+      const at = [open, close].filter((i) => i >= 0).sort((x, y) => x - y)[0] ?? -1;
+      if (at >= 0) {
+        if (at) yield { type: thinking ? 'thinking' : 'text', text: buf.slice(0, at) };
+        if (at === open) {
+          buf = buf.slice(at + CHANNEL_OPEN.length);
+          if (thinking) yield { type: 'reopen' };
+          mode = 'header';
+          headerThen = 'thinking';
+        } else {
+          buf = buf.slice(at + CHANNEL_CLOSE.length);
+          mode = 'text'; // (in the answer: a stray closing marker, dropped)
+        }
         continue;
       }
-      const keep = final ? 0 : partialTail(buf, CHANNEL_CLOSE);
+      const keep = final ? 0 : Math.max(partialTail(buf, CHANNEL_OPEN), partialTail(buf, CHANNEL_CLOSE), ...(thinking ? [] : END_MARKERS.map((m) => partialTail(buf, m))));
       const out = buf.slice(0, buf.length - keep);
-      if (out) yield { type: 'thinking', text: out };
+      if (out) yield { type: thinking ? 'thinking' : 'text', text: out };
       buf = buf.slice(buf.length - keep);
       return;
     }

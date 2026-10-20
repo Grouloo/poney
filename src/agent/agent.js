@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { streamChat, complete, serverContextLength } from './llm.js';
-import { TOOLS, buildSystemPrompt, parseActions, splitThinking, formatResult, isToolEnabled, withReasoning, findRepetition, normalizeToolCalls, stripReasoning, legacyReasoningToNotes, toolSchemas } from './protocol.js';
+import { TOOLS, buildSystemPrompt, parseActions, splitThinking, formatResult, isToolEnabled, withReasoning, findRepetition, normalizeToolCalls, stripReasoning, legacyReasoningToNotes, stripChannelMarkers, toolSchemas } from './protocol.js';
 import { executeAction, runShell, truncateMiddle } from './tools.js';
 import {
   summaryTokens, mechanicalSummary, DEFAULT_CHARS_PER_TOKEN,
@@ -514,13 +514,16 @@ export class Agent extends EventEmitter {
 
   /** Assistant message for the history: the answer, preceded by its reasoning (capped). */
   assistantContent(gen, text) {
-    return withReasoning(text, gen.thinking);
+    return withReasoning(stripChannelMarkers(text), stripChannelMarkers(gen.thinking));
   }
 
   /** Converts reasoning blocks saved by older versions into short notes (see withReasoning). */
   upgradeReasoning() {
     const fix = (list) => list?.forEach((m) => {
       if (m && m.role === 'assistant' && m.content.includes('<reasoning>')) m.content = legacyReasoningToNotes(m.content);
+      // Leaked Gemma channel markers: seen again at each request, they made the model
+      // reopen its reasoning (and loop). Removing them costs one full prompt read.
+      if (m && m.role === 'assistant' && /<\|channel>|<channel\|>/.test(m.content)) m.content = stripChannelMarkers(m.content);
     });
     fix(this.messages);
     this.archives.forEach(fix);
@@ -550,6 +553,8 @@ export class Agent extends EventEmitter {
     const disarmStall = () => { clearTimeout(stallTimer); stallTimer = null; stallCall = null; };
     // A model looping on the same passage is stopped (checked every ~200 characters).
     let looped = false;
+    let reopens = 0; // reasoning channel reopened while reasoning (Gemma): a restart, often a loop
+    let firstReopenAt = -1;
     let checkedThinking = 0;
     let checkedText = 0;
     let invisibleTimeout = false;
@@ -564,7 +569,7 @@ export class Agent extends EventEmitter {
     // server never has to drop the start of the prompt to make room.
     const maxTokens = answerTokens(this.cfg, this.plan(system), historyTokens(prompt, this.est));
     try {
-      for await (const chunk of streamChat({
+      for await (const chunk of (this.streamChat ?? streamChat)({ // (replaceable in tests)
         ...this.cfg,
         toolSchemas: toolSchemas(this.config),
         maxTokens,
@@ -602,6 +607,12 @@ export class Agent extends EventEmitter {
         }
         tFirst ??= Date.now();
         if (chunk.text) visibleSeen = true;
+        if (chunk.type === 'reopen') {
+          if (firstReopenAt < 0) firstReopenAt = thinking.length;
+          // Restarted three times: a loop. Keep the reasoning up to the first restart.
+          if (++reopens >= 3) { thinking = thinking.slice(0, firstReopenAt); looped = true; break; }
+          continue;
+        }
         if (chunk.type === 'thinking') {
           thinking += chunk.text;
           this.emit('event', { type: 'delta', id, kind: 'thinking', text: chunk.text });
