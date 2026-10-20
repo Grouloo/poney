@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Agent, DEFAULT_CONFIG } from './agent/agent.js';
 import { listModels } from './agent/llm.js';
-import { ConversationStore } from './conversations.js';
+import { ConversationStore, moveAppData } from './conversations.js';
 import { listDir, readFileForViewer } from './files.js';
 import { migrateLegacy, rebuildHistory, rebuildForAction } from './agent/rebuild.js';
 import { checkTor, torStatus, newCircuits, findTorProxy } from './agent/tor.js';
@@ -24,7 +24,13 @@ function loadShellPath() {
   } catch {}
 }
 loadShellPath();
-if (process.env.LOCAL_CODEX_DATA) app.setPath('userData', process.env.LOCAL_CODEX_DATA);
+const dataOverride = process.env.PONEY_DATA || process.env.LOCAL_CODEX_DATA; // (old name)
+if (dataOverride) app.setPath('userData', dataOverride);
+else {
+  // The app was called Local Codex: move its data (settings, conversations, logs)
+  // to the new folder once. (Electron creates that folder before this runs.)
+  moveAppData(path.join(app.getPath('appData'), 'local-codex'), app.getPath('userData'));
+}
 
 // ---------- crash log ----------
 // Errors and crashes go to <userData>/logs/main.log, so that the next one can be explained.
@@ -318,7 +324,7 @@ function createWindow() {
     height: 820,
     minWidth: 720,
     minHeight: 500,
-    title: 'Local Codex',
+    title: 'poney',
     backgroundColor: '#14161a',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     webPreferences: {

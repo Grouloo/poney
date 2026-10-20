@@ -140,7 +140,7 @@ async function syntaxCheck(abs, content, cwd) {
     return null;
   }
   if (['.js', '.mjs', '.cjs'].includes(ext)) {
-    const r = await runCapture(process.env.LOCAL_CODEX_NODE || 'node', ['--check', abs], cwd);
+    const r = await runCapture(process.env.PONEY_NODE || process.env.LOCAL_CODEX_NODE || 'node', ['--check', abs], cwd);
     if (r && r.code !== 0) return `JavaScript syntax error:\n${r.out.trim().split('\n').slice(0, 8).join('\n')}`;
     return null;
   }

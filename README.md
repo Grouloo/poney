@@ -1,4 +1,4 @@
-# Local Codex
+# poney
 
 A desktop coding agent (in the spirit of Claude Code / Codex) built for **small local models**:
 Ollama, LM Studio, llama.cpp server, vLLM. The interface is in French.
@@ -57,7 +57,7 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   compaction), so the server only reads the new tokens. The compaction summary is requested as a continuation of
   the conversation already in cache (seconds instead of minutes of re-reading on modest hardware).
 - Nudge when the model pastes code instead of writing it to a file.
-- Project notes read from `AGENTS.md` / `LOCAL_CODEX.md` / `CLAUDE.md`.
+- Project notes read from `AGENTS.md` / `PONEY.md` / `CLAUDE.md`.
 
 ## Interface
 
@@ -70,7 +70,7 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   Useful after a stop or a failure (slow Tor, missing file…). A group of sub-agents restarts as a whole.
   Works for actions of old conversations too: the state is then rebuilt from the transcript.
 - **Saved, renamable conversations** (✎ or double-click), per project folder
-  (`~/Library/Application Support/local-codex/conversations/`): they can be reopened after a restart, and the agent
+  (`~/Library/Application Support/poney/conversations/`): they can be reopened after a restart, and the agent
   resumes with its history. Saved during a turn too (at every answer and action): a crash or a Ctrl-C only loses a few
   seconds, and a turn that was interrupted is flagged when the conversation is reopened. If the window crashes, it
   reloads by itself and the agent goes on; errors go to `logs/main.log`.

@@ -83,3 +83,15 @@ export class ConversationStore {
     return out.sort((a, b) => b.updatedAt - a.updatedAt);
   }
 }
+
+/** Moves the app's own data (settings, conversations, logs) from an old data folder, once. */
+export function moveAppData(from, to) {
+  for (const name of ['settings.json', 'conversations', 'logs']) {
+    try {
+      if (fs.existsSync(path.join(from, name)) && !fs.existsSync(path.join(to, name))) {
+        fs.mkdirSync(to, { recursive: true });
+        fs.renameSync(path.join(from, name), path.join(to, name));
+      }
+    } catch {}
+  }
+}

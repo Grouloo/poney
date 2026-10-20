@@ -34,7 +34,7 @@ export const DEFAULT_CONFIG = {
   searxngUrl: '',
 };
 
-const PROJECT_NOTE_FILES = ['AGENTS.md', 'LOCAL_CODEX.md', 'CLAUDE.md'];
+const PROJECT_NOTE_FILES = ['AGENTS.md', 'PONEY.md', 'LOCAL_CODEX.md', 'CLAUDE.md'];
 /**
  * Timing of one generation. Uses the server's counts and durations when it
  * reports them (not the case when we stop the stream early), else estimates.
