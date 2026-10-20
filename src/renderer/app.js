@@ -1,6 +1,7 @@
 import { parseActions, splitThinking, normalizeToolCalls } from '../agent/protocol.js';
 import hljs from '../../node_modules/@highlightjs/cdn-assets/es/highlight.min.js';
 import { fmtNum, fmtDuration } from './format.js';
+import { markdown, esc } from './markdown.js';
 
 const $ = (id) => document.getElementById(id);
 const transcript = $('transcript');
@@ -15,29 +16,6 @@ const bubbles = new Map(); // assistant id -> {el, raw, thinking}
 const cards = new Map(); // action id -> card element
 
 // ---------- helpers ----------
-const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-
-function markdown(src) {
-  const blocks = [];
-  let s = src.replace(/```[\w.+-]*\n?([\s\S]*?)(```|$)/g, (_, code) => {
-    blocks.push(`<pre><code>${esc(code.replace(/\n$/, ''))}</code></pre>`);
-    return `\u0000${blocks.length - 1}\u0000`;
-  });
-  s = esc(s)
-    .replace(/`([^`\n]+)`/g, '<code>$1</code>')
-    .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/^#{1,6} (.*)$/gm, '<h3>$1</h3>')
-    .replace(/(?:^|\n)((?:[-*] .*(?:\n|$))+)/g, (_, list) =>
-      `\n<ul>${list.trim().split('\n').map((l) => `<li>${l.replace(/^[-*] /, '')}</li>`).join('')}</ul>\n`);
-  const html = s.split(/\n{2,}/).map((p) => {
-    const t = p.trim();
-    if (!t) return '';
-    if (/^(<ul>|<h3>|\u0000\d+\u0000$)/.test(t)) return t;
-    return `<p>${t.replace(/\n/g, '<br>')}</p>`;
-  }).join('');
-  return html.replace(/\u0000(\d+)\u0000/g, (_, i) => blocks[+i]);
-}
-
 function scrollDown(force) {
   const nearBottom = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 160;
   if (force || nearBottom) transcript.scrollTop = transcript.scrollHeight;
