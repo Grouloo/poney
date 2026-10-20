@@ -109,6 +109,19 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   One GPU: speed is shared; measured with gemma-4 on two modules + tests: 6 min 56 instead of 10 min 41.
 - **Viewer** with syntax highlighting and image preview; paths in the agent's actions are clickable.
 
+## Platforms
+
+Developed and tested on macOS. Windows is supported in the code but not tested on a real machine yet: commands run
+in `cmd.exe` (the model is told so), a stopped command kills its whole process tree (`taskkill /T`), files with
+Windows line endings (CRLF) can be edited and keep them, paths are shown with `/`, and the Python syntax check uses
+`py -3` or `python`. Linux should work like macOS.
+
+## Without Tor
+
+Tor is off by default and optional: without it, web search and fetching go directly to the sites. If the Tor switch
+is turned on while Tor is not running, web requests are refused with an explanation (never sent in the clear), and
+the status dot is red.
+
 ## Layout
 
 - `src/agent/` — core, independent of the UI (loop, protocol, tools, LLM client, web, Tor)

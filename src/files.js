@@ -18,7 +18,7 @@ export async function listDir(cwd, rel = '.') {
     .filter((e) => e.name !== '.DS_Store')
     .map((e) => ({
       name: e.name,
-      path: path.relative(cwd, path.join(abs, e.name)),
+      path: path.relative(cwd, path.join(abs, e.name)).split(path.sep).join('/'),
       dir: e.isDirectory(),
       ignored: e.isDirectory() && IGNORED_DIRS.has(e.name),
     }))

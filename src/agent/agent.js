@@ -169,7 +169,7 @@ export class Agent extends EventEmitter {
   async defaultSystemPrompt() {
     return buildSystemPrompt({
       cwd: this.cwd,
-      platform: `${os.platform()} ${os.arch()}`,
+      platform: os.platform() === 'win32' ? `Windows ${os.arch()}, commands run in cmd.exe` : `${os.platform()} ${os.arch()}`,
       projectNotes: await this.loadProjectNotes(),
       testCommand: this.config.testCommand,
       shell: this.config.shellEnabled !== false,

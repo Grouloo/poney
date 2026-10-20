@@ -1,6 +1,7 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
+  platform: process.platform,
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setConfig: (patch) => ipcRenderer.invoke('settings:setConfig', patch),
   chooseWorkspace: () => ipcRenderer.invoke('workspace:choose'),

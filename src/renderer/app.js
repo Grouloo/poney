@@ -1108,6 +1108,7 @@ $('ctxGauge').onclick = async () => {
 };
 
 // ---------- init ----------
+document.body.classList.add(`platform-${window.api.platform}`);
 settings = await window.api.getSettings();
 renderSettings();
 refreshModels();

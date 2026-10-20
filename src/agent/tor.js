@@ -55,12 +55,18 @@ export async function findTorProxy(configured) {
   return null;
 }
 
+const TOR_START_HINT = process.platform === 'darwin'
+  ? 'Lancez Tor Browser ou le service tor (brew services start tor), ou désactivez Tor.'
+  : process.platform === 'win32'
+    ? 'Lancez Tor Browser (et laissez-le ouvert) ou le service tor (Tor Expert Bundle), ou désactivez Tor.'
+    : 'Lancez Tor Browser ou le service tor (sudo systemctl start tor), ou désactivez Tor.';
+
 /** The proxy to use, or an explanation of why the request is refused. */
 export async function requireTor(configured) {
   const proxy = await findTorProxy(configured);
   if (proxy) return proxy;
   const where = normalizeProxy(configured) || `127.0.0.1:${TOR_DEFAULT_PORTS.join(' ou ')}`;
-  throw new TorUnavailableError(`Tor est activé mais injoignable (${where}) : la requête n'a pas été envoyée. Lancez Tor Browser ou le service tor (brew services start tor).`);
+  throw new TorUnavailableError(`Tor est activé mais injoignable (${where}) : la requête n'a pas été envoyée. ${TOR_START_HINT}`);
 }
 
 const agents = new Map();

@@ -27,7 +27,8 @@ export function resolveInside(cwd, p) {
   if (rel.startsWith('..') || path.isAbsolute(rel)) {
     throw new ToolError(`Path "${clean}" is outside the project folder. Use paths relative to the project.`);
   }
-  return { abs, rel: rel || '.' };
+  // Always "/" (Windows gives "\\"): the model, the history and the UI use "/".
+  return { abs, rel: rel.split(path.sep).join('/') || '.' };
 }
 
 async function exists(p) {
@@ -108,7 +109,7 @@ async function searchTool(cwd, args) {
     if (text.includes('\u0000')) return;
     const lines = text.split('\n');
     for (let i = 0; i < lines.length && hits.length < 80; i++) {
-      if (re.test(lines[i])) hits.push(`${path.relative(cwd, p)}:${i + 1}: ${lines[i].trim().slice(0, 200)}`);
+      if (re.test(lines[i])) hits.push(`${path.relative(cwd, p).split(path.sep).join('/')}:${i + 1}: ${lines[i].trim().slice(0, 200)}`);
     }
   }
   await walk(abs);
@@ -135,8 +136,15 @@ async function syntaxCheck(abs, content, cwd) {
     try { JSON.parse(content); return null; } catch (e) { return `JSON syntax error: ${e.message}`; }
   }
   if (ext === '.py') {
-    const r = await runCapture('python3', ['-c', 'import ast,sys; ast.parse(open(sys.argv[1]).read(), sys.argv[1])', abs], cwd);
-    if (r && r.code !== 0) return `Python syntax error:\n${r.out.trim().split('\n').slice(-6).join('\n')}`;
+    const check = ['-c', 'import ast,sys; ast.parse(open(sys.argv[1], encoding="utf-8").read(), sys.argv[1])', abs];
+    // Windows: "py" launcher or "python"; "python3" may be the Microsoft Store stub.
+    const pythons = process.platform === 'win32' ? [['py', '-3'], ['python'], ['python3']] : [['python3'], ['python']];
+    for (const [cmd, ...pre] of pythons) {
+      const r = await runCapture(cmd, [...pre, ...check], cwd);
+      if (!r || /was not found|Microsoft Store|not recognized|No installed Python/i.test(r.out)) continue; // not this one
+      if (r.code !== 0) return `Python syntax error:\n${r.out.trim().split('\n').slice(-6).join('\n')}`;
+      return null;
+    }
     return null;
   }
   if (['.js', '.mjs', '.cjs'].includes(ext)) {
@@ -261,6 +269,9 @@ async function editTool(cwd, args) {
   try { content = await fs.readFile(abs, 'utf8'); } catch {
     throw new ToolError(`File "${rel}" does not exist. Use <write> to create it.`);
   }
+  // Windows line endings: the model writes <old> with "\n" only. Match on LF, write back CRLF.
+  const crlf = content.includes('\r\n');
+  if (crlf) content = content.replace(/\r\n/g, '\n');
   const pairs = parseEditBody(args.body || '');
   if (!pairs.length) {
     throw new ToolError('No <old>...</old><new>...</new> pair found. Format:\n<edit path="file">\n<old>exact existing lines</old>\n<new>replacement lines</new>\n</edit>');
@@ -287,7 +298,7 @@ async function editTool(cwd, args) {
     }
     content = content.slice(0, loc.start) + replacement + content.slice(loc.end);
   }
-  await fs.writeFile(abs, content);
+  await fs.writeFile(abs, crlf ? content.replace(/\r?\n/g, '\r\n') : content);
   const err = await syntaxCheck(abs, content, cwd);
   let output = `Edited ${rel} (${pairs.length} change${pairs.length > 1 ? 's' : ''}).`;
   if (err) output += `\nWARNING, the file now has an error:\n${err}`;
@@ -308,6 +319,11 @@ export function runShell(command, { cwd, timeoutSec = 120, signal, onOutput, env
     let out = '';
     let timedOut = false;
     const kill = () => {
+      if (process.platform === 'win32') {
+        // child.kill() would stop cmd.exe only: its children (a server, a test run) keep the output open.
+        try { spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' }); } catch { try { child.kill(); } catch {} }
+        return;
+      }
       try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch {} }
     };
     const timer = setTimeout(() => { timedOut = true; kill(); }, timeoutSec * 1000);

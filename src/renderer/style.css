@@ -36,9 +36,10 @@ button, input, select, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; }
 
 /* ---------- top bar ---------- */
+.platform-darwin .topbar { padding-left: 84px; } /* room for macOS traffic lights */
 .topbar {
   display: flex; align-items: center; gap: 8px;
-  padding: 10px 14px 10px 84px; /* room for macOS traffic lights */
+  padding: 10px 14px;
   border-bottom: 1px solid var(--border);
   -webkit-app-region: drag;
 }

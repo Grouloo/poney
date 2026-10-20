@@ -140,3 +140,17 @@ test('a call glued to a sentence and spanning lines is a real call', () => {
   assert.equal(actions[0].tool, 'run');
   assert.match(actions[0].args.command, /^curl -X POST[\s\S]*"Hello!"[\s\S]*\}'$/);
 });
+
+test('edit on a file with Windows line endings: matched with "\\n", written back with "\\r\\n"', async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-crlf-'));
+  await fs.writeFile(path.join(cwd, 'w.py'), 'def f():\r\n    a = 1\r\n    return a\r\n');
+  const r = await executeAction({ tool: 'edit', args: { path: 'w.py', body: '<old>    a = 1\n    return a</old><new>    a = 2\n    b = 3\n    return a + b</new>' } }, { cwd, config: {} });
+  assert.equal(r.ok, true, r.output);
+  assert.equal(await fs.readFile(path.join(cwd, 'w.py'), 'utf8'), 'def f():\r\n    a = 2\r\n    b = 3\r\n    return a + b\r\n');
+});
+
+test('relative paths use "/" whatever the system', async () => {
+  const { resolveInside } = await import('../src/agent/tools.js');
+  assert.equal(resolveInside('/proj', 'src/sub/a.py').rel, 'src/sub/a.py');
+  assert.throws(() => resolveInside('/proj', '../x'), /outside/);
+});
