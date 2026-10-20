@@ -93,6 +93,11 @@ const isCircuitFailure = (e) => e?.code === 'TOR_CIRCUIT';
  * seen after the Mac sleeps), ask Tor for new circuits and try once more.
  */
 export async function proxyFetch(url, opts = {}) {
+  // Under the Bun runtime, node:http ignores the SOCKS agent: the request would
+  // go out in the clear. Refuse (the app runs in Electron, i.e. Node: not affected).
+  if (process.versions.bun) {
+    throw new TorUnavailableError('Tor ne fonctionne pas quand le code tourne sous Bun : le proxy serait ignoré et la requête partirait en clair, elle n’a donc pas été envoyée. Lancez la ligne de commande avec Node (node src/cli.js), ou utilisez l’app.');
+  }
   try {
     const res = await proxyFetchOnce(url, opts);
     markTraffic(opts.proxy, true);

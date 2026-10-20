@@ -252,3 +252,23 @@ test('degraded: circuits established but the last request failed', async () => {
   }
   throw new Error('no free port pair');
 });
+
+// Under the Bun runtime, node:http ignores the SOCKS agent: Tor requests must be refused, never sent in the clear.
+test('under the Bun runtime, a Tor request is refused instead of going out in the clear', async (t) => {
+  const { execFileSync, spawnSync } = await import('node:child_process');
+  try { execFileSync('bun', ['--version'], { stdio: 'ignore' }); } catch { return t.skip('bun not installed'); }
+  const script = `
+    import http from 'node:http';
+    import { proxyFetch } from ${JSON.stringify(new URL('../src/agent/tor.js', import.meta.url).href)};
+    let direct = 0;
+    const target = http.createServer((req, res) => { direct++; res.end('x'); });
+    await new Promise((r) => target.listen(0, r));
+    let error = '';
+    try { await proxyFetch('http://127.0.0.1:' + target.address().port + '/', { proxy: 'socks5h://127.0.0.1:9', retry: false, timeoutMs: 3000 }); } catch (e) { error = e.name; }
+    console.log(JSON.stringify({ direct, error }));
+    process.exit(0);`;
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-bun-'));
+  await fs.writeFile(path.join(dir, 'probe.mjs'), script);
+  const r = spawnSync('bun', [path.join(dir, 'probe.mjs')], { encoding: 'utf8', timeout: 30000 });
+  assert.deepEqual(JSON.parse(r.stdout.trim().split('\n').pop()), { direct: 0, error: 'TorUnavailableError' });
+});

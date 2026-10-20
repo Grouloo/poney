@@ -116,6 +116,15 @@ in `cmd.exe` (the model is told so), a stopped command kills its whole process t
 Windows line endings (CRLF) can be edited and keep them, paths are shown with `/`, and the Python syntax check uses
 `py -3` or `python`. Linux should work like macOS.
 
+## Bun
+
+`bun install`, `bun start` and `bun run test` work (the tests then run with Node). The app itself always runs in
+Electron, so its runtime is Node whatever starts it. Two limits when Bun is the runtime:
+
+- `bun test` (Bun's own test runner) only partly emulates `node:test`: use `bun run test`.
+- `bun src/cli.js` works, but **Tor is refused** under Bun: its `node:http` ignores the SOCKS agent, so requests
+  would go out in the clear. Use `node src/cli.js --tor` for Tor from the command line.
+
 ## Without Tor
 
 Tor is off by default and optional: without it, web search and fetching go directly to the sites. If the Tor switch
