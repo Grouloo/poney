@@ -1,6 +1,6 @@
 {
   "name": "poney",
-  "productName": "poney",
+  "productName": "Poney",
   "version": "0.1.0",
   "description": "Desktop coding agent built for small local models (Ollama, LM Studio, llama.cpp).",
   "type": "module",

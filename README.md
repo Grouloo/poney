@@ -1,4 +1,4 @@
-# poney
+# Poney
 
 A desktop coding agent (in the spirit of Claude Code / Codex) built for **small local models**:
 Ollama, LM Studio, llama.cpp server, vLLM. The interface is in French.
@@ -128,7 +128,7 @@ the status dot is red.
 - `src/main.js`, `src/preload.cjs`, `src/renderer/` — Electron app
 - `src/conversations.js`, `src/files.js` — conversation storage, file access for the viewer
 - `src/cli.js` — command-line runner
-- `scripts/brand-electron.mjs` — macOS, development: renames the Electron bundle to `poney.app` and gives it the app's icon, so the Dock shows them (run by `npm start`)
+- `scripts/brand-electron.mjs` — macOS, development: renames the Electron bundle to `Poney.app` and gives it the app's icon, so the Dock shows them (run by `npm start`)
 - `assets/` — app icon (`icon.svg` source; `icon.png` for the macOS Dock, `icon.icns` for the bundle, `icon-square.png` for the Windows/Linux taskbar)
 
 ## Tor on a network that blocks Tor

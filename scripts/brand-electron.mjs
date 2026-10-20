@@ -9,7 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const NAME = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).productName || 'poney';
+const NAME = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).productName || 'Poney';
 
 export function brandBundle(bundle, icns, name = NAME) {
   const plist = path.join(bundle, 'Contents', 'Info.plist');
@@ -29,27 +29,28 @@ export function brandBundle(bundle, icns, name = NAME) {
 }
 
 /**
- * Renames <pkg>/dist/Electron.app to <name>.app and points the electron package
- * at it (path.txt). Not while it runs: its helper processes start from that path.
+ * Renames the bundle the electron package uses (<pkg>/dist/Electron.app, or an
+ * earlier name such as poney.app) to <name>.app, and points the package at it
+ * (path.txt). Not while it runs: its helper processes start from that path.
  * Returns the bundle to use.
  */
 export function renameBundle(pkg, name = NAME) {
-  const dist = path.join(pkg, 'dist');
-  const from = path.join(dist, 'Electron.app');
-  const to = path.join(dist, `${name}.app`);
   const pathTxt = path.join(pkg, 'path.txt');
-  if (fs.existsSync(from)) {
-    let running = '';
-    try { running = execFileSync('pgrep', ['-f', `${from}/Contents/MacOS/`], { encoding: 'utf8' }).trim(); } catch {}
-    if (running) {
-      console.warn(`${name}: Electron.app is in use (an app is open), it will be renamed at the next start.`);
-      return from;
-    }
-    fs.rmSync(to, { recursive: true, force: true }); // left by an earlier install of electron
-    fs.renameSync(from, to);
+  const current = fs.readFileSync(pathTxt, 'utf8').trim().split('/')[0]; // "Electron.app"
+  const from = path.join(pkg, 'dist', current);
+  const to = path.join(pkg, 'dist', `${name}.app`);
+  if (current === `${name}.app`) return from;
+  let running = '';
+  try { running = execFileSync('pgrep', ['-f', `${from}/Contents/MacOS/`], { encoding: 'utf8' }).trim(); } catch {}
+  if (running) {
+    console.warn(`${name}: ${current} is in use (the app is open), it will be renamed at the next start.`);
+    return from;
   }
-  if (fs.existsSync(to)) fs.writeFileSync(pathTxt, `${name}.app/Contents/MacOS/Electron`);
-  return fs.existsSync(to) ? to : from;
+  // A bundle left by an earlier install of electron (not the same folder in another case).
+  if (fs.existsSync(to) && fs.statSync(to).ino !== fs.statSync(from).ino) fs.rmSync(to, { recursive: true, force: true });
+  fs.renameSync(from, to);
+  fs.writeFileSync(pathTxt, `${name}.app/Contents/MacOS/Electron`);
+  return to;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url) && process.platform === 'darwin') {

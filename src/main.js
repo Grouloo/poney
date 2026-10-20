@@ -27,6 +27,8 @@ loadShellPath();
 const dataOverride = process.env.PONEY_DATA || process.env.LOCAL_CODEX_DATA; // (old name)
 if (dataOverride) app.setPath('userData', dataOverride);
 else {
+  // Fixed folder name: the displayed name ("Poney") may change case, the data must not move.
+  app.setPath('userData', path.join(app.getPath('appData'), 'poney'));
   // The app was called Local Codex: move its data (settings, conversations, logs)
   // to the new folder once. (Electron creates that folder before this runs.)
   moveAppData(path.join(app.getPath('appData'), 'local-codex'), app.getPath('userData'));
@@ -325,7 +327,7 @@ function createWindow() {
     height: 820,
     minWidth: 720,
     minHeight: 500,
-    title: 'poney',
+    title: 'Poney',
     backgroundColor: '#14161a',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     webPreferences: {
