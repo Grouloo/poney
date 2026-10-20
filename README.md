@@ -64,6 +64,7 @@ node src/cli.js --cwd ./mon-projet --model qwen2.5:14b "tâche"   # mode headles
 - **Reprendre d'ici** (au survol d'une action) : l'agent revient juste après le message qui demandait cette action,
   la relance (avec la suite de son lot ; les résultats des actions précédentes du lot sont gardés) et continue. Utile
   après un arrêt ou un échec (Tor lent, fichier manquant…). Un groupe de sous-agents repart en entier.
+  Marche aussi pour les actions des anciennes conversations : l'état est alors reconstruit depuis le fil.
 - **Conversations sauvegardées et renommables** (✎ ou double-clic) par dossier de projet (`~/Library/Application Support/local-codex/conversations/`) :
   on peut les rouvrir après redémarrage, l'agent reprend avec son historique.
 - **Navigateur de fichiers** qui se met à jour quand l'agent écrit, et révèle le fichier modifié.

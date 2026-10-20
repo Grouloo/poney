@@ -7,7 +7,7 @@ import { Agent, DEFAULT_CONFIG } from './agent/agent.js';
 import { listModels } from './agent/llm.js';
 import { ConversationStore } from './conversations.js';
 import { listDir, readFileForViewer } from './files.js';
-import { migrateLegacy, rebuildHistory } from './agent/rebuild.js';
+import { migrateLegacy, rebuildHistory, rebuildForAction } from './agent/rebuild.js';
 import { checkTor, torStatus, newCircuits, findTorProxy } from './agent/tor.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -164,13 +164,21 @@ ipcMain.handle('agent:resumeFrom', (_, actId) => {
   if (a.running) throw new Error('L’agent est en cours d’exécution.');
   if (!conv) throw new Error('Aucune conversation ouverte.');
   const cp = a.findActionCheckpoint(actId);
-  if (!cp) throw new Error('Cette action ne peut pas servir de point de reprise (conversation antérieure à cette fonction).');
-  // Cut the transcript at the first action re-run (a sub-agent group restarts as a whole).
-  const at = conv.events.findIndex((e) => e.type === 'action_start' && !e.agentId && cp.actIds.includes(e.id));
-  if (at < 0) throw new Error('Action introuvable dans cette conversation.');
-  conv.events = conv.events.slice(0, at);
+  if (cp) {
+    // Cut the transcript at the first action re-run (a sub-agent group restarts as a whole).
+    const at = conv.events.findIndex((e) => e.type === 'action_start' && !e.agentId && cp.actIds.includes(e.id));
+    if (at < 0) throw new Error('Action introuvable dans cette conversation.');
+    conv.events = conv.events.slice(0, at);
+    store.save(conv);
+    a.resumeFrom(actId).catch((e) => send('agent:event', { type: 'error', message: e.message }));
+    return { events: conv.events };
+  }
+  // No resume point (action saved before they existed): rebuild the state from the transcript.
+  const rebuilt = rebuildForAction(conv.events, actId);
+  if (!rebuilt) throw new Error('Impossible de reprendre depuis cette action : elle est introuvable dans la conversation.');
+  conv.events = conv.events.slice(0, rebuilt.cutAt);
   store.save(conv);
-  a.resumeFrom(actId).catch((e) => send('agent:event', { type: 'error', message: e.message }));
+  a.resumeFromRebuilt(rebuilt).catch((e) => send('agent:event', { type: 'error', message: e.message }));
   return { events: conv.events };
 });
 

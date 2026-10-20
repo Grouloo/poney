@@ -239,6 +239,22 @@ export class Agent extends EventEmitter {
     return this.send(null, { resume: cp });
   }
 
+  /**
+   * Same as resumeFrom, for an action without resume point (older conversation):
+   * the state is rebuilt from the transcript (see rebuildForAction).
+   */
+  resumeFromRebuilt(rebuilt) {
+    if (this.running) throw new Error('Agent is running.');
+    this.messages = rebuilt.messages;
+    this.untested = false;
+    // Message checkpoints up to the request being resumed stay (rebuilt on use); later ones go.
+    const t = rebuilt.turnId ? this.checkpoints.findIndex((c) => c.turnId === rebuilt.turnId) : -1;
+    this.checkpoints = (t >= 0 ? this.checkpoints.slice(0, t + 1) : []).filter((c) => c.turnId).map((c) => ({ turnId: c.turnId, rebuild: true }));
+    this.archives = [];
+    this.lastUsage = null;
+    return this.send(null, { resume: rebuilt });
+  }
+
   /** Brings the history back to checkpoint i (which is removed, with the later ones). */
   restoreCheckpoint(i) {
     const cp = this.checkpoints[i];

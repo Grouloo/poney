@@ -80,3 +80,65 @@ test('rewinding to a rebuilt checkpoint restores the rebuilt history', async () 
   assert.deepEqual(agent.checkpoints, [{ turnId: 'legacy-0', rebuild: true }]);
   assert.throws(() => agent.rewind('legacy-0'), /Rebuilt history required/);
 });
+
+// ---------- resuming from an old action (no resume point) ----------
+import { rebuildForAction } from '../src/agent/rebuild.js';
+import http from 'node:http';
+
+test('the resume state of an old action is rebuilt from the transcript', () => {
+  // Action 3 (run) comes after action 2 (write) in the same message.
+  const r = rebuildForAction(events, 3);
+  assert.deepEqual(r.messages.map((m) => m.role), ['user', 'assistant']);
+  assert.match(r.messages[1].content, /<write path="hello\.py">[\s\S]*<run>python3 hello\.py<\/run>$/);
+  assert.equal(r.priorResults.length, 1);
+  assert.match(r.priorResults[0], /<result tool="write" path="hello\.py">\nCreated hello\.py/);
+  assert.deepEqual(r.remaining, [{ tool: 'run', args: { command: 'python3 hello.py' } }]);
+  assert.equal(r.cutAt, events.findIndex((e) => e.type === 'action_start' && e.id === 3));
+  assert.equal(r.currentTask, 'Crée hello.py');
+  assert.equal(r.turnStartIndex, 0);
+
+  // Action 6 (read) in the second request; the app's own check (7) is not re-run.
+  const r2 = rebuildForAction(events, 6);
+  assert.deepEqual(r2.remaining, [{ tool: 'read', args: { path: 'hello.py' } }]);
+  assert.equal(r2.priorResults.length, 0);
+  assert.equal(r2.currentTask, 'Ajoute un test');
+  assert.equal(r2.messages[r2.turnStartIndex].content, 'Ajoute un test');
+  assert.equal(r2.messages.at(-1).content, '<read path="hello.py" />');
+  assert.equal(rebuildForAction(events, 999), null);
+});
+
+test('an old failed action is re-run and the agent goes on', async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-legacy-'));
+  const old = [
+    { type: 'user_message', text: 'Que contient a.txt ?' },
+    { type: 'assistant_start', id: 1 },
+    { type: 'assistant_end', id: 1, text: 'Je lis.', thinking: '' },
+    { type: 'action_start', id: 2, tool: 'read', args: { path: 'a.txt' } },
+    { type: 'action_end', id: 2, ok: false, output: 'File "a.txt" does not exist.', meta: { path: 'a.txt' } },
+    { type: 'assistant_start', id: 3 },
+    { type: 'assistant_end', id: 3, text: 'Impossible.', thinking: '' },
+    { type: 'turn_end', reason: 'done' },
+  ];
+  await fs.writeFile(path.join(cwd, 'a.txt'), 'A\n');
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (d) => (body += d));
+    req.on('end', () => {
+      const data = JSON.parse(body);
+      requests.push(data);
+      const content = /1\| A/.test(data.messages.at(-1).content) ? 'Contenu : A' : 'Impossible.';
+      res.end(`${JSON.stringify({ message: { content }, done: true, done_reason: 'stop' })}\n`);
+    });
+  });
+  await new Promise((r) => server.listen(0, r));
+  const agent = new Agent({ cwd, config: { baseUrl: `http://localhost:${server.address().port}`, model: 'm' } });
+  const evs = [];
+  agent.on('event', (e) => evs.push(e));
+  await agent.resumeFromRebuilt(rebuildForAction(old, 2));
+  server.close();
+  assert.deepEqual(evs.filter((e) => e.type === 'action_start').map((e) => e.tool), ['read']);
+  assert.equal(evs.find((e) => e.type === 'final').text, 'Contenu : A');
+  assert.deepEqual(requests[0].messages.slice(1).map((m) => m.role), ['user', 'assistant', 'user']);
+  assert.doesNotMatch(JSON.stringify(requests[0].messages), /does not exist/);
+});

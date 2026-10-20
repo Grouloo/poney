@@ -14,6 +14,7 @@ export function actionTag(tool, a = {}) {
     case 'fetch': return `<fetch>${a.url ?? ''}</fetch>`;
     case 'search': return `<search${attr('pattern', a.pattern)}${attr('path', a.path)} />`;
     case 'read': return `<read${attr('path', a.path)}${attr('start', a.start)}${attr('end', a.end)} />`;
+    case 'agent': return `<agent${attr('title', a.title)}>\n${a.task ?? ''}\n</agent>`;
     default: return `<${tool}${attr('path', a.path)}${attr('depth', a.depth)} />`;
   }
 }
@@ -113,4 +114,57 @@ export function migrateLegacy(conv) {
   // Legacy messages all come before the ones that already have checkpoints.
   conv.checkpoints = [...fresh, ...existing];
   return true;
+}
+
+/**
+ * Resume state for an action that has no checkpoint (conversations saved before
+ * resume points existed), rebuilt from the transcript: the history up to the
+ * message that asked for it (with all its actions), the results of the actions
+ * before it in that message, and the actions to run again. A sub-agent restarts
+ * with its whole group. Null if the action is not found.
+ */
+export function rebuildForAction(events, actId) {
+  const top = (e) => !e.agentId;
+  const at = events.findIndex((e) => e.type === 'action_start' && e.id === actId && top(e));
+  if (at < 0) return null;
+  let stepAt = -1;
+  for (let i = at - 1; i >= 0; i--) {
+    if (top(events[i]) && events[i].type === 'assistant_end') { stepAt = i; break; }
+    if (top(events[i]) && events[i].type === 'user_message') break;
+  }
+  if (stepAt < 0) return null;
+  let stepEnd = events.length;
+  for (let i = stepAt + 1; i < events.length; i++) {
+    if (top(events[i]) && (events[i].type === 'assistant_end' || events[i].type === 'user_message')) { stepEnd = i; break; }
+  }
+  const step = events.slice(stepAt + 1, stepEnd).filter((e) => top(e) && e.type === 'action_start' && !e.auto);
+  const ends = new Map(events.filter((e) => top(e) && e.type === 'action_end').map((e) => [e.id, e]));
+  let j = step.findIndex((e) => e.id === actId);
+  if (j < 0) return null;
+  if (step[j].tool === 'agent') while (j > 0 && step[j - 1].tool === 'agent') j--; // the whole group
+
+  const before = rebuildHistory(events.slice(0, stepAt));
+  const ask = events[stepAt];
+  const content = [ask.text || '', ...step.map((a) => actionTag(a.tool, a.args || {}))].filter(Boolean).join('\n');
+  const messages = [...before];
+  const last = messages[messages.length - 1];
+  const assistant = withReasoning(content, ask.thinking || '');
+  if (last?.role === 'assistant') last.content += `\n\n${assistant}`;
+  else messages.push({ role: 'assistant', content: assistant });
+
+  const priorResults = step.slice(0, j).map((a) => resultText({ tool: a.tool, args: a.args || {}, end: ends.get(a.id) }));
+  const remaining = step.slice(j).map((a) => ({ tool: a.tool, args: { ...(a.args || {}) } }));
+  // The request being worked on: the last message the user wrote before this step.
+  const request = [...events.slice(0, stepAt)].reverse().find((e) => e.type === 'user_message');
+  let turnStartIndex = messages.findLastIndex((m) => m.role === 'user' && request && m.content.includes(request.text));
+  if (turnStartIndex < 0) turnStartIndex = 0;
+  return {
+    messages,
+    remaining,
+    priorResults,
+    turnStartIndex,
+    currentTask: request?.text ?? null,
+    turnId: request?.turnId ?? null,
+    cutAt: events.indexOf(step[j]), // the transcript is cut at the first action run again
+  };
 }
