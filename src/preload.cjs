@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('api', {
   listModels: (cfg) => ipcRenderer.invoke('models:list', cfg),
   send: (text, turnId) => ipcRenderer.invoke('agent:send', text, turnId),
   rewind: (turnId) => ipcRenderer.invoke('agent:rewind', turnId),
+  resumeFrom: (actId) => ipcRenderer.invoke('agent:resumeFrom', actId),
   stop: () => ipcRenderer.invoke('agent:stop'),
   reset: () => ipcRenderer.invoke('agent:reset'),
   approve: (id, ok, always) => ipcRenderer.invoke('agent:approve', { id, ok, always }),

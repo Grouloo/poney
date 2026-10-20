@@ -157,6 +157,23 @@ ipcMain.handle('agent:stop', () => {
 });
 ipcMain.handle('agent:reset', () => startNewConversation());
 
+// Resume the conversation from a past action: everything after it is removed,
+// the action runs again and the agent goes on (events stream as for a message).
+ipcMain.handle('agent:resumeFrom', (_, actId) => {
+  const a = getAgent();
+  if (a.running) throw new Error('L’agent est en cours d’exécution.');
+  if (!conv) throw new Error('Aucune conversation ouverte.');
+  const cp = a.findActionCheckpoint(actId);
+  if (!cp) throw new Error('Cette action ne peut pas servir de point de reprise (conversation antérieure à cette fonction).');
+  // Cut the transcript at the first action re-run (a sub-agent group restarts as a whole).
+  const at = conv.events.findIndex((e) => e.type === 'action_start' && !e.agentId && cp.actIds.includes(e.id));
+  if (at < 0) throw new Error('Action introuvable dans cette conversation.');
+  conv.events = conv.events.slice(0, at);
+  store.save(conv);
+  a.resumeFrom(actId).catch((e) => send('agent:event', { type: 'error', message: e.message }));
+  return { events: conv.events };
+});
+
 ipcMain.handle('conversations:list', () => ({
   current: conv?.id ?? null,
   items: settings.workspace ? store.list(settings.workspace) : [],

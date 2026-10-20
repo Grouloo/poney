@@ -294,6 +294,30 @@ function startEditMessage(m, turnId, text) {
   });
 }
 
+/** "Resume from here" on the agent's own actions (not the app's checks, not inside a sub-agent). */
+function addResumeButton(card, ev) {
+  if (target || ev.auto) return;
+  const btn = document.createElement('button');
+  btn.className = 'resume-btn';
+  btn.textContent = '↻ Reprendre d’ici';
+  btn.title = 'Relancer cette action et reprendre la conversation à partir d’elle (la suite est retirée)';
+  btn.onclick = (e) => { e.stopPropagation(); resumeFromAction(ev.id); };
+  card.querySelector('.card-head').appendChild(btn);
+}
+
+async function resumeFromAction(id) {
+  if (running) return;
+  if (!confirm('Reprendre à partir de cette action ?\n\nElle sera relancée, et tout ce qui la suit sera retiré de la conversation. Les fichiers déjà modifiés ne sont pas restaurés.')) return;
+  try {
+    const { events } = await window.api.resumeFrom(id);
+    replayTranscript(events);
+    setRunning(true);
+    refreshGauge();
+  } catch (e) {
+    add(div('error', esc(errorText(e))));
+  }
+}
+
 function replayTranscript(events) {
   transcript.innerHTML = '';
   bubbles.clear();
@@ -547,6 +571,7 @@ function onEvent(ev) {
         card.querySelector('.sub-task pre').textContent = ev.args.task || '';
         card.querySelector('.card-head').onclick = () => card.classList.toggle('open');
         card.dataset.tool = 'agent';
+        addResumeButton(card, ev);
         cards.set(ev.id, card);
         add(card);
         break;
@@ -564,6 +589,7 @@ function onEvent(ev) {
       if (ev.tool === 'run') card.classList.add('open');
       card.dataset.tool = ev.tool;
       card.dataset.path = ev.args.path || '';
+      addResumeButton(card, ev);
       cards.set(ev.id, card);
       add(card);
       break;

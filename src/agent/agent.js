@@ -210,12 +210,38 @@ export class Agent extends EventEmitter {
       if (!rebuilt) throw new Error('Rebuilt history required.');
       this.messages = rebuilt;
       this.untested = false;
-      this.checkpoints = this.checkpoints.slice(0, i).map((c) => ({ turnId: c.turnId, rebuild: true }));
+      // (action resume points cannot be rebuilt: they are dropped)
+      this.checkpoints = this.checkpoints.slice(0, i).filter((c) => c.turnId).map((c) => ({ turnId: c.turnId, rebuild: true }));
       this.archives = [];
       this.lastUsage = null;
       this.currentTask = null;
       return;
     }
+    this.restoreCheckpoint(i);
+  }
+
+  /** The resume point of a past action (and the ids of the actions it re-runs), or null. */
+  findActionCheckpoint(actId) {
+    return this.checkpoints.find((c) => c.kind === 'action' && c.actIds.includes(actId)) || null;
+  }
+
+  /**
+   * Resumes the conversation from a past action: back to the history just after
+   * the message that asked for it, then that action (and the rest of its batch)
+   * runs again and the agent goes on. Files are not restored.
+   */
+  resumeFrom(actId) {
+    if (this.running) throw new Error('Agent is running.');
+    const i = this.checkpoints.findIndex((c) => c.kind === 'action' && c.actIds.includes(actId));
+    if (i < 0) throw new Error('Cette action ne peut pas servir de point de reprise.');
+    const cp = this.checkpoints[i];
+    this.restoreCheckpoint(i);
+    return this.send(null, { resume: cp });
+  }
+
+  /** Brings the history back to checkpoint i (which is removed, with the later ones). */
+  restoreCheckpoint(i) {
+    const cp = this.checkpoints[i];
     const base = cp.archive == null ? this.messages : this.archives[cp.archive];
     if (!base) throw new Error('L’historique de ce point de reprise n’est plus disponible.');
     this.messages = base.slice(0, cp.length).map((m) => ({ ...m }));
@@ -409,7 +435,7 @@ export class Agent extends EventEmitter {
    * Runs a group of <agent> actions, at most maxParallelAgents at a time, and
    * returns their reports as results (in the order of the tags).
    */
-  async runSubAgents(group, signal) {
+  async runSubAgents(group, signal, ids = group.map(() => nextId++)) {
     const limit = Math.max(1, Math.min(Number(this.config.maxParallelAgents) || 2, 8));
     const results = new Array(group.length);
     let next = 0;
@@ -417,7 +443,7 @@ export class Agent extends EventEmitter {
     const worker = async () => {
       while (next < group.length && !signal.aborted) {
         const k = next++;
-        results[k] = await this.runSubAgent(group[k], signal, share);
+        results[k] = await this.runSubAgent(group[k], signal, share, ids[k]);
       }
     };
     await Promise.all(Array.from({ length: Math.min(limit, group.length) }, worker));
@@ -425,8 +451,7 @@ export class Agent extends EventEmitter {
     return results;
   }
 
-  async runSubAgent(action, signal, maxReportChars) {
-    const id = nextId++;
+  async runSubAgent(action, signal, maxReportChars, id = nextId++) {
     const title = String(action.args.title || 'sous-agent').slice(0, 60);
     const task = String(action.args.task || '').trim();
     this.emit('event', { type: 'action_start', id, tool: 'agent', args: { title, task } });
@@ -665,9 +690,9 @@ export class Agent extends EventEmitter {
 
   // ----- main loop -----
 
-  async send(userText, { turnId } = {}) {
+  async send(userText, { turnId, resume } = {}) {
     if (this.running) throw new Error('Agent is already running.');
-    if (turnId) this.checkpoints.push({ turnId, archive: null, length: this.messages.length, untested: this.untested });
+    if (turnId && !resume) this.checkpoints.push({ turnId, archive: null, length: this.messages.length, untested: this.untested });
     this.running = true;
     this.abort = new AbortController();
     const { signal } = this.abort;
@@ -676,8 +701,8 @@ export class Agent extends EventEmitter {
     // from scratch after each result) until a compaction summarizes it: removing
     // it here would change the start of the prompt and force the server to
     // re-read everything (minutes on local hardware).
-    this.turnStartIndex = this.messages.length;
-    this.currentTask = userText;
+    this.turnStartIndex = resume ? resume.turnStartIndex : this.messages.length;
+    this.currentTask = resume ? resume.currentTask : userText;
     const turnT0 = Date.now();
     // Totals over all the generations of this turn, shown once under the answer.
     const turnStats = { totalMs: 0, genMs: 0, promptMs: 0, tokens: 0, exact: true, steps: 0 };
@@ -689,7 +714,7 @@ export class Agent extends EventEmitter {
       turnStats.exact &&= st.exact;
       turnStats.steps++;
     };
-    this.messages.push({ role: 'user', content: userText });
+    if (!resume) this.messages.push({ role: 'user', content: userText });
     this.emit('event', { type: 'turn_start' });
 
     const system = this.systemPrompt ?? await this.defaultSystemPrompt();
@@ -706,14 +731,28 @@ export class Agent extends EventEmitter {
     let reason = 'done';
 
     const notice = (text) => this.emit('event', { type: 'notice', text });
+    // Resuming from an action: its batch is run first, without generating.
+    let pending = resume ? { actions: resume.remaining, results: resume.priorResults } : null;
 
     try {
+      const stopped = () => Object.assign(new Error('aborted'), { name: 'AbortError' });
       for (let step = 0; ; step++) {
+        if (signal.aborted) throw stopped(); // stopped during an action: do not generate again
         if (step >= config.maxSteps) {
           reason = 'max_steps';
           notice(`Limite de ${config.maxSteps} étapes atteinte. Envoyez "continue" pour poursuivre.`);
           break;
         }
+        let actions = [];
+        let cutNote = '';
+        let toRun = [];
+        let results = [];
+        if (pending) {
+          toRun = pending.actions.map((a) => ({ ...a, args: { ...a.args } }));
+          results = [...pending.results];
+          actions = [...toRun];
+          pending = null;
+        } else {
         const c = await this.maybeCompact(system, signal);
         if (!c.compacted) await this.emitContext(system);
         let gen = await this.generate(system, signal);
@@ -743,9 +782,8 @@ export class Agent extends EventEmitter {
         // (e.g. half a file in <write>): never execute those.
         const parsed = parseActions(gen.text, { final: !gen.truncated });
         const prose = parsed.text;
-        const actions = parsed.actions.filter((a) => a.complete);
+        actions = parsed.actions.filter((a) => a.complete);
         const unfinished = parsed.actions.find((a) => !a.complete);
-        let cutNote = '';
         if (gen.truncated) {
           cutNote = unfinished
             ? `Your message was cut at the length limit: the last <${unfinished.tool}> was unfinished and was NOT executed. Work in smaller pieces (use <edit>, or split big files).`
@@ -807,7 +845,6 @@ export class Agent extends EventEmitter {
         // ---------- execute actions ----------
         // Writes/edits can be batched; stop after the first action whose result
         // the model must see (it cannot know the result yet).
-        const toRun = [];
         for (const a of actions) {
           // Consecutive <agent> tags form a group run at the same time; other
           // actions run in order until the first one whose result is needed.
@@ -817,9 +854,22 @@ export class Agent extends EventEmitter {
         }
         const last = toRun[toRun.length - 1];
         this.messages.push({ role: 'assistant', content: this.assistantContent(gen, gen.text.slice(0, last.end).trim()) });
+        } // end of the generation step (skipped when resuming a batch)
 
-        const results = [];
         let stopBatch = false;
+        // Resume point for the actions of this batch: the history up to the
+        // message that asked for them, and the results already obtained.
+        const resumePoint = (actIds, fromIndex) => this.checkpoints.push({
+          kind: 'action',
+          actIds,
+          archive: null,
+          length: this.messages.length,
+          untested: this.untested,
+          remaining: toRun.slice(fromIndex).map(({ tool, args, raw, start, end, complete }) => ({ tool, args, raw, start, end, complete })),
+          priorResults: [...results],
+          turnStartIndex: this.turnStartIndex,
+          currentTask: this.currentTask,
+        });
         // Files the model can see the content of (the current message has no results yet).
         const seenFiles = filesInContext(this.messages);
         if (toRun[0].tool === 'agent') {
@@ -831,14 +881,17 @@ export class Agent extends EventEmitter {
               results.push(formatResult('agent', { title: action.args.title }, 'Sub-agents are disabled. Do the task yourself.'));
             }
           } else {
-            results.push(...await this.runSubAgents(toRun, signal));
+            const ids = toRun.map(() => nextId++);
+            resumePoint(ids, 0); // resuming any member re-runs the whole group
+            results.push(...await this.runSubAgents(toRun, signal, ids));
             changedThisTurn = true; // sub-agents may have changed files
           }
           toRun.length = 0;
         }
-        for (const action of toRun) {
+        for (const [k, action] of toRun.entries()) {
           if (stopBatch) break;
           const actId = nextId++;
+          resumePoint([actId], k);
           this.emit('event', { type: 'action_start', id: actId, tool: action.tool, args: action.args });
           if (!isToolEnabled(action.tool, config)) {
             const what = action.tool === 'run' ? 'Running commands' : 'Internet access';
@@ -868,6 +921,7 @@ export class Agent extends EventEmitter {
             onOutput: (t) => this.emit('event', { type: 'action_output', id: actId, text: t }),
           });
           this.emit('event', { type: 'action_end', id: actId, ok: r.ok, output: r.output, diff: r.diff, meta: r.meta });
+          if (signal.aborted) throw stopped(); // the action was interrupted: keep it as the resume point
           if (action.tool === 'write' && r.changed) seenFiles.add(r.changed);
 
           if (r.changed) {

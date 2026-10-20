@@ -325,3 +325,12 @@ fieldset label.check input { width: auto; }
 .card.subagent .sub-log .card { width: 100%; }
 .card.subagent .sub-report { font-size: 13.5px; }
 .card.subagent .sub-report:not(:empty) { border-top: 1px solid var(--border); padding-top: 8px; }
+
+/* ---------- resume from an action ---------- */
+.resume-btn {
+  margin-left: 4px; background: none; border: 1px solid transparent; border-radius: 6px; padding: 0 6px;
+  font-size: 11px; color: var(--muted); visibility: hidden; flex-shrink: 0;
+}
+.card-head:hover .resume-btn { visibility: visible; }
+.resume-btn:hover { color: var(--accent); border-color: var(--border); }
+body.running .resume-btn { display: none; }
