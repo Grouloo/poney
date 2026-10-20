@@ -320,6 +320,7 @@ ipcMain.handle('agent:approve', (_, { id, ok, always }) => {
 
 function createWindow() {
   win = new BrowserWindow({
+    icon: path.join(here, '..', 'assets', 'icon-square.png'), // taskbar (Windows, Linux)
     width: 1200,
     height: 820,
     minWidth: 720,
@@ -354,6 +355,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  if (process.platform === 'darwin') app.dock?.setIcon(path.join(here, '..', 'assets', 'icon.png'));
   loadSettings();
   store = new ConversationStore(path.join(app.getPath('userData'), 'conversations'));
   createWindow();

@@ -128,6 +128,7 @@ the status dot is red.
 - `src/main.js`, `src/preload.cjs`, `src/renderer/` — Electron app
 - `src/conversations.js`, `src/files.js` — conversation storage, file access for the viewer
 - `src/cli.js` — command-line runner
+- `assets/` — app icon (`icon.svg` source; `icon.png` for the macOS Dock, `icon-square.png` for the Windows/Linux taskbar)
 
 ## Tor on a network that blocks Tor
 

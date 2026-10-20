@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.4" y2="1">
+      <stop offset="0" stop-color="#7B6CF6"/>
+      <stop offset="1" stop-color="#3A2C9C"/>
+    </linearGradient>
+    <linearGradient id="coat" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FFF8EC"/>
+      <stop offset="1" stop-color="#F3DFC1"/>
+    </linearGradient>
+    <linearGradient id="mane" x1="0" y1="0" x2="0.3" y2="1">
+      <stop offset="0" stop-color="#FF8FA3"/>
+      <stop offset="1" stop-color="#FF5C7A"/>
+    </linearGradient>
+    <clipPath id="tile"><rect x="100" y="100" width="824" height="824" rx="185"/></clipPath>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="14" stdDeviation="16" flood-color="#000" flood-opacity="0.28"/>
+    </filter>
+  </defs>
+  <g filter="url(#shadow)">
+    <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
+  </g>
+  <g clip-path="url(#tile)">
+    <!-- neck -->
+    <path d="M585 300 C 720 360, 800 600, 830 940 L 505 940 C 530 780, 560 650, 520 560 Z" fill="url(#coat)"/>
+    <!-- head -->
+    <ellipse cx="495" cy="470" rx="215" ry="125" transform="rotate(-40 495 470)" fill="url(#coat)"/>
+    <!-- muzzle -->
+    <ellipse cx="368" cy="600" rx="98" ry="86" transform="rotate(-40 368 600)" fill="#F1D9B5"/>
+    <!-- mane -->
+    <path d="M640 250 C 700 230, 760 270, 760 320 C 810 340, 830 400, 805 440
+             C 860 470, 870 540, 840 575 C 890 615, 895 690, 860 725
+             C 905 770, 900 850, 870 900 L 900 940 L 830 940
+             C 800 600, 720 360, 585 300 C 600 275, 615 258, 640 250 Z" fill="url(#mane)"/>
+    <!-- ears (in front of the mane) -->
+    <path d="M648 318 C 655 260, 680 205, 712 172 C 728 225, 726 285, 706 335 Z" fill="#E9D3B2"/>
+    <path d="M572 330 C 575 265, 598 205, 632 168 C 652 222, 655 285, 640 332 Z" fill="url(#coat)"/>
+    <path d="M594 318 C 598 270, 612 228, 630 205 C 642 245, 642 285, 634 318 Z" fill="#FFB3C1"/>
+    <!-- forelock -->
+    <path d="M585 300 C 560 330, 540 370, 548 410 C 520 380, 520 330, 545 300 C 560 285, 575 288, 585 300 Z" fill="url(#mane)"/>
+    <!-- eye -->
+    <circle cx="560" cy="430" r="24" fill="#2B2350"/>
+    <circle cx="568" cy="421" r="8" fill="#FFFFFF"/>
+    <!-- nostril and mouth -->
+    <ellipse cx="335" cy="585" rx="14" ry="20" transform="rotate(-40 335 585)" fill="#9C7A5B"/>
+    <path d="M330 660 C 360 668, 395 660, 415 640" stroke="#9C7A5B" stroke-width="10" fill="none" stroke-linecap="round"/>
+  </g>
+</svg>
