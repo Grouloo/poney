@@ -106,7 +106,9 @@ test('DuckDuckGo results keep their snippets whatever the markup between title a
 });
 
 // ---------- connection status ----------
-import { torControlStatus, torStatus } from '../src/agent/tor.js';
+import { torControlStatus, torStatus, closeTorControls } from '../src/agent/tor.js';
+import { afterEach } from 'node:test';
+afterEach(() => closeTorControls()); // persistent control connections would keep the test process alive
 
 /** Fake Tor control port: cookie authentication, then the given bootstrap phase. */
 async function fakeControl(phase, { circuit = true } = {}) {
@@ -130,6 +132,7 @@ async function fakeControl(phase, { circuit = true } = {}) {
 test('control port: cookie authentication and bootstrap progress', async () => {
   const ctl = await fakeControl('NOTICE BOOTSTRAP PROGRESS=45 TAG=loading_descriptors SUMMARY="Loading relay descriptors"', { circuit: false });
   const s = await torControlStatus(ctl.port);
+  closeTorControls();
   ctl.server.close();
   assert.deepEqual(s, { progress: 45, summary: 'Loading relay descriptors', warning: null, circuit: false });
   assert.deepEqual(ctl.auths, [ctl.cookie.toString('hex')]);
@@ -147,7 +150,7 @@ test('status: off, connecting, stuck, connected', async () => {
       const ctl = await fakeControl(phase, { circuit });
       const socks = net.createServer();
       const ok = await new Promise((r) => { socks.once('error', () => r(false)); socks.listen(ctl.port - 1, '127.0.0.1', () => r(true)); });
-      if (ok) return { proxy: `127.0.0.1:${ctl.port - 1}`, close: () => { ctl.server.close(); socks.close(); } };
+      if (ok) return { proxy: `127.0.0.1:${ctl.port - 1}`, close: () => { closeTorControls(); ctl.server.close(); socks.close(); } };
       ctl.server.close();
     }
     throw new Error('no free port pair');
@@ -167,4 +170,27 @@ test('status: off, connecting, stuck, connected', async () => {
   s = await torStatus({ torEnabled: true, torProxy: p.proxy });
   p.close();
   assert.equal(s.state, 'connected');
+});
+
+test('100 % without an open circuit: reconnecting for a while, then checked by a test connection', async () => {
+  // Control port says 100 % but no circuit; the SOCKS port refuses connections -> no-circuit, not "bootstrapping".
+  for (let tries = 0; tries < 20; tries++) {
+    const ctl = await fakeControl('NOTICE BOOTSTRAP PROGRESS=100 TAG=done SUMMARY="Done"', { circuit: false });
+    const socks = await fakeSocks(null);
+    socks.server.close();
+    const s2 = net.createServer((c) => { c.once('data', () => { c.write(Buffer.from([5, 0])); c.once('data', () => c.end(Buffer.from([5, 1, 0, 1, 0, 0, 0, 0, 0, 0]))); }); });
+    const ok = await new Promise((r) => { s2.once('error', () => r(false)); s2.listen(ctl.port - 1, '127.0.0.1', () => r(true)); });
+    if (!ok) { ctl.server.close(); continue; }
+    const proxy = `127.0.0.1:${ctl.port - 1}`;
+    // Within the grace period after losing its circuits (e.g. sleep): reconnecting, not an error.
+    const first = await torStatus({ torEnabled: true, torProxy: proxy }, { probeEveryMs: 0 });
+    // Past it, a failing test connection means no circuit.
+    const later = await torStatus({ torEnabled: true, torProxy: proxy }, { probeEveryMs: 0, reconnectGraceMs: 0 });
+    closeTorControls();
+    ctl.server.close(); s2.close();
+    assert.equal(first.state, 'reconnecting');
+    assert.equal(later.state, 'no-circuit');
+    return;
+  }
+  throw new Error('no free port pair');
 });
