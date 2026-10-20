@@ -6,7 +6,7 @@
   "type": "module",
   "main": "src/main.js",
   "scripts": {
-    "start": "electron .",
+    "start": "node scripts/brand-electron.mjs && electron .",
     "cli": "node src/cli.js",
     "test": "node --test test/*.test.js"
   },
