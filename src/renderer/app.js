@@ -455,6 +455,37 @@ function streamingDisplay(raw) {
   return { text: text.replace(/<\|?[a-z_]*$/, ''), pending };
 }
 
+// Streaming redraws are batched: redrawing a long answer (Markdown, KaTeX) and
+// its reflection at every token saturates the window over a long generation.
+const dirty = new Set();
+let drawTimer = null;
+let drawCost = 0;
+
+function scheduleDraw(b) {
+  dirty.add(b);
+  if (drawTimer) return;
+  // At most ~10 redraws per second, fewer when a redraw is slow.
+  drawTimer = setTimeout(drawStreaming, Math.max(100, drawCost * 4));
+}
+
+function drawStreaming() {
+  drawTimer = null;
+  const t0 = performance.now();
+  for (const b of dirty) {
+    if (b.ended) continue;
+    if (b.thinkingEl) {
+      b.thinkingEl.querySelector('summary').textContent = `Réflexion… ${b.thinkPieces} tokens`;
+      b.thinkingEl.querySelector('div').textContent = b.thinking;
+    }
+    const { text, pending } = streamingDisplay(b.raw);
+    const tool = b.toolPending && b.toolName ? ` (${esc(b.toolName)})` : '';
+    b.bubble.innerHTML = markdown(text) + (pending || b.toolPending ? `<p class="muted"><span class="spin">◌</span> prépare une action${tool}…</p>` : '');
+  }
+  dirty.clear();
+  drawCost = performance.now() - t0;
+  scrollDown();
+}
+
 function onEvent(ev) {
   // A sub-agent's events are drawn inside its card, with the same rendering.
   if (ev.agentId) {
@@ -484,8 +515,9 @@ function onEvent(ev) {
       break;
     }
     case 'delta': {
+      // Bubble missing: the window was reloaded during this generation.
+      if (!bubbles.has(ev.id)) onEvent({ type: 'assistant_start', id: ev.id });
       const b = bubbles.get(ev.id);
-      if (!b) break;
       if (promptProgress?.id === ev.id) promptProgress = null; // first token: reading is over
       // Live counter (one streamed piece ≈ one token): makes a long generation visible.
       b.pieces = (b.pieces || 0) + 1;
@@ -494,9 +526,8 @@ function onEvent(ev) {
       if (ev.kind === 'tool') {
         // Native tool call being generated: parsed at the end, show that something is coming.
         b.toolName = ev.name || b.toolName;
-        const { text } = streamingDisplay(b.raw);
-        b.bubble.innerHTML = markdown(text) + `<p class="muted"><span class="spin">◌</span> prépare une action${b.toolName ? ` (${esc(b.toolName)})` : ''}…</p>`;
-        scrollDown();
+        b.toolPending = true;
+        scheduleDraw(b);
         break;
       }
       if (ev.kind === 'thinking') {
@@ -508,20 +539,18 @@ function onEvent(ev) {
           b.thinkingEl.innerHTML = '<summary>Réflexion…</summary><div></div>';
           b.el.insertBefore(b.thinkingEl, b.bubble);
         }
-        b.thinkingEl.querySelector('summary').textContent = `Réflexion… ${b.thinkPieces} tokens`;
-        b.thinkingEl.querySelector('div').textContent = b.thinking;
       } else {
         b.raw += ev.text;
-        const { text, pending } = streamingDisplay(b.raw);
-        b.bubble.innerHTML = markdown(text) + (pending ? '<p class="muted"><span class="spin">◌</span> prépare une action…</p>' : '');
       }
-      scrollDown();
+      scheduleDraw(b);
       break;
     }
     case 'assistant_end': {
       const b = bubbles.get(ev.id);
       if (!b) break;
       if (liveGen === b) liveGen = null;
+      b.ended = true;
+      dirty.delete(b);
       b.bubble.classList.remove('cursor');
       const thinking = (b.thinking + (ev.thinking && !b.thinking ? ev.thinking : '')).trim();
       if (thinking && !b.thinkingEl) {
@@ -1076,4 +1105,10 @@ refreshConversations();
 refreshTree();
 refreshPromptBadge();
 refreshGauge();
+// Window reloaded (after a crash) while a conversation was open: draw it again.
+const session = await window.api.currentSession();
+if (session.events.length) {
+  replayTranscript(session.events);
+  if (session.running) setRunning(true);
+}
 input.focus();

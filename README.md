@@ -67,6 +67,8 @@ node src/cli.js --cwd ./mon-projet --model qwen2.5:14b "tâche"   # mode headles
   Marche aussi pour les actions des anciennes conversations : l'état est alors reconstruit depuis le fil.
 - **Conversations sauvegardées et renommables** (✎ ou double-clic) par dossier de projet (`~/Library/Application Support/local-codex/conversations/`) :
   on peut les rouvrir après redémarrage, l'agent reprend avec son historique.
+  Sauvegarde aussi pendant un tour (à chaque réponse et action) : un plantage ou un Ctrl-C ne fait perdre que quelques
+  secondes. Si la fenêtre plante, elle se recharge seule et l'agent continue ; les erreurs vont dans `logs/main.log`.
 - **Réponses en Markdown** : tableaux (style GitHub, avec alignement) et formules LaTeX rendues par KaTeX
   (`$…$`, `\(…\)` en ligne ; `$$…$$`, `\[…\]` en bloc). Les prix comme « $5 et $10 » restent du texte.
 - **Navigateur de fichiers** qui se met à jour quand l'agent écrit, et révèle le fichier modifié.

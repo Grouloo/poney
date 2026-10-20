@@ -26,6 +26,17 @@ function loadShellPath() {
 loadShellPath();
 if (process.env.LOCAL_CODEX_DATA) app.setPath('userData', process.env.LOCAL_CODEX_DATA);
 
+// ---------- crash log ----------
+// Errors and crashes go to <userData>/logs/main.log, so that the next one can be explained.
+function logError(what, detail) {
+  try {
+    const dir = path.join(app.getPath('userData'), 'logs');
+    fs.mkdirSync(dir, { recursive: true });
+    const text = detail instanceof Error ? detail.stack : typeof detail === 'string' ? detail : JSON.stringify(detail);
+    fs.appendFileSync(path.join(dir, 'main.log'), `${new Date().toISOString()} ${what}: ${text}\n`);
+  } catch {}
+}
+
 // ---------- settings ----------
 const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
 let settings = { config: { ...DEFAULT_CONFIG }, workspace: '', recent: [] };
@@ -66,14 +77,27 @@ function getAgent() {
       send('agent:event', ev);
       if (!conv) return;
       store.record(conv, ev);
-      if (ev.type === 'turn_end') saveConversation();
+      // Saved during the turn too: a crash or a forced quit loses a few seconds, not the turn.
+      if (ev.type === 'turn_start') conv.inProgress = true;
+      if (ev.type === 'turn_end') {
+        conv.inProgress = false;
+        saveConversation();
+      } else if (!ev.agentId && SAVED_DURING_TURN.has(ev.type)) saveSoon();
     });
   }
   agent.config = { ...DEFAULT_CONFIG, ...settings.config };
   return agent;
 }
 
+const SAVED_DURING_TURN = new Set(['assistant_end', 'action_end', 'compaction', 'error', 'notice']);
+let saveTimer = null;
+function saveSoon() {
+  saveTimer ??= setTimeout(saveConversation, 3000);
+}
+
 function saveConversation() {
+  clearTimeout(saveTimer);
+  saveTimer = null;
   if (!conv || !agent) return;
   conv.messages = agent.messages;
   conv.untested = agent.untested;
@@ -186,6 +210,7 @@ ipcMain.handle('conversations:list', () => ({
   current: conv?.id ?? null,
   items: settings.workspace ? store.list(settings.workspace) : [],
 }));
+ipcMain.handle('session:current', () => ({ events: conv?.events ?? [], running: !!agent?.running }));
 ipcMain.handle('conversations:open', (_, id) => {
   if (agent?.running) throw new Error('L’agent est en cours d’exécution.');
   const loaded = store.load(id);
@@ -200,6 +225,12 @@ ipcMain.handle('conversations:open', (_, id) => {
   a.checkpoints = loaded.checkpoints ?? [];
   a.archives = loaded.archives ?? [];
   a.upgradeReasoning(); // older reasoning blocks -> short notes
+  if (loaded.inProgress) {
+    // The app stopped during a turn (crash, forced quit): say so, and how to go on.
+    loaded.inProgress = false;
+    store.record(loaded, { type: 'notice', text: 'L’app s’est arrêtée pendant ce tour. Le travail est sauvegardé jusqu’ici : « ↻ Reprendre d’ici » sur la dernière action pour continuer, ou envoyez un message.' });
+    store.save(loaded, { touch: false });
+  }
   conv = loaded;
   return { events: loaded.events, settings };
 });
@@ -293,6 +324,19 @@ function createWindow() {
     },
   });
   win.loadFile(path.join(here, 'renderer', 'index.html'));
+  // The window's page crashed or froze: the agent (here) goes on; save, and give a fresh page.
+  win.webContents.on('render-process-gone', (_, details) => {
+    logError('render-process-gone', details);
+    saveConversation();
+    if (details.reason !== 'clean-exit' && win && !win.isDestroyed()) win.reload();
+  });
+  win.on('unresponsive', () => {
+    logError('unresponsive', 'window not responding');
+    saveConversation();
+  });
+  win.webContents.on('console-message', (_, level, message, line, source) => {
+    if (level >= 3) logError('renderer', `${message} (${source}:${line})`);
+  });
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:/.test(url)) shell.openExternal(url);
     return { action: 'deny' };
@@ -306,6 +350,19 @@ app.whenReady().then(() => {
   app.on('activate', () => BrowserWindow.getAllWindows().length === 0 && createWindow());
 });
 app.on('before-quit', () => saveConversation());
+// Ctrl-C in the terminal, kill: Electron quits without 'before-quit'.
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  process.on(sig, () => {
+    saveConversation();
+    app.exit(0);
+  });
+}
+process.on('uncaughtException', (e) => {
+  logError('uncaughtException', e);
+  saveConversation();
+  send('agent:event', { type: 'error', message: `Erreur interne (détails dans logs/main.log) : ${e.message}` });
+});
+process.on('unhandledRejection', (e) => logError('unhandledRejection', e));
 app.on('window-all-closed', () => {
   agent?.stop();
   if (process.platform !== 'darwin') app.quit();

@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('api', {
   onEvent: (fn) => ipcRenderer.on('agent:event', (_, ev) => fn(ev)),
   onApproval: (fn) => ipcRenderer.on('agent:approval', (_, req) => fn(req)),
 
+  currentSession: () => ipcRenderer.invoke('session:current'),
   listConversations: () => ipcRenderer.invoke('conversations:list'),
   openConversation: (id) => ipcRenderer.invoke('conversations:open', id),
   renameConversation: (id, title) => ipcRenderer.invoke('conversations:rename', id, title),

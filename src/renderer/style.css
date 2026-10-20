@@ -88,7 +88,7 @@ select.chip { max-width: 240px; }
 .bubble th { background: var(--panel-2); font-weight: 600; text-align: left; }
 .bubble tbody tr:nth-child(even) td { background: color-mix(in srgb, var(--panel-2) 45%, transparent); }
 .bubble .math { overflow-x: auto; overflow-y: hidden; margin: 4px 0 10px; }
-.bubble .katex { font-size: 1.08em; }
+.bubble .katex { font-size: 1.08em; position: relative; } /* holds KaTeX's hidden MathML, which otherwise stretched the page */
 .cursor::after { content: '▍'; animation: blink 1s steps(2) infinite; color: var(--accent); }
 @keyframes blink { 50% { opacity: 0; } }
 
