@@ -1,119 +1,125 @@
 # Local Codex
 
-Agent de code desktop (style Claude Code / Codex) pensé pour les **petits modèles locaux** :
-Ollama, LM Studio, llama.cpp server, vLLM.
+A desktop coding agent (in the spirit of Claude Code / Codex) built for **small local models**:
+Ollama, LM Studio, llama.cpp server, vLLM. The interface is in French.
 
 ```bash
 npm install
-npm start            # app desktop
-npm test             # tests unitaires
-node src/cli.js --cwd ./mon-projet --model qwen2.5:14b "tâche"   # mode headless
+npm start            # desktop app
+npm test             # unit tests
+node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
 ```
 
-## Ce qui est fait pour les petits modèles
+## What is done for small models
 
-- **Prompt système court** (~600 tokens) avec un exemple, au lieu de plusieurs milliers.
-- **Outils en balises texte**, pas en JSON : `<write path="a.py">…</write>`, `<run>…</run>`.
-  Le code n'a pas besoin d'être échappé. Le parseur est tolérant : alias (`bash`, `read_file`…),
-  arguments en attributs ou en sous-balises, guillemets optionnels, blocs ``` retirés.
-- **8 outils seulement** : list, read, search, write, edit, run, web_search, fetch.
-- **Édition tolérante** : `<old>` peut avoir une indentation fausse (ré-indentation automatique),
-  et en cas d'échec l'agent reçoit les lignes les plus proches du fichier.
-- **Vérification syntaxique** automatique après chaque écriture (.py, .js, .json).
-- **Garde-fou contre les réécritures de mémoire** : `<write>` sur un fichier existant est refusé si son contenu
-  n'est pas visible dans l'historique (lu avec `<read>` ou écrit par le modèle, et pas effacé par un compactage).
-  Une forte réduction d'un fichier (plus de la moitié des lignes) déclenche un avertissement.
-- **Barrière de test** : l'agent ne peut pas conclure tant qu'il a du code modifié non exécuté
-  avec succès. Si une *commande de test* est configurée, elle est lancée automatiquement et doit passer.
-- **Arrêt anticipé** de la génération dès qu'une action nécessite un résultat (pas de résultats inventés).
-- **Gestion du contexte** : sorties d'outils bornées, `num_ctx` réglable (Ollama natif), et **compactage** :
-  le plus tard possible, quand l'appel suivant ne tiendrait plus dans la fenêtre (réponse minimale + marge
-  d'estimation, ~80-84 % d'une fenêtre de 16k), les anciens messages sont remplacés par un résumé (généré par le modèle, validé, avec repli)
-  plus des faits extraits mécaniquement (fichiers modifiés, dernières commandes). Compacter rarement mais beaucoup
-  garde le début du prompt stable, donc le cache du serveur reste utilisable. L'estimation des tokens est
-  calibrée sur les comptes réels renvoyés par le serveur. La taille de contexte réellement chargée par le serveur
-  (LM Studio, llama.cpp server, vLLM) est détectée et plafonne le réglage. Si le modèle n'arrive pas à écrire le
-  résumé, un résumé de secours est construit (demandes, résumé précédent, dernières notes) et la raison est affichée. La taille de réponse demandée s'adapte à la place restante
-  (jamais de dépassement de la fenêtre) ; une réponse coupée par la limite n'exécute jamais d'action inachevée,
-  et si la coupure vient du manque de place, le contexte est compacté puis l'étape relancée.
-- **Raisonnement conservé en note courte** : la fin de la réflexion du modèle (~600 caractères, texte simple) est
-  gardée devant ses messages, pour qu'il ne reparte pas de zéro après chaque résultat d'outil. Pas la réflexion
-  entière : avec Gemma, elle faisait produire au modèle uniquement des tokens invisibles.
-- **Outils déclarés nativement** aux modèles LM Studio qui le supportent (`tool_use`).
-- **Mode brut pour Gemma dans LM Studio** : le prompt est mis en forme avec le gabarit du modèle (SDK) et généré via
-  `/v1/completions`, qui renvoie chaque token. L'endpoint chat de LM Studio retenait tout ce qui suivait un début
-  d'appel d'outil (parfois ouvert dans la réflexion) : la génération continuait sans que rien ne sorte. La réflexion
-  (`<|channel>thought…<channel|>`) est séparée par l'app.
-- **Appel en fin de réflexion puis silence** : si le modèle termine sa réflexion (ou sa réponse) par un appel complet
-  et que plus rien de visible ne sort pendant 10 s, la génération est arrêtée et l'appel exécuté. Un plan qui cite
-  une commande puis continue n'est pas interrompu.
-- **Garde-fou** : si le modèle génère sans rien produire de visible, l'app le détecte (45 s après la lecture du
-  prompt) et réessaie sans les notes de raisonnement.
-- **Cache du serveur préservé** : le début du prompt ne change jamais d'un appel à l'autre (sauf au compactage),
-  donc le serveur ne relit que les nouveaux tokens. Le résumé de compactage est demandé dans la continuité de la
-  conversation déjà en cache (quelques secondes au lieu de plusieurs minutes de relecture sur du matériel modeste).
-- Détection de boucles, relance si le modèle colle du code au lieu de l'écrire.
-- Notes de projet lues depuis `AGENTS.md` / `LOCAL_CODEX.md` / `CLAUDE.md`.
+- **Short system prompt** (~600 tokens) with one example, instead of several thousand.
+- **Tools as text tags**, not JSON: `<write path="a.py">…</write>`, `<run>…</run>`.
+  Code does not need escaping. The parser is lenient: aliases (`bash`, `read_file`…),
+  arguments as attributes or child tags, optional quotes, ``` fences removed.
+- **Only 8 tools**: list, read, search, write, edit, run, web_search, fetch (plus `agent` for sub-agents).
+- **Lenient editing**: `<old>` may have the wrong indentation (re-indented automatically),
+  and on failure the agent gets the closest lines of the file.
+- **Syntax check** after every write (.py, .js, .json).
+- **Guard against rewrites from memory**: `<write>` on an existing file is refused if its content is not
+  visible in the history (read with `<read>` or written by the model, and not removed by a compaction).
+  A large shrink of a file (more than half of its lines) triggers a warning.
+- **Test gate**: the agent cannot finish while it has modified code that has not run successfully.
+  If a *test command* is configured, it runs automatically and must pass.
+- **Early stop** of the generation as soon as an action needs a result (no invented results).
+- **Context management**: bounded tool outputs, adjustable `num_ctx` (native Ollama), and **compaction**:
+  as late as possible, when the next call would no longer fit in the window (minimal answer + estimation
+  margin, ~80-84 % of a 16k window), old messages are replaced by a summary (written by the model, validated,
+  with a fallback) plus facts extracted mechanically (modified files, last commands). Compacting rarely but a lot
+  keeps the start of the prompt stable, so the server cache stays usable. Token estimates are calibrated on the
+  real counts returned by the server. The context size actually loaded by the server (LM Studio, llama.cpp server,
+  vLLM) is detected and caps the setting. If the model cannot write the summary, a fallback summary is built
+  (requests, previous summary, last notes) and the reason is shown. The requested answer size adapts to the room
+  left (never past the window); an answer cut by the limit never runs an unfinished action, and if the cut comes
+  from a lack of room, the context is compacted and the step retried.
+- **Reasoning kept as a short note**: the end of the model's reasoning (~600 characters, whole sentences, each
+  sentence once) is kept in front of its messages, so it does not start over after each tool result. Not the whole
+  reasoning: with Gemma, that made the model produce only invisible tokens. A note cut mid-word used to be copied
+  verbatim by the model at every step, until it looped.
+- **Loop detection**: a passage repeated three times in a row (in the reasoning or the answer, not inside a file
+  being written) stops the generation; one copy is kept. Without an action, the model is told to act instead of
+  restating its plan (twice, then the turn stops).
+- **Tools declared natively** to the LM Studio models that support it (`tool_use`).
+- **Raw mode for Gemma in LM Studio**: the prompt is formatted with the model's template (SDK) and generated through
+  `/v1/completions`, which returns every token. LM Studio's chat endpoint held back everything after the start of a
+  tool call (sometimes opened inside the reasoning): generation went on with nothing coming out. The reasoning
+  (`<|channel>thought…<channel|>`) is split by the app.
+- **Call at the end of the reasoning, then silence**: if the model ends its reasoning (or its answer) with a complete
+  call and nothing visible comes out for 10 s, the generation is stopped and the call runs. A plan that mentions a
+  command and goes on is not interrupted.
+- **Invisible-output guard**: if the model generates without producing anything visible, the app notices (45 s
+  after the prompt is read) and retries without the reasoning notes.
+- **Server cache preserved**: the start of the prompt never changes from one call to the next (except at
+  compaction), so the server only reads the new tokens. The compaction summary is requested as a continuation of
+  the conversation already in cache (seconds instead of minutes of re-reading on modest hardware).
+- Nudge when the model pastes code instead of writing it to a file.
+- Project notes read from `AGENTS.md` / `LOCAL_CODEX.md` / `CLAUDE.md`.
 
 ## Interface
 
-- **Modifier un message précédent et relancer** (« ✎ Modifier » au survol) : l'agent revient à son état d'avant ce
-  message, même à travers un compactage (l'historique remplacé est archivé), et la suite est supprimée. Les fichiers
-  déjà modifiés par l'agent ne sont pas restaurés. Les anciennes conversations sont migrées à l'ouverture : point de
-  reprise exact si le message est encore dans l'historique, sinon historique reconstruit depuis le fil sauvegardé.
-- **Reprendre d'ici** (au survol d'une action) : l'agent revient juste après le message qui demandait cette action,
-  la relance (avec la suite de son lot ; les résultats des actions précédentes du lot sont gardés) et continue. Utile
-  après un arrêt ou un échec (Tor lent, fichier manquant…). Un groupe de sous-agents repart en entier.
-  Marche aussi pour les actions des anciennes conversations : l'état est alors reconstruit depuis le fil.
-- **Conversations sauvegardées et renommables** (✎ ou double-clic) par dossier de projet (`~/Library/Application Support/local-codex/conversations/`) :
-  on peut les rouvrir après redémarrage, l'agent reprend avec son historique.
-  Sauvegarde aussi pendant un tour (à chaque réponse et action) : un plantage ou un Ctrl-C ne fait perdre que quelques
-  secondes. Si la fenêtre plante, elle se recharge seule et l'agent continue ; les erreurs vont dans `logs/main.log`.
-- **Réponses en Markdown** : tableaux (style GitHub, avec alignement) et formules LaTeX rendues par KaTeX
-  (`$…$`, `\(…\)` en ligne ; `$$…$$`, `\[…\]` en bloc). Les prix comme « $5 et $10 » restent du texte.
-- **Navigateur de fichiers** qui se met à jour quand l'agent écrit, et révèle le fichier modifié.
-- **Interrupteurs Web / Terminal** sous la zone de saisie (et `--no-web` / `--no-shell` en CLI) : un outil désactivé
-  disparaît du prompt système (prompt plus court) et est refusé si le modèle l'utilise quand même.
-- **Prompt système éditable par conversation** (bouton « Prompt système ») : on voit le prompt généré, on peut le
-  modifier, il est enregistré avec la conversation. Un badge « modifié » signale un prompt personnalisé.
-- **Jauge de contexte** sous la saisie (le trait marque le seuil de compactage) ; un clic compacte à la demande.
-  Les résumés apparaissent dans le fil, dépliables.
-- **Progression de la lecture du prompt** (LM Studio) : pourcentage et temps restant estimé dans la barre d'état
-  avant le premier token. LM Studio est détecté automatiquement derrière « Compatible OpenAI » : le prompt est lu via
-  son SDK (qui donne la progression) puis la réponse est générée en HTTP en réutilisant ce cache. La génération ne
-  passe pas par le SDK, que LM Studio coupe après ~5 min. Les autres serveurs n'exposent pas cette information.
-- **Flux coupé par le serveur** : ce qui était déjà écrit est conservé et les actions complètes sont exécutées.
-- **Appels d'outils natifs compris** : si le modèle utilise son format natif (Gemma `<|tool_call>…`, Hermes/Qwen
-  `<tool_call>{json}`, champs `tool_calls` des API OpenAI/Ollama), l'appel est converti dans nos balises.
-- **Temps et vitesse** : chronomètre dans la barre d'état pendant la réponse, puis une ligne sous la réponse finale :
-  durée totale, tokens et tokens/s sur l'ensemble des appels au modèle (comptes du serveur, ou estimés « ≈ »).
-- **Tor (option)** : recherche web et lecture de pages via le proxy SOCKS de Tor (démon `tor` sur 9050 ou Tor Browser
-  sur 9150, détectés automatiquement), noms résolus par Tor (`socks5h`), recherche via le service .onion de
-  DuckDuckGo. Si Tor est injoignable, la requête est refusée, jamais envoyée en clair. En option, les commandes du
-  terminal reçoivent les variables de proxy (efficace pour curl, git, wget… pas une garantie générale). Le serveur
-  de modèles local n'est pas concerné. Bouton de test (IP de sortie vue par check.torproject.org) ; CLI : `--tor`.
-  État en direct à côté de l'interrupteur (vert connecté, orange « connexion 45 % », rouge arrêté ou bloqué) : via le
-  port de contrôle de Tor (9051 / 9151, authentification par cookie) s'il est activé, sinon par une connexion de test
-  au plus toutes les 30 s.
-- **Sous-agents** : l'agent peut déléguer des tâches indépendantes (`<agent title="…">tâche</agent>`, plusieurs à la
-  suite, ou une liste `tasks` en un seul appel natif) ; elles tournent en même temps (2 par défaut, réglable), chacune
-  avec son historique, puis l'agent reçoit tous les rapports. Pas de sous-sous-agents. Écrire sur un fichier modifié
-  par un autre agent depuis sa lecture est refusé (relecture obligatoire), et les écritures d'un même fichier sont
-  sérialisées. Carte par sous-agent dans le fil (tâche, journal en direct, rapport) ; interrupteur « Sous-agents ».
-  Un seul GPU : la vitesse est partagée ; mesuré avec gemma-4 sur deux modules + tests : 6 min 56 au lieu de 10 min 41.
-- **Visualiseur** avec coloration syntaxique et aperçu d'images ; les chemins dans les actions de l'agent sont cliquables.
+- **Edit a previous message and relaunch** ("✎ Modifier" on hover): the agent goes back to its state before that
+  message, even across a compaction (the replaced history is archived), and what follows is removed. Files already
+  modified by the agent are not restored. When the exact state is gone (old conversations, a resume point lost in a
+  crash), the history is rebuilt from the saved transcript. If the relaunch fails, the editor stays open with the text.
+- **Resume from here** (on hover over an action): the agent goes back to just after the message that asked for that
+  action, runs it again (with the rest of its batch; results of the batch's earlier actions are kept) and goes on.
+  Useful after a stop or a failure (slow Tor, missing file…). A group of sub-agents restarts as a whole.
+  Works for actions of old conversations too: the state is then rebuilt from the transcript.
+- **Saved, renamable conversations** (✎ or double-click), per project folder
+  (`~/Library/Application Support/local-codex/conversations/`): they can be reopened after a restart, and the agent
+  resumes with its history. Saved during a turn too (at every answer and action): a crash or a Ctrl-C only loses a few
+  seconds, and a turn that was interrupted is flagged when the conversation is reopened. If the window crashes, it
+  reloads by itself and the agent goes on; errors go to `logs/main.log`.
+- **Markdown answers**: tables (GitHub style, with alignment) and LaTeX formulas rendered by KaTeX
+  (`$…$`, `\(…\)` inline; `$$…$$`, `\[…\]` as blocks). Prices like "$5 and $10" stay text.
+- **File browser** that updates when the agent writes, and reveals the modified file.
+- **Web / Terminal switches** under the input box (`--no-web` / `--no-shell` in the CLI): a disabled tool
+  disappears from the system prompt (shorter prompt) and is refused if the model uses it anyway.
+- **System prompt editable per conversation** ("Prompt système" button): see the generated prompt, edit it, and it is
+  saved with the conversation. A "modifié" badge marks a custom prompt.
+- **Context gauge** under the input (the tick marks the compaction threshold); a click compacts on demand.
+  Summaries appear in the transcript, expandable.
+- **Prompt reading progress** (LM Studio): percentage and estimated time left in the status bar before the first
+  token. LM Studio is detected automatically behind "OpenAI compatible": the prompt is read through its SDK (which
+  reports progress), then the answer is generated over HTTP reusing that cache. Generation does not go through the
+  SDK, which LM Studio cuts after ~5 min. Other servers do not expose this information.
+- **Stream cut by the server**: what was already written is kept and complete actions run.
+- **Native tool calls understood**: if the model uses its native format (Gemma `<|tool_call>…`, Hermes/Qwen
+  `<tool_call>{json}`, `tool_calls` fields of the OpenAI/Ollama APIs), the call is converted to our tags.
+- **Time and speed**: a timer in the status bar during the answer, then one line under the final answer:
+  total time, tokens and tokens/s over all the model calls (server counts, or estimates marked "≈").
+  Streaming redraws are batched (~10 per second), so long generations keep the window responsive.
+- **Tor (optional)**: web search and page fetching through Tor's SOCKS proxy (`tor` daemon on 9050 or Tor Browser
+  on 9150, detected automatically), names resolved by Tor (`socks5h`), search through DuckDuckGo's .onion service.
+  If Tor cannot be reached, the request is refused, never sent in the clear. Optionally, terminal commands get the
+  proxy variables (works for curl, git, wget… not a general guarantee). The local model server is not affected.
+  Test button (exit IP seen by check.torproject.org); CLI: `--tor`.
+  Live status next to the switch (green connected, orange "connexion 45 %", red stopped or blocked): through Tor's
+  control port (9051 / 9151, cookie authentication) when enabled, otherwise through a test connection at most every
+  30 s.
+- **Sub-agents**: the agent can delegate independent tasks (`<agent title="…">task</agent>`, several in a row, or a
+  `tasks` list in one native call); they run at the same time (2 by default, adjustable), each with its own history,
+  then the agent gets all the reports. No sub-sub-agents. Writing to a file modified by another agent since it was
+  read is refused (it must be read again), and writes to the same file are serialized. One card per sub-agent in the
+  transcript (task, live log, report); "Sous-agents" switch.
+  One GPU: speed is shared; measured with gemma-4 on two modules + tests: 6 min 56 instead of 10 min 41.
+- **Viewer** with syntax highlighting and image preview; paths in the agent's actions are clickable.
 
-## Structure
+## Layout
 
-- `src/agent/` — cœur indépendant de l'UI (boucle, protocole, outils, client LLM, web)
-- `src/main.js`, `src/preload.cjs`, `src/renderer/` — app Electron
-- `src/conversations.js`, `src/files.js` — sauvegarde des conversations, accès fichiers pour le visualiseur
-- `src/cli.js` — runner en ligne de commande
+- `src/agent/` — core, independent of the UI (loop, protocol, tools, LLM client, web, Tor)
+- `src/main.js`, `src/preload.cjs`, `src/renderer/` — Electron app
+- `src/conversations.js`, `src/files.js` — conversation storage, file access for the viewer
+- `src/cli.js` — command-line runner
 
-## Tor sur un réseau qui bloque Tor
+## Tor on a network that blocks Tor
 
-Si le service `tor` reste bloqué à 10 % (« Connecting to a relay »), le réseau bloque les relais Tor : il faut des
-ponts. Avec Tor Browser installé, on peut réutiliser ses transports et ses ponts intégrés :
+If the `tor` service stays stuck at 10 % ("Connecting to a relay"), the network blocks Tor relays: you need
+bridges. With Tor Browser installed, its transports and built-in bridges can be reused:
 
 ```bash
 brew install tor
@@ -121,7 +127,7 @@ mkdir -p /opt/homebrew/etc/tor/pt
 ln -sf "/Applications/Tor Browser.app/Contents/MacOS/Tor/PluggableTransports/lyrebird" /opt/homebrew/etc/tor/pt/lyrebird
 ```
 
-Puis, dans `/opt/homebrew/etc/tor/torrc` : `ControlPort 127.0.0.1:9051` et `CookieAuthentication 1` (pour l'état de
-connexion dans l'app), `UseBridges 1`, les lignes `ClientTransportPlugin … exec
-/opt/homebrew/etc/tor/pt/lyrebird` et les lignes `Bridge …` (snowflake, meek, obfs4) de Tor Browser
-(`chrome/toolkit/content/global/pt_config.json` dans `Contents/Resources/omni.ja`), puis `brew services restart tor`.
+Then, in `/opt/homebrew/etc/tor/torrc`: `ControlPort 127.0.0.1:9051` and `CookieAuthentication 1` (for the
+connection status in the app), `UseBridges 1`, the `ClientTransportPlugin … exec
+/opt/homebrew/etc/tor/pt/lyrebird` lines and the `Bridge …` lines (snowflake, obfs4) from Tor Browser
+(`chrome/toolkit/content/global/pt_config.json` inside `Contents/Resources/omni.ja`), then `brew services restart tor`.
