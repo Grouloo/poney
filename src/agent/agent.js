@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { streamChat, complete, serverContextLength } from './llm.js';
-import { TOOLS, buildSystemPrompt, parseActions, splitThinking, formatResult, isToolEnabled, withReasoning, normalizeToolCalls, stripReasoning, legacyReasoningToNotes, toolSchemas } from './protocol.js';
+import { TOOLS, buildSystemPrompt, parseActions, splitThinking, formatResult, isToolEnabled, withReasoning, findRepetition, normalizeToolCalls, stripReasoning, legacyReasoningToNotes, toolSchemas } from './protocol.js';
 import { executeAction, runShell, truncateMiddle } from './tools.js';
 import {
   summaryTokens, mechanicalSummary, DEFAULT_CHARS_PER_TOKEN,
@@ -548,6 +548,10 @@ export class Agent extends EventEmitter {
       stallTimer = setTimeout(() => { stalled = true; ctrl.abort(); }, this.stallMs ?? STALL_MS);
     };
     const disarmStall = () => { clearTimeout(stallTimer); stallTimer = null; stallCall = null; };
+    // A model looping on the same passage is stopped (checked every ~200 characters).
+    let looped = false;
+    let checkedThinking = 0;
+    let checkedText = 0;
     let invisibleTimeout = false;
     let watchdog = null;
     let doneReason = null;
@@ -601,6 +605,11 @@ export class Agent extends EventEmitter {
         if (chunk.type === 'thinking') {
           thinking += chunk.text;
           this.emit('event', { type: 'delta', id, kind: 'thinking', text: chunk.text });
+          if (thinking.length - checkedThinking >= 200) {
+            checkedThinking = thinking.length;
+            const r = findRepetition(thinking);
+            if (r >= 0) { thinking = thinking.slice(0, r); looped = true; break; }
+          }
           // A call at the very end of the reasoning arms the stall timer; any
           // further writing (a plan that goes on) disarms it.
           if (/\S/.test(chunk.text)) {
@@ -629,6 +638,12 @@ export class Agent extends EventEmitter {
         // on local hardware. Stop once a long text follows the last action
         // without starting a new one.
         const last = actions[actions.length - 1];
+        // (not inside an action being written: a file may repeat lines on purpose)
+        if (text.length - checkedText >= 200 && (!last || last.complete)) {
+          checkedText = text.length;
+          const r = findRepetition(visible);
+          if (r >= 0) { cutAt = r; looped = true; break; }
+        }
         // Same stall rule when the answer ends with a complete action.
         if (/\S/.test(chunk.text)) {
           if (last?.complete && !visible.slice(last.end).trim()) armStall(null);
@@ -702,7 +717,8 @@ export class Agent extends EventEmitter {
     }
     const stats = generationStats({ t0, tFirst, tEnd: Date.now(), usage, est: this.est, text: text + thinking });
     if (narrationCut) this.emit('event', { type: 'notice', text: 'Le modèle continuait à écrire après son action au lieu d’attendre le résultat : génération arrêtée, l’action est exécutée.' });
-    return { id, text: visible, thinking, truncated, contextLimited: truncated && !streamError && maxTokens < this.config.maxTokens, stats, invisible };
+    if (looped) this.emit('event', { type: 'notice', text: 'Le modèle répétait le même passage en boucle : génération arrêtée, la répétition est retirée.' });
+    return { id, text: visible, thinking, truncated, looped, contextLimited: truncated && !streamError && maxTokens < this.config.maxTokens, stats, invisible };
   }
 
   // ----- main loop -----
@@ -740,6 +756,7 @@ export class Agent extends EventEmitter {
 
     let changedThisTurn = false;
     let gateNudges = 0;
+    let loopNudges = 0;
     let testFailures = 0;
     let emptyReplies = 0;
     let codeDumpNudged = false;
@@ -811,6 +828,15 @@ export class Agent extends EventEmitter {
         if (gen.truncated && !actions.length) {
           this.messages.push({ role: 'assistant', content: this.assistantContent(gen, gen.text.slice(0, unfinished?.start ?? gen.text.length).trim() || '(cut)') });
           this.messages.push({ role: 'user', content: cutNote });
+          continue;
+        }
+
+        // ---------- looping without acting: not an answer, push it to act ----------
+        if (!actions.length && gen.looped) {
+          this.messages.push({ role: 'assistant', content: this.assistantContent(gen, gen.text.trim() || '(…)') });
+          if (++loopNudges > 2) { reason = 'loop'; notice('Le modèle reste bloqué dans une boucle : arrêt. Reformulez la demande ou découpez la tâche.'); break; }
+          notice('Relance du modèle pour qu’il passe à l’action.');
+          this.messages.push({ role: 'user', content: 'You started repeating the same text over and over. Do not restate your plan. Do the next step now with one tool tag (for example <write path="...">...</write>), or give your final summary if the task is done.' });
           continue;
         }
 

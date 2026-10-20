@@ -22,7 +22,7 @@ function fake(replies) {
   return new Promise((resolve) => server.listen(0, () => resolve({ server, requests, url: `http://localhost:${server.address().port}` })));
 }
 const tmp = () => fs.mkdtemp(path.join(os.tmpdir(), 'lcx-narr-'));
-const invented = 'Les fonctions ont été testées et tout fonctionne parfaitement. '.repeat(15);
+const invented = Array.from({ length: 15 }, (_, i) => `La fonction ${i + 1} a été testée et tout fonctionne parfaitement.`).join(' ');
 
 test('long text after an action is cut: the action runs, the invented text is dropped', async () => {
   const cwd = await tmp();

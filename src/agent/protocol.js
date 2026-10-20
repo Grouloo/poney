@@ -535,10 +535,64 @@ export function splitThinking(text) {
 export const NOTES_MAX_CHARS = 600;
 
 export function withReasoning(content, thinking, maxChars = NOTES_MAX_CHARS) {
-  let t = (thinking || '').replace(/\s+/g, ' ').trim();
-  if (!t) return content;
-  if (t.length > maxChars) t = `…${t.slice(-maxChars)}`;
-  return `(My notes: ${t})\n${content}`;
+  const t = reasoningNote(thinking, maxChars);
+  return t ? `(My notes: ${t})\n${content}` : content;
+}
+
+/**
+ * The end of a reasoning, in whole sentences, each sentence once. A note cut
+ * mid-word ("…n research findings") and repeated sentences were copied as is
+ * by the model at each step, until it looped on them.
+ */
+export function reasoningNote(thinking, maxChars = NOTES_MAX_CHARS) {
+  const t = (thinking || '').replace(/\s+/g, ' ').trim();
+  const sentences = t.match(/[^.!?…]+(?:[.!?…]+|$)\s*/g) || [];
+  const seen = new Set();
+  let note = '';
+  for (let i = sentences.length - 1; i >= 0; i--) {
+    const key = sentences[i].trim().toLowerCase();
+    if (!key || seen.has(key)) continue;
+    if (note.length + sentences[i].length > maxChars) break;
+    seen.add(key);
+    note = sentences[i] + note;
+  }
+  // Last sentence longer than the note: its end, from a word boundary.
+  if (!note.trim()) note = t.slice(-maxChars).replace(/^\S*\s+/, '');
+  return note.trim();
+}
+
+/**
+ * Where a generation started looping: a passage repeated at least three times
+ * in a row at the end of `s` (the last copy may be partial), over at least
+ * minRun characters. Returns the index just after the first copy (-1 if no loop).
+ */
+export function findRepetition(s, { minRun = 300, maxPeriod = 2000 } = {}) {
+  const n = s.length;
+  if (n < minRun) return -1;
+  const probe = s.slice(-20);
+  let at = s.lastIndexOf(probe, n - 21);
+  for (let tries = 0; at >= 0 && tries < 50; tries++) {
+    const d = n - 20 - at; // candidate period
+    if (d > maxPeriod) break;
+    if (d >= 20) {
+      // Back to where the repeating starts.
+      let k = n - d - 1;
+      while (k >= 0 && s[k] === s[k + d]) k--;
+      const first = k + 1;
+      const run = n - first;
+      if (run >= 3 * d - 20 && run >= minRun) {
+        // Keep one copy, cut at the end of a line or sentence if there is one.
+        // (the window overlaps the next copy by two characters, so that a
+        // boundary just at the end of the copy is found)
+        const window = s.slice(first, first + d + 2);
+        const nl = window.lastIndexOf('\n');
+        const end = nl > 1 ? nl : Math.max(...['. ', '! ', '? '].map((p) => window.lastIndexOf(p) + 1));
+        return end > 1 ? first + end + 1 : first + d;
+      }
+    }
+    at = s.lastIndexOf(probe, at - 1);
+  }
+  return -1;
 }
 
 export function stripReasoning(content) {
