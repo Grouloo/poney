@@ -117,16 +117,18 @@ async function fakeControl(phase, { circuit = true } = {}) {
   const cookieFile = path.join(dir, 'control_auth_cookie');
   await fs.writeFile(cookieFile, cookie);
   const auths = [];
+  const signals = [];
   const server = net.createServer((c) => {
     c.on('data', (d) => {
       const line = d.toString().trim();
       if (line.startsWith('PROTOCOLINFO')) c.write(`250-PROTOCOLINFO 1\r\n250-AUTH METHODS=COOKIE,SAFECOOKIE COOKIEFILE="${cookieFile}"\r\n250-VERSION Tor="0.4.9"\r\n250 OK\r\n`);
       else if (line.startsWith('AUTHENTICATE')) { auths.push(line.split(' ')[1]); c.write(line.split(' ')[1] === cookie.toString('hex') ? '250 OK\r\n' : '515 Authentication failed\r\n'); }
       else if (line.startsWith('GETINFO')) c.write(`250-status/bootstrap-phase=${phase}\r\n250-status/circuit-established=${circuit ? 1 : 0}\r\n250 OK\r\n`);
+      else if (line.startsWith('SIGNAL')) { signals.push(line); c.write('250 OK\r\n'); }
     });
   });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
-  return { server, port: server.address().port, auths, cookie };
+  return { server, port: server.address().port, auths, cookie, signals };
 }
 
 test('control port: cookie authentication and bootstrap progress', async () => {
@@ -190,6 +192,62 @@ test('100 % without an open circuit: reconnecting for a while, then checked by a
     ctl.server.close(); s2.close();
     assert.equal(first.state, 'reconnecting');
     assert.equal(later.state, 'no-circuit');
+    return;
+  }
+  throw new Error('no free port pair');
+});
+
+/** SOCKS proxy that answers "general failure" to the first `failures` connections, then forwards. */
+function flakySocks(target, failures, port) {
+  let n = 0;
+  const server = net.createServer((client) => {
+    client.once('data', () => {
+      client.write(Buffer.from([5, 0]));
+      client.once('data', () => {
+        if (n++ < failures) { client.end(Buffer.from([5, 1, 0, 1, 0, 0, 0, 0, 0, 0])); return; }
+        const up = net.connect(target, '127.0.0.1', () => { client.write(Buffer.from([5, 0, 0, 1, 127, 0, 0, 1, 0, 0])); client.pipe(up).pipe(client); });
+        up.on('error', () => client.destroy());
+      });
+    });
+    client.on('error', () => {});
+  });
+  return new Promise((resolve) => { server.once('error', () => resolve(null)); server.listen(port, '127.0.0.1', () => resolve(server)); });
+}
+
+test('a request failing on stale circuits asks Tor for new ones and is retried; the status reflects real traffic', async () => {
+  const s = await site('<p>finally through</p>');
+  for (let tries = 0; tries < 20; tries++) {
+    const ctl = await fakeControl('NOTICE BOOTSTRAP PROGRESS=100 TAG=done SUMMARY="Done"', { circuit: true });
+    const socks = await flakySocks(s.port, 1, ctl.port - 1);
+    if (!socks) { ctl.server.close(); continue; }
+    const proxy = `socks5h://127.0.0.1:${ctl.port - 1}`;
+    const text = await fetchUrl('http://site.example/', { proxy });
+    assert.match(text, /finally through/);
+    assert.deepEqual(ctl.signals, ['SIGNAL NEWNYM'], 'new circuits were requested once');
+    assert.equal((await torStatus({ torEnabled: true, torProxy: proxy })).state, 'connected', 'the retry succeeded');
+
+    // Now every connection fails: after the failed retry, the status says so (not green).
+    const always = await flakySocks(s.port, 99, 0);
+    const p2 = `socks5h://127.0.0.1:${always.address().port}`;
+    await assert.rejects(fetchUrl('http://site.example/', { proxy: p2 }), /n'a pas pu acheminer/);
+    closeTorControls();
+    socks.close(); always.close(); ctl.server.close(); s.server.close();
+    return;
+  }
+  throw new Error('no free port pair');
+});
+
+test('degraded: circuits established but the last request failed', async () => {
+  for (let tries = 0; tries < 20; tries++) {
+    const ctl = await fakeControl('NOTICE BOOTSTRAP PROGRESS=100 TAG=done SUMMARY="Done"', { circuit: true });
+    const socks = await flakySocks(1, 99, ctl.port - 1); // always fails
+    if (!socks) { ctl.server.close(); continue; }
+    const proxy = `socks5h://127.0.0.1:${ctl.port - 1}`;
+    await assert.rejects(fetchUrl('http://site.example/', { proxy }));
+    const st = await torStatus({ torEnabled: true, torProxy: proxy });
+    closeTorControls();
+    socks.close(); ctl.server.close();
+    assert.equal(st.state, 'degraded');
     return;
   }
   throw new Error('no free port pair');

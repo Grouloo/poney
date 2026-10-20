@@ -64,10 +64,45 @@ export async function requireTor(configured) {
 }
 
 const agents = new Map();
+// Through bridges, Tor sometimes tries several circuits before one carries the
+// connection: 50 s was seen, so the 30 s default of the SOCKS client is too short.
+const SOCKS_TIMEOUT_MS = 90_000;
 const agentFor = (proxy) => {
-  if (!agents.has(proxy)) agents.set(proxy, new SocksProxyAgent(proxy));
+  if (!agents.has(proxy)) agents.set(proxy, new SocksProxyAgent(proxy, { timeout: SOCKS_TIMEOUT_MS }));
   return agents.get(proxy);
 };
+
+// Outcome of the real traffic through each proxy: the status shown is based on it.
+const traffic = new Map(); // proxy -> { ok: time of last success, fail: time of last failure }
+function markTraffic(proxy, ok) {
+  const t = traffic.get(proxy) || {};
+  t[ok ? 'ok' : 'fail'] = Date.now();
+  traffic.set(proxy, t);
+}
+
+const isCircuitFailure = (e) => e?.code === 'TOR_CIRCUIT';
+
+/**
+ * fetch over Tor. When the connection through Tor times out (stale circuits,
+ * seen after the Mac sleeps), ask Tor for new circuits and try once more.
+ */
+export async function proxyFetch(url, opts = {}) {
+  try {
+    const res = await proxyFetchOnce(url, opts);
+    markTraffic(opts.proxy, true);
+    return res;
+  } catch (e) {
+    if (!isCircuitFailure(e) || opts.signal?.aborted) throw e;
+    markTraffic(opts.proxy, false);
+    if (opts.retry === false || !(await newCircuits(opts.proxy))) throw e;
+    const res = await proxyFetchOnce(url, opts).catch((e2) => {
+      if (isCircuitFailure(e2)) markTraffic(opts.proxy, false);
+      throw e2;
+    });
+    markTraffic(opts.proxy, true);
+    return res;
+  }
+}
 
 function decode(res) {
   const enc = String(res.headers['content-encoding'] || '').toLowerCase();
@@ -81,7 +116,7 @@ function decode(res) {
  * Minimal fetch over the SOCKS proxy (Node's fetch cannot use SOCKS).
  * Returns { ok, status, url, headers: { get(name) }, text() }.
  */
-export function proxyFetch(url, { method = 'GET', headers = {}, body, signal, proxy, maxRedirects = 5, timeoutMs = 90_000 } = {}) {
+function proxyFetchOnce(url, { method = 'GET', headers = {}, body, signal, proxy, maxRedirects = 5, timeoutMs = 120_000 } = {}) {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
     const mod = u.protocol === 'https:' ? https : http;
@@ -96,7 +131,7 @@ export function proxyFetch(url, { method = 'GET', headers = {}, body, signal, pr
         res.resume();
         const next = new URL(res.headers.location, u).toString();
         const keepBody = status === 307 || status === 308;
-        proxyFetch(next, { method: keepBody ? method : 'GET', headers, body: keepBody ? body : undefined, signal, proxy, maxRedirects: maxRedirects - 1, timeoutMs })
+        proxyFetchOnce(next, { method: keepBody ? method : 'GET', headers, body: keepBody ? body : undefined, signal, proxy, maxRedirects: maxRedirects - 1, timeoutMs })
           .then(resolve, reject);
         return;
       }
@@ -121,9 +156,11 @@ export function proxyFetch(url, { method = 'GET', headers = {}, body, signal, pr
     req.on('timeout', () => req.destroy(new Error(`Délai dépassé via Tor (${Math.round(timeoutMs / 1000)} s)`)));
     req.on('error', (e) => {
       signal?.removeEventListener('abort', onAbort);
-      if (/proxy connection timed out|general SOCKS server failure|TTL expired/i.test(e.message)) {
+      // Tor could not carry the connection (slow or broken circuits): timeout, or its
+      // SOCKS answer "general failure" / "TTL expired" / unreachable.
+      if (/proxy connection timed out|rejected connection - (Failure|TTLExpired|HostUnreachable|NetworkUnreachable)|general SOCKS server failure|TTL expired/i.test(e.message)) {
         // The proxy answers but Tor has no circuit (often: network blocking Tor relays).
-        reject(new TorUnavailableError(`Tor ne parvient pas à établir de circuit (${proxy}) : il se reconnecte peut-être (après une mise en veille, réessayez dans une minute), ou le réseau le bloque (ponts nécessaires). La requête n'a pas été envoyée en clair.`));
+        reject(Object.assign(new TorUnavailableError(`Tor n'a pas pu acheminer la requête (${proxy}), même avec de nouveaux circuits : il se reconnecte peut-être (après une mise en veille, réessayez dans une minute), ou le réseau le bloque (ponts nécessaires). La requête n'a pas été envoyée en clair.`), { code: 'TOR_CIRCUIT' }));
       } else if (/ECONNREFUSED|socks/i.test(e.message) && !/rejected|host unreachable/i.test(e.message)) {
         reject(new TorUnavailableError(`Connexion au proxy Tor impossible (${proxy}) : ${e.message}`));
       } else reject(e);
@@ -259,11 +296,18 @@ export function closeTorControls() {
   controls.clear();
   probeCache = null;
   noCircuitSince = null;
+  traffic.clear();
 }
 
 /** Opens (then closes) a connection through Tor: true if a circuit works. */
-export async function socksProbe(proxy, { host = 'check.torproject.org', port = 443, timeoutMs = 20_000 } = {}) {
+export async function socksProbe(proxy, { host = 'check.torproject.org', port = 443, timeoutMs = 60_000 } = {}) {
   const u = new URL(proxy);
+  const ok = await socksConnect(u, host, port, timeoutMs);
+  markTraffic(proxy, ok);
+  return ok;
+}
+
+async function socksConnect(u, host, port, timeoutMs) {
   try {
     const { socket } = await SocksClient.createConnection({
       proxy: { host: u.hostname, port: Number(u.port), type: 5 },
@@ -278,7 +322,20 @@ export async function socksProbe(proxy, { host = 'check.torproject.org', port = 
   }
 }
 
+/** Asks Tor for new circuits (SIGNAL NEWNYM) through its control port; false if not available. */
+export async function newCircuits(proxy) {
+  const port = Number(new URL(normalizeProxy(proxy)).port) + 1;
+  const c = await controlFor(port, 3000);
+  if (!c) return false;
+  const reply = await c.command('SIGNAL NEWNYM');
+  if (!reply.startsWith('250')) return false;
+  await new Promise((r) => setTimeout(r, 1500)); // let Tor start building them
+  return true;
+}
+
 let probeCache = null; // { proxy, ok, at }: the probe opens a real connection, keep it rare
+let backgroundProbe = null; // running probe started by the status (does not block it)
+const HEALTH_PROBE_EVERY_MS = 2 * 60_000;
 let noCircuitSince = null; // first time Tor was seen at 100 % without an open circuit
 // After the Mac sleeps, Tor drops its circuits and needs a while to rebuild them.
 const RECONNECT_GRACE_MS = 3 * 60_000;
@@ -299,7 +356,16 @@ export async function torStatus(config = {}, { probeEveryMs = 30_000, reconnectG
   if (control) {
     if (control.progress >= 100 && control.circuit) {
       noCircuitSince = null;
-      return { state: 'connected', proxy, progress: 100, detail: 'Tor connecté' };
+      // "Circuit established" does not mean traffic flows (a snowflake bridge can
+      // vanish silently): the real requests and a periodic test connection decide.
+      const t = traffic.get(proxy) || {};
+      if (!backgroundProbe && (!t.ok || Date.now() - t.ok > HEALTH_PROBE_EVERY_MS) && (!t.fail || Date.now() - t.fail > 30_000)) {
+        backgroundProbe = socksProbe(proxy).finally(() => { backgroundProbe = null; });
+      }
+      if (t.fail && (!t.ok || t.fail > t.ok)) {
+        return { state: 'degraded', proxy, progress: 100, detail: 'Tor a des circuits, mais les dernières connexions ont échoué ou ont été très lentes (pont tombé, circuits usés) : « Renouveler les circuits » ou patienter' };
+      }
+      return { state: 'connected', proxy, progress: 100, detail: t.ok ? 'Tor connecté (trafic vérifié)' : 'Tor connecté' };
     }
     if (control.progress < 100) {
       if (control.warning) return { state: 'stuck', proxy, progress: control.progress, detail: `Tor bloqué à ${control.progress} % (${control.summary}) : ${control.warning}` };

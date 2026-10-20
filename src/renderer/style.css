@@ -310,6 +310,8 @@ fieldset label.check input { width: auto; }
 .tor-state.connected::before { background: var(--ok); }
 .tor-state.bootstrapping::before, .tor-state.reconnecting::before { background: var(--warn); animation: blink 1s steps(2) infinite; }
 .tor-state.stuck::before, .tor-state.off::before, .tor-state.no-circuit::before { background: var(--err); }
+.tor-state.degraded::before { background: var(--warn); }
+.tor-result { font-size: 12px; margin: 6px 0 0; }
 .tor-status-line { display: flex; align-items: center; gap: 2px; margin: 10px 0 0; font-size: 12.5px; }
 .tor-status-line .tor-state::before { margin-left: 0; }
 

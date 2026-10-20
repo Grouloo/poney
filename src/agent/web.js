@@ -68,7 +68,8 @@ async function searchDuckDuckGo(query, signal, proxy) {
       html = await res.text();
       break;
     } catch (e) {
-      if (signal?.aborted || e.name === 'TorUnavailableError') throw e;
+      // Tor down: stop. Tor slow (circuits): the next endpoint may get through.
+      if (signal?.aborted || (e.name === 'TorUnavailableError' && e.code !== 'TOR_CIRCUIT')) throw e;
       lastError = e;
     }
   }

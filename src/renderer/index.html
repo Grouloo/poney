@@ -176,7 +176,8 @@
         <label class="check"><input type="checkbox" name="torShell"> Aussi les commandes du terminal</label>
         <small>Par variables de proxy : seuls les programmes qui les respectent (curl, git, wget, pip…) passent par Tor. Ce n’est pas une garantie pour toutes les commandes.</small>
         <p class="tor-status-line"><span id="torStateBig" class="tor-state disabled"></span><span id="torStatusLine">Tor désactivé</span></p>
-        <div class="row tor-test"><button type="button" id="torTest" class="ghost">Tester la connexion Tor</button><span id="torResult" class="muted"></span></div>
+        <div class="row tor-test"><button type="button" id="torTest" class="ghost">Tester la connexion Tor</button><button type="button" id="torNewnym" class="ghost" title="Demande à Tor de nouveaux circuits (utile s'il est lent ou bloqué après une mise en veille)">Renouveler les circuits</button></div>
+        <p id="torResult" class="muted tor-result"></p>
       </fieldset>
     </form>
   </aside>

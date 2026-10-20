@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld('api', {
 
   checkTor: () => ipcRenderer.invoke('tor:check'),
   torStatus: () => ipcRenderer.invoke('tor:status'),
+  torNewCircuits: () => ipcRenderer.invoke('tor:newnym'),
   getContext: () => ipcRenderer.invoke('context:get'),
   compactContext: () => ipcRenderer.invoke('context:compact'),
 

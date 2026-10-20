@@ -163,7 +163,8 @@ let torTimer = null;
 
 function renderTorStatus(s) {
   for (const id of ['torState', 'torStateBig']) $(id).className = `tor-state ${s.state}`;
-  $('torState').textContent = s.state === 'bootstrapping' || s.state === 'stuck' ? ` ${s.progress} %` : s.state === 'reconnecting' ? ' reconnexion' : '';
+  $('torState').textContent = s.state === 'bootstrapping' || s.state === 'stuck' ? ` ${s.progress} %`
+    : s.state === 'reconnecting' ? ' reconnexion' : s.state === 'degraded' ? ' lent' : '';
   $('torToggleLabel').title = s.state === 'disabled'
     ? 'Recherche web et lecture de pages via Tor (réglages : ⚙︎ › Confidentialité)'
     : `${s.detail}${s.proxy ? ` — ${s.proxy.replace('socks5h://', '')}` : ''}`;
@@ -188,6 +189,14 @@ function scheduleTorStatus() {
   torTimer = setInterval(refreshTorStatus, 3000);
 }
 
+$('torNewnym').onclick = async () => {
+  $('torResult').textContent = 'Demande de nouveaux circuits…';
+  const r = await window.api.torNewCircuits();
+  $('torResult').textContent = r.ok
+    ? 'Nouveaux circuits demandés : les prochaines requêtes les utiliseront.'
+    : '✗ Impossible : le port de contrôle de Tor n’est pas accessible.';
+  refreshTorStatus();
+};
 $('torTest').onclick = async () => {
   const out = $('torResult');
   out.textContent = 'Test en cours…';
