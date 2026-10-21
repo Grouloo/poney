@@ -84,14 +84,15 @@ function renderSettings() {
     recent.innerHTML = '';
     for (const dir of settings.recent || []) {
       const b = document.createElement('button');
-      b.textContent = `📁 ${shortPath(dir)}`;
+      b.textContent = `📁 ${dir.split(/[\\/]/).filter(Boolean).pop() || dir}`;
+      b.title = dir;
       b.onclick = async () => { settings = await window.api.setWorkspace(dir); renderSettings(); onWorkspaceChanged(); };
       recent.appendChild(b);
     }
     const off = document.createElement('button');
     off.textContent = '💬 Hors projet';
     off.title = 'Conversation sans dossier de projet : les fichiers restent dans la conversation';
-    off.onclick = () => $('newOffBtn').click();
+    off.onclick = () => newConversationIn(null);
     recent.appendChild(off);
   }
 }
@@ -204,32 +205,6 @@ $('workspaceBtn').onclick = async () => {
   renderSettings();
   if (activeDir() !== before) onWorkspaceChanged();
 };
-$('newBtn').onclick = async () => {
-  if (running) await window.api.stop();
-  const before = activeDir();
-  settings = await window.api.reset();
-  renderSettings();
-  if (activeDir() !== before) onWorkspaceChanged();
-  else {
-    clearTranscript();
-    refreshConversations();
-    refreshPromptBadge();
-    refreshGauge();
-  }
-};
-$('newOffBtn').onclick = async () => {
-  if (running) await window.api.stop();
-  try {
-    settings = await window.api.newOffProject();
-  } catch (e) {
-    $('status').textContent = errorText(e);
-    return;
-  }
-  renderSettings();
-  onWorkspaceChanged();
-  input.focus();
-};
-
 function onWorkspaceChanged() {
   clearTranscript();
   closeViewer();
@@ -888,52 +863,118 @@ function relativeTime(ts) {
 
 let renaming = false; // a title is being edited: don't rebuild the list under the cursor
 
+// ---------- conversations, grouped by project ----------
+const OFF_KEY = '@off-project';
+let collapsedGroups = new Set();
+try { collapsedGroups = new Set(JSON.parse(localStorage.getItem('collapsedGroups') || '[]')); } catch {}
+const baseName = (p) => p.split(/[\\/]/).filter(Boolean).pop() || p;
+
 async function refreshConversations() {
   if (renaming) return;
-  const { current, items, offProject = [] } = await window.api.listConversations();
+  const { current, all, recent } = await window.api.listConversations();
   currentConversation = current;
-  fillConversationList($('convList'), items, current, settings.workspace ? 'Aucune conversation dans ce dossier.' : 'Choisissez un dossier.');
-  $('offSection').classList.toggle('hidden', !offProject.length);
-  fillConversationList($('offList'), offProject, current, '');
-}
-
-function fillConversationList(list, items, current, emptyNote) {
-  list.innerHTML = '';
-  if (!items.length) {
-    if (emptyNote) list.innerHTML = `<li class="empty-note">${emptyNote}</li>`;
-    return;
+  // One group per project (those with conversations, the recent ones, the open one), then "Hors projet".
+  const groups = new Map();
+  const group = (key) => {
+    if (!groups.has(key)) groups.set(key, { key, off: key === OFF_KEY, items: [], latest: 0 });
+    return groups.get(key);
+  };
+  if (settings.workspace) group(settings.workspace);
+  for (const dir of recent) group(dir);
+  for (const c of all) {
+    const g = group(c.offProject ? OFF_KEY : c.workspace);
+    g.items.push(c);
+    g.latest = Math.max(g.latest, c.updatedAt);
   }
-  for (const c of items) {
+  group(OFF_KEY);
+  const ordered = [...groups.values()].filter((g) => !g.off).sort((x, y) => y.latest - x.latest);
+  ordered.push(groups.get(OFF_KEY));
+
+  const list = $('convList');
+  list.innerHTML = '';
+  for (const g of ordered) {
+    const activeGroup = g.off ? offMode() : !offMode() && g.key === settings.workspace;
+    const collapsed = collapsedGroups.has(g.key) && !activeGroup;
     const li = document.createElement('li');
-    li.classList.toggle('active', c.id === current);
-    li.innerHTML = '<span class="title"></span><span class="when"></span><button class="ren" title="Renommer">✎</button><button class="del" title="Supprimer">✕</button>';
-    li.querySelector('.title').textContent = c.title;
-    li.querySelector('.title').title = c.title;
-    li.querySelector('.when').textContent = relativeTime(c.updatedAt);
-    li.onclick = () => openConversation(c.id);
-    li.querySelector('.ren').onclick = (e) => { e.stopPropagation(); startRename(li, c); };
-    li.querySelector('.title').ondblclick = (e) => { e.stopPropagation(); startRename(li, c); };
-    li.querySelector('.del').onclick = async (e) => {
-      e.stopPropagation();
-      if (!confirm(list.id === 'offList'
-        ? `Supprimer la conversation « ${c.title} » et les fichiers de son dossier ?`
-        : `Supprimer la conversation « ${c.title} » ?`)) return;
-      try {
-        await window.api.deleteConversation(c.id);
-      } catch (err) {
-        alert(err.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''));
-        return;
-      }
-      if (c.id === current) {
-        settings = await window.api.getSettings();
-        renderSettings();
-        clearTranscript();
-        refreshTree();
-      }
+    li.className = `group${activeGroup ? ' current' : ''}${collapsed ? ' collapsed' : ''}`;
+    li.innerHTML = '<div class="group-head"><span class="chev">▾</span><span class="name"></span><span class="count"></span><button class="add" type="button">＋</button></div><ul class="list"></ul>';
+    const name = li.querySelector('.name');
+    name.textContent = g.off ? '💬 Hors projet' : baseName(g.key);
+    name.title = g.off ? 'Conversations sans projet : chacune a son propre dossier de fichiers' : g.key;
+    li.querySelector('.count').textContent = collapsed && g.items.length ? String(g.items.length) : '';
+    li.querySelector('.add').title = g.off ? 'Nouvelle conversation hors projet' : `Nouvelle conversation dans ${baseName(g.key)}`;
+    li.querySelector('.group-head').onclick = () => {
+      if (activeGroup) return; // the open project stays unfolded
+      if (collapsedGroups.has(g.key)) collapsedGroups.delete(g.key); else collapsedGroups.add(g.key);
+      try { localStorage.setItem('collapsedGroups', JSON.stringify([...collapsedGroups])); } catch {}
       refreshConversations();
     };
+    li.querySelector('.add').onclick = (e) => { e.stopPropagation(); newConversationIn(g.off ? null : g.key); };
+    const ul = li.querySelector('ul');
+    if (!g.items.length) ul.innerHTML = '<li class="empty-note">Aucune conversation.</li>';
+    for (const c of g.items) ul.appendChild(conversationItem(c, current));
     list.appendChild(li);
   }
+  const add = document.createElement('li');
+  add.className = 'add-project';
+  add.textContent = '＋ Ajouter un projet…';
+  add.onclick = () => $('workspaceBtn').click();
+  list.appendChild(add);
+}
+
+/** A new conversation in a project folder, or outside any project (dir null). */
+async function newConversationIn(dir) {
+  if (running) await window.api.stop();
+  const before = activeDir();
+  try {
+    if (dir === null) settings = await window.api.newOffProject();
+    else if (dir !== settings.workspace) settings = await window.api.setWorkspace(dir);
+    else settings = await window.api.reset();
+  } catch (e) {
+    $('status').textContent = errorText(e);
+    return;
+  }
+  renderSettings();
+  if (activeDir() !== before) onWorkspaceChanged();
+  else {
+    clearTranscript();
+    refreshConversations();
+    refreshPromptBadge();
+    refreshGauge();
+  }
+  input.focus();
+}
+
+function conversationItem(c, current) {
+  const li = document.createElement('li');
+  li.classList.toggle('active', c.id === current);
+  li.innerHTML = '<span class="title"></span><span class="when"></span><button class="ren" title="Renommer">✎</button><button class="del" title="Supprimer">✕</button>';
+  li.querySelector('.title').textContent = c.title;
+  li.querySelector('.title').title = c.title;
+  li.querySelector('.when').textContent = relativeTime(c.updatedAt);
+  li.onclick = () => openConversation(c.id);
+  li.querySelector('.ren').onclick = (e) => { e.stopPropagation(); startRename(li, c); };
+  li.querySelector('.title').ondblclick = (e) => { e.stopPropagation(); startRename(li, c); };
+  li.querySelector('.del').onclick = async (e) => {
+    e.stopPropagation();
+    if (!confirm(c.offProject
+      ? `Supprimer la conversation « ${c.title} » et les fichiers de son dossier ?`
+      : `Supprimer la conversation « ${c.title} » ?`)) return;
+    try {
+      await window.api.deleteConversation(c.id);
+    } catch (err) {
+      alert(err.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''));
+      return;
+    }
+    if (c.id === current) {
+      settings = await window.api.getSettings();
+      renderSettings();
+      clearTranscript();
+      refreshTree();
+    }
+    refreshConversations();
+  };
+  return li;
 }
 
 function startRename(li, c) {

@@ -267,10 +267,11 @@ ipcMain.handle('agent:resumeFrom', (_, actId) => {
   return { events: conv.events };
 });
 
+// Every conversation, with its project (the window groups them by project).
 ipcMain.handle('conversations:list', () => ({
   current: conv?.id ?? offProject?.id ?? null,
-  items: settings.workspace ? store.list(settings.workspace) : [],
-  offProject: store.list(null),
+  all: store.listAll(),
+  recent: settings.recent || [],
 }));
 // A new conversation outside any project (the agent works in a folder of its own).
 ipcMain.handle('conversations:newOffProject', () => {

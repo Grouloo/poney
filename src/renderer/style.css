@@ -187,11 +187,21 @@ body.no-sidebar #sidebar { display: none; }
   border-radius: 8px; padding: 7px 10px; margin-bottom: 8px;
 }
 .new-conv:hover { border-color: var(--accent-2); }
-.new-row { display: flex; gap: 6px; }
-.new-row .new-conv { flex: 1; }
-.new-row .new-conv.off { flex: 0 0 auto; }
-.list-head { margin: 14px 4px 6px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
-#offSection.hidden { display: none; }
+.groups { list-style: none; margin: 0; padding: 0; }
+.group { margin-bottom: 6px; }
+.group-head { display: flex; align-items: center; gap: 6px; padding: 5px 6px; border-radius: 7px; cursor: pointer; color: var(--muted); font-size: 12px; font-weight: 600; }
+.group-head:hover { background: var(--panel-2); color: var(--text); }
+.group.current > .group-head { color: var(--text); cursor: default; }
+.group-head .chev { width: 10px; transition: transform 0.15s; }
+.group.collapsed .chev { transform: rotate(-90deg); }
+.group.collapsed > .list { display: none; }
+.group-head .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.group-head .count { font-weight: normal; }
+.group-head .add { margin-left: auto; background: none; border: none; color: var(--muted); font-size: 14px; padding: 0 4px; border-radius: 5px; }
+.group-head .add:hover { color: var(--text); background: var(--border); }
+.group > .list { padding-left: 10px; }
+.add-project { padding: 6px; color: var(--muted); font-size: 12px; cursor: pointer; border-radius: 7px; }
+.add-project:hover { background: var(--panel-2); color: var(--text); }
 .list { list-style: none; margin: 0; padding: 0; }
 .list li {
   display: flex; align-items: center; gap: 6px; padding: 7px 8px; border-radius: 7px; cursor: pointer;

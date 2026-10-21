@@ -75,6 +75,19 @@ export class ConversationStore {
     fs.rmSync(this.file(id), { force: true });
   }
 
+  /** All the conversations, most recent first (metadata only, with their project). */
+  listAll() {
+    const out = [];
+    for (const name of fs.readdirSync(this.dir)) {
+      if (!name.endsWith('.json')) continue;
+      try {
+        const c = JSON.parse(fs.readFileSync(path.join(this.dir, name), 'utf8'));
+        out.push({ id: c.id, title: c.title, updatedAt: c.updatedAt, workspace: c.workspace, offProject: Boolean(c.offProject) });
+      } catch {}
+    }
+    return out.sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
   /** Conversations of a workspace, most recent first (metadata only). */
   list(workspace) {
     const out = [];
