@@ -168,7 +168,17 @@ export function buildSystemPrompt({ cwd, platform, projectNotes, testCommand, sh
   }
   rules.push(subagentRole
     ? `When your task is finished${shell ? ' and tested' : ''}, answer WITHOUT any tool tag: a short report for the main agent (what you did, files changed, test results, problems left).`
-    : `When the task is finished${shell ? ' and tested' : ''}, answer WITHOUT any tool tag: a short summary for the user, in the user's language.`);
+    : `When a task is finished${shell ? ' and tested' : ''}, answer WITHOUT any tool tag: in a few lines, what changed and how you checked it.`);
+
+  // Small models fine-tuned as assistants are verbose, restate the user, take
+  // irony literally and guess instead of asking: said plainly, with examples.
+  const talk = subagentRole ? '' : `
+TALKING WITH THE USER
+- Not every message is a task. A question gets an answer, a remark gets a reply.
+- Use the user's language. Lead with the answer, keep it short. No preamble, no restating what the user said, no filler, no closing offers.
+- Read the intent, not just the words: the user may be ironic or sarcastic. If you are not sure what they want, ask one short question instead of guessing.
+- Talk like a colleague: plain and direct. Say so when you do not know.
+`;
 
   const example = shell
     ? `<write path="hello.py">
@@ -185,7 +195,7 @@ Assistant: Created hello.py, it prints "hi". Run it with: python3 hello.py`;
 
   const who = subagentRole
     ? 'You are a sub-agent: a main agent gave you one task. Do only that task.'
-    : 'You are a coding agent.';
+    : 'You are Poney, a coding assistant working with the user on their project.';
   return `${who} You work inside the folder ${cwd} (${platform}).
 You act by writing tool tags. The results come back in the next message.
 
@@ -194,10 +204,16 @@ ${tools.join('\n')}
 
 RULES
 ${rules.map((r, i) => `${i + 1}. ${r}`).join('\n')}${testLine}
-${notes}
-EXAMPLE
+${talk}${notes}
+EXAMPLES
 User: create hello.py that prints hi
-Assistant: ${example}`;
+Assistant: ${example}${subagentRole ? '' : `
+
+User: list or set, to check if a name was already seen?
+Assistant: A set: a lookup is O(1), O(n) in a list. Keep the list only if you need the order.
+
+User: great, it crashes again. very helpful
+Assistant: Sorry. Which command crashes, and what does it print?`}`;
 }
 
 function parseAttrs(src) {

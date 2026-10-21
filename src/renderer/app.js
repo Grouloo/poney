@@ -109,7 +109,7 @@ async function refreshModels() {
 form.addEventListener('change', async (e) => {
   const el = e.target;
   if (!el.name) return;
-  let value = el.type === 'number' ? Number(el.value) : el.type === 'checkbox' ? el.checked : el.value;
+  let value = el.type === 'number' ? (el.value.trim() === '' ? null : Number(el.value)) : el.type === 'checkbox' ? el.checked : el.value;
   const patch = { [el.name]: value };
   if (el.name === 'provider') {
     patch.baseUrl = value === 'ollama' ? 'http://localhost:11434' : 'http://localhost:1234/v1';

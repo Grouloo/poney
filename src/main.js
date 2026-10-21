@@ -53,6 +53,12 @@ function loadSettings() {
   try {
     const saved = JSON.parse(fs.readFileSync(settingsFile(), 'utf8'));
     settings = { ...settings, ...saved, config: { ...DEFAULT_CONFIG, ...saved.config } };
+    // 0.2 used to be the default (saved as is): now the model's own temperature is used.
+    if (!settings.temperatureFromModel) {
+      if (settings.config.temperature === 0.2) settings.config.temperature = null;
+      settings.temperatureFromModel = true;
+      saveSettings();
+    }
   } catch {}
 }
 function saveSettings() {

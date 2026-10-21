@@ -12,7 +12,11 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
 
 ## What is done for small models
 
-- **Short system prompt** (~600 tokens) with one example, instead of several thousand.
+- **Short system prompt** (~1,100 tokens) with a few examples, instead of several thousand. It includes rules for
+  talking with the user, against the habits of small fine-tuned models: answer first and briefly, no restating the
+  user, no filler; read irony and sarcasm as such; ask one question when the request is unclear instead of guessing.
+- **The model's own temperature** by default (left to the server and the model's preset); a value can still be set.
+  A forced low temperature (0.2, the old default) made answers flat and loops likelier.
 - **Tools as text tags**, not JSON: `<write path="a.py">…</write>`, `<run>…</run>`.
   Code does not need escaping. The parser is lenient: aliases (`bash`, `read_file`…),
   arguments as attributes or child tags, optional quotes, ``` fences removed.

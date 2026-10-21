@@ -82,6 +82,9 @@ export async function* streamChat(opts) {
 // out. In raw mode we render the prompt with the model's own template (SDK) and
 // use /v1/completions, which returns every token; reasoning is split here.
 
+/** The temperature, when one is set; otherwise the server applies the model's own. */
+const sampling = (temperature) => (typeof temperature === 'number' && Number.isFinite(temperature) ? { temperature } : {});
+
 /** Models whose output format the raw mode knows (Gemma: <|channel>thought … <channel|>). */
 function lmsRawMode({ baseUrl, model }) {
   const m = lmsModels.get(lmsRoot(baseUrl))?.find((x) => x.id === model);
@@ -158,7 +161,7 @@ async function* streamLMStudioRaw({ baseUrl, apiKey, model, messages, temperatur
     method: 'POST',
     headers,
     signal,
-    body: JSON.stringify({ model, prompt, stream: true, stream_options: { include_usage: true }, temperature, max_tokens: maxTokens, stop: ['<turn|>'] }),
+    body: JSON.stringify({ model, prompt, stream: true, stream_options: { include_usage: true }, ...sampling(temperature), max_tokens: maxTokens, stop: ['<turn|>'] }),
   });
   await checkResponse(res);
   const split = makeChannelSplitter();
@@ -263,7 +266,7 @@ async function* readPromptLMStudio({ baseUrl, model, messages, temperature, sign
   };
   const prediction = handle.respond(Chat.from(messages), {
     maxTokens: 1,
-    temperature,
+    ...sampling(temperature),
     // Same tools as the HTTP request, so that the cached prompt is identical.
     ...(tools ? { rawTools: { type: 'toolArray', tools } } : {}),
     contextOverflowPolicy: 'stopAtLimit', // we size the prompt ourselves: never truncate silently
@@ -315,7 +318,7 @@ async function* streamHTTP({ provider, baseUrl, apiKey, model, messages, numCtx,
         model,
         messages,
         stream: true,
-        options: { num_ctx: numCtx, temperature, num_predict: maxTokens },
+        options: { num_ctx: numCtx, ...sampling(temperature), num_predict: maxTokens },
       }),
     });
     await checkResponse(res);
@@ -354,7 +357,7 @@ async function* streamHTTP({ provider, baseUrl, apiKey, model, messages, numCtx,
     method: 'POST',
     headers,
     signal,
-    body: JSON.stringify({ model, messages, stream: true, stream_options: { include_usage: true }, temperature, max_tokens: maxTokens, ...(tools ? { tools } : {}) }),
+    body: JSON.stringify({ model, messages, stream: true, stream_options: { include_usage: true }, ...sampling(temperature), max_tokens: maxTokens, ...(tools ? { tools } : {}) }),
   });
   await checkResponse(res);
   const toolCalls = []; // native function calls, streamed in pieces

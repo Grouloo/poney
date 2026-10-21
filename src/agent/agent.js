@@ -20,7 +20,7 @@ export const DEFAULT_CONFIG = {
   model: '',
   numCtx: 16384,
   maxTokens: 4096,
-  temperature: 0.2,
+  temperature: null, // null: the model's own (server/model preset); 0.2 made answers flat and loops likelier
   maxSteps: 40,
   commandTimeout: 120,
   approval: 'ask', // 'ask' | 'auto'
