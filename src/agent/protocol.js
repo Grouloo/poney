@@ -161,7 +161,7 @@ export function buildSystemPrompt({ cwd, platform, projectNotes, testCommand, sh
   rules.push('Use <write> for new files, <edit> to change existing files. Never <write> over a file you have not read.');
   if (shell) rules.push('Commands time out; do not start servers that never stop.');
   if (!web) rules.push('You have no internet access.');
-  rules.push('For work with several steps, write a <plan> first, and write it again (the whole list) when a task is done or the plan changes. Do not restate your plan in your reasoning: where it stands is shown after each result.');
+  rules.push('Several steps: write a <plan> for this request and stick to it; rewrite the whole list when a task is done or changes; finish every task before your final answer. Do not restate it in your reasoning: its state is shown after each result.');
   if (subagents) {
     rules.push('In the plan, start a task with @agent when it is independent of the others (different files): it starts at once in a sub-agent, which gets the request, the plan and its task; you get its report. Do the other tasks yourself.');
     rules.push('Sub-agents: put ALL the independent tasks in ONE message (one <agent> tag each, one after the other): they run at the same time, then you get all the reports. Do not launch them one by one. Use them only for tasks that touch different files. A sub-agent cannot see this conversation: write in the task everything it needs (files, goal, constraints).');

@@ -807,6 +807,9 @@ export class Agent extends EventEmitter {
     // re-read everything (minutes on local hardware).
     this.turnStartIndex = resume ? resume.turnStartIndex : this.messages.length;
     this.currentTask = resume ? resume.currentTask : userText;
+    // A plan is the plan of one request: a new message starts without one
+    // (a resumed turn keeps the plan of its resume point).
+    if (!resume) this.taskPlan = null;
     const turnT0 = Date.now();
     // Totals over all the generations of this turn, shown once under the answer.
     const turnStats = { totalMs: 0, genMs: 0, promptMs: 0, tokens: 0, exact: true, steps: 0 };
@@ -832,6 +835,7 @@ export class Agent extends EventEmitter {
     let testFailures = 0;
     let emptyReplies = 0;
     let codeDumpNudged = false;
+    let planNudges = 0;
     let invisibleRetried = false;
     const recent = [];
     let reason = 'done';
@@ -929,6 +933,16 @@ export class Agent extends EventEmitter {
             this.messages.push({ role: 'user', content: 'You showed code in your message but did not save it. ' +
               'For a NEW file use <write path="...">...</write>. For an EXISTING file use <edit>, or <read> it first and then <write> the COMPLETE file (never drop existing code)' +
               `${shellOn ? '. Then test it with <run>' : ''}.` });
+            continue;
+          }
+
+          // Plan gate: the agent sticks to its plan until every task is checked off
+          // (or the plan is rewritten without the tasks no longer needed).
+          const unfinished = this.taskPlan?.tasks.filter((t) => t.status !== 'done') ?? [];
+          if (unfinished.length && planNudges < 2) {
+            planNudges++;
+            notice(`Plan inachevé (${unfinished.length} tâche${unfinished.length > 1 ? 's' : ''}) : le modèle est relancé pour le terminer.`);
+            this.messages.push({ role: 'user', content: `Your plan is not finished. Tasks left:\n${unfinished.map((t) => `- ${t.text}${t.status === 'failed' ? ' (its sub-agent failed)' : ''}`).join('\n')}\nDo the next task now. If a task is done, check it off in the <plan>; if it is no longer needed, rewrite the <plan> without it.` });
             continue;
           }
 

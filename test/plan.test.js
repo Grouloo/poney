@@ -90,3 +90,29 @@ test('@agent tasks start in sub-agents with their context; the plan follows, and
   assert.match(mainReqs[2].messages.at(-1).content, /\(Plan: 1\/2 done\. Next: Read a\.txt\)$/);
   assert.equal(agent.taskPlan.tasks.length, 2);
 });
+
+test('a plan holds for one request: the agent is sent back to unchecked tasks, and the next message starts without it', async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-plan-'));
+  let step = 0;
+  const f = await fake(() => {
+    step++;
+    if (step === 1) return '<plan>\n- [ ] Write a.md\n- [ ] Write b.md\n</plan>\n<write path="a.md">\nA\n</write>';
+    if (step === 2) return 'Done.'; // b.md forgotten
+    if (step === 3) return '<write path="b.md">\nB\n</write>\n<plan>\n- [x] Write a.md\n- [x] Write b.md\n</plan>';
+    return 'Done.';
+  });
+  const agent = new Agent({ cwd, config: { baseUrl: f.url, model: 'm', approval: 'auto', shellEnabled: false } });
+  const notices = [];
+  agent.on('event', (e) => e.type === 'notice' && notices.push(e.text));
+  try {
+    await agent.send('write a.md and b.md');
+    await agent.send('thanks');
+  } finally {
+    f.server.close();
+  }
+  assert.equal(await fs.readFile(path.join(cwd, 'b.md'), 'utf8'), 'B\n');
+  assert.equal(notices.filter((n) => /Plan inachevé/.test(n)).length, 1);
+  // (a.md was written but not checked off: still a task left)
+  assert.match(f.requests[2].messages.at(-1).content, /Tasks left:\n- Write a\.md\n- Write b\.md/);
+  assert.equal(agent.taskPlan, null);
+});

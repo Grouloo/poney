@@ -254,6 +254,7 @@ function fillUserBubble(bubble, text) {
 }
 
 function addUserMessage(text, turnId) {
+  if (!target) renderPlan([]); // a plan is the plan of one request
   const m = div('msg user');
   fillUserBubble(m.appendChild(div('bubble')), text);
   if (turnId) {
