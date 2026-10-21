@@ -37,10 +37,12 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   left (never past the window); an answer cut by the limit never runs an unfinished action, and if the cut comes
   from a lack of room, the context is compacted and the step retried.
 - **Reasoning kept as a short note**: the end of the model's reasoning (~600 characters, whole sentences, each
-  sentence once) is kept in front of its messages, so it does not start over after each tool result. Not the whole
-  reasoning: with Gemma, that made the model produce only invisible tokens. A note cut mid-word used to be copied
-  verbatim by the model at every step, until it looped.
-- **Loop detection**: a passage repeated three times in a row (in the reasoning or the answer, not inside a file
+  sentence once) is given back in a `<reasoning>` block before its messages, so it does not start over after each
+  tool result. Not the whole reasoning: with Gemma, that made the model produce only invisible tokens. Not a prose
+  line either: an earlier "(My notes: …)" form was copied by the model into its answers. Older conversations are
+  converted when opened (one full prompt read).
+- **Loop detection**: Gemma reopening its reasoning channel (`<|channel>thought`) a third time while reasoning, or a
+  passage repeated three times in a row (in the reasoning or the answer, not inside a file
   being written) stops the generation; one copy is kept. Without an action, the model is told to act instead of
   restating its plan (twice, then the turn stops).
 - **Tools declared natively** to the LM Studio models that support it (`tool_use`).

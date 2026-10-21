@@ -526,17 +526,18 @@ export function splitThinking(text) {
 }
 
 /**
- * The reasoning kept in the history is a short plain-text note: the end of the
- * model's reasoning (where its plan and conclusions are), so it does not start
- * over from scratch after each tool result. Not the full reasoning: with Gemma,
- * a long reasoning in the history (as a <reasoning> block, or in the template's
- * own thinking field) made the model emit only invisible tokens.
+ * The reasoning kept in the history: the end of the model's reasoning (where its
+ * plan and conclusions are), in a <reasoning> block before its message, so it does
+ * not start over from scratch after each tool result. Short: with Gemma, the full
+ * reasoning in the history (or in the template's own thinking field) made the model
+ * emit only invisible tokens. A tag, not prose: a "(My notes: …)" line was copied
+ * by the model into its answers, and the loops started with it.
  */
 export const NOTES_MAX_CHARS = 600;
 
 export function withReasoning(content, thinking, maxChars = NOTES_MAX_CHARS) {
   const t = reasoningNote(thinking, maxChars);
-  return t ? `(My notes: ${t})\n${content}` : content;
+  return t ? `<reasoning>\n${t}\n</reasoning>\n${content}` : content;
 }
 
 /**
@@ -604,9 +605,15 @@ export function stripReasoning(content) {
   return content.replace(/<reasoning>[\s\S]*?<\/reasoning>\n?/g, '').replace(/^\(My notes: .*\)\n?/m, '');
 }
 
-/** Converts full <reasoning> blocks (older versions) into short notes. */
+/**
+ * Reasoning saved by older versions, in the current form: full <reasoning> blocks
+ * are shortened, "(My notes: …)" lines become <reasoning> blocks. Short blocks
+ * (already current) are left as they are.
+ */
 export function legacyReasoningToNotes(content) {
-  return content.replace(/<reasoning>\n?([\s\S]*?)\n?<\/reasoning>\n?/g, (_, r) => withReasoning('', r));
+  return content
+    .replace(/<reasoning>\n?([\s\S]*?)\n?<\/reasoning>\n?/g, (block, r) => (r.length <= NOTES_MAX_CHARS + 20 ? block : withReasoning('', r)))
+    .replace(/^\(My notes: (.*)\)\n?/, (_, r) => withReasoning('', r));
 }
 
 export function formatResult(tool, attrs, output) {

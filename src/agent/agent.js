@@ -517,10 +517,10 @@ export class Agent extends EventEmitter {
     return withReasoning(stripChannelMarkers(text), stripChannelMarkers(gen.thinking));
   }
 
-  /** Converts reasoning blocks saved by older versions into short notes (see withReasoning). */
+  /** Puts reasoning saved by older versions in the current form (see withReasoning). */
   upgradeReasoning() {
     const fix = (list) => list?.forEach((m) => {
-      if (m && m.role === 'assistant' && m.content.includes('<reasoning>')) m.content = legacyReasoningToNotes(m.content);
+      if (m && m.role === 'assistant' && /<reasoning>|^\(My notes: /.test(m.content)) m.content = legacyReasoningToNotes(m.content);
       // Leaked Gemma channel markers: seen again at each request, they made the model
       // reopen its reasoning (and loop). Removing them costs one full prompt read.
       if (m && m.role === 'assistant' && /<\|channel>|<channel\|>/.test(m.content)) m.content = stripChannelMarkers(m.content);

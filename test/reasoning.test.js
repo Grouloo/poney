@@ -44,7 +44,7 @@ test('reasoning is kept across tool calls and turns, so the prompt start never c
   fake.server.close();
 
   // Step 2 sees the reasoning of step 1.
-  assert.equal(assistantMsgs(fake.requests[1])[0], '(My notes: PLAN: first read a.txt, then answer.)\n<read path="a.txt" />');
+  assert.equal(assistantMsgs(fake.requests[1])[0], '<reasoning>\nPLAN: first read a.txt, then answer.\n</reasoning>\n<read path="a.txt" />');
   // Next request: the previous messages are unchanged (server cache reusable).
   const prev = fake.requests[1].messages;
   assert.deepEqual(fake.requests[2].messages.slice(0, prev.length), prev);
@@ -58,29 +58,35 @@ test('inline <think> blocks are kept the same way', async () => {
   const agent = new Agent({ cwd, config: { baseUrl: fake.url, model: 'fake' } });
   await agent.send('go');
   fake.server.close();
-  assert.match(assistantMsgs(fake.requests[1])[0], /^\(My notes: need the file\)\n/);
+  assert.match(assistantMsgs(fake.requests[1])[0], /^<reasoning>\nneed the file\n<\/reasoning>\n/);
 });
 
 test('long reasoning becomes a short note keeping its end; imitations are treated as thinking', () => {
   const r = withReasoning('<run>ls</run>', `${'Step one is done. '.repeat(1)}${'b'.repeat(5000)} end. I will now list the files. CONCLUSION`);
-  assert.equal(r, '(My notes: I will now list the files. CONCLUSION)\n<run>ls</run>');
+  assert.equal(r, '<reasoning>\nI will now list the files. CONCLUSION\n</reasoning>\n<run>ls</run>');
   assert.ok(r.length < 700);
   assert.equal(splitThinking('<reasoning>x</reasoning>answer').text, 'answer');
   assert.deepEqual(splitThinking('(My notes: plan)\nanswer'), { text: 'answer', thinking: 'plan' });
 });
 
-test('reasoning blocks saved by older versions are converted to short notes', async () => {
+test('reasoning saved by older versions is put in the current form', async () => {
   const { legacyReasoningToNotes, stripReasoning } = await import('../src/agent/protocol.js');
   const old = `<reasoning>\n${'think '.repeat(400)}DONE\n</reasoning>\n<run>ls</run>`;
   const notes = legacyReasoningToNotes(old);
-  assert.match(notes, /^\(My notes: think.*DONE\)\n<run>ls<\/run>$/);
+  assert.match(notes, /^<reasoning>\nthink.*DONE\n<\/reasoning>\n<run>ls<\/run>$/);
+  assert.ok(notes.length < 700);
   assert.equal(stripReasoning(notes), '<run>ls</run>');
+  // "(My notes: …)" lines become blocks; current blocks stay as they are.
+  assert.equal(legacyReasoningToNotes('(My notes: plan.)\n<run>ls</run>'), '<reasoning>\nplan.\n</reasoning>\n<run>ls</run>');
+  const current = withReasoning('<run>ls</run>', 'A short plan.');
+  assert.equal(legacyReasoningToNotes(current), current);
   const agent = new Agent({ cwd: await tmp(), config: { model: 'm' } });
-  agent.messages = [{ role: 'user', content: 'x' }, { role: 'assistant', content: old }];
+  agent.messages = [{ role: 'user', content: 'x' }, { role: 'assistant', content: old }, { role: 'assistant', content: '(My notes: n.)\nok' }];
   agent.archives = [[{ role: 'assistant', content: old }], null];
   agent.upgradeReasoning();
-  assert.match(agent.messages[1].content, /^\(My notes:/);
-  assert.match(agent.archives[0][0].content, /^\(My notes:/);
+  assert.match(agent.messages[1].content, /^<reasoning>\n/);
+  assert.equal(agent.messages[2].content, '<reasoning>\nn.\n</reasoning>\nok');
+  assert.match(agent.archives[0][0].content, /^<reasoning>\n/);
 });
 
 test('a generation with tokens but nothing visible is retried once without the notes', async () => {
@@ -110,7 +116,7 @@ test('a generation with tokens but nothing visible is retried once without the n
   server.close();
   assert.ok(events.some((e) => e.type === 'notice' && /rien produire de visible/.test(e.text)));
   assert.equal(events.find((e) => e.type === 'final')?.text, 'Done.');
-  assert.doesNotMatch(JSON.stringify(requests[2].messages), /My notes/);
+  assert.doesNotMatch(JSON.stringify(requests[2].messages), /<reasoning>/);
 });
 
 test('actions only mentioned in the reasoning are not counted as done', () => {
