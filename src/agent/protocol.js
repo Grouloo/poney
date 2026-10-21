@@ -126,7 +126,7 @@ export function isToolEnabled(tool, config) {
   return !flag || config[flag] !== false;
 }
 
-export function buildSystemPrompt({ cwd, offProject = false, today = '', platform, projectNotes, testCommand, shell = true, web = true, subagents = false, subagentRole = false }) {
+export function buildSystemPrompt({ cwd, offProject = false, platform, projectNotes, testCommand, shell = true, web = true, subagents = false, subagentRole = false }) {
   const notes = projectNotes ? `\nPROJECT NOTES (from the repo):\n${projectNotes}\n` : '';
   const testLine = testCommand && shell
     ? `\nThe project test command is: ${testCommand}\nIt is run automatically when you finish; make it pass.`
@@ -203,8 +203,7 @@ Assistant: Created hello.py, it prints "hi". Run it with: python3 hello.py`;
   const where = offProject
     ? `There is no project: you work in a private folder of this conversation, ${cwd} (${platform}). Create the files you need there.`
     : `You work inside the folder ${cwd} (${platform}).`;
-  const date = today ? ` Today is ${today}.` : '';
-  return `${who} ${where}${date}
+  return `${who} ${where} Each user message starts with the date and time it was sent.
 You act by writing tool tags. The results come back in the next message.
 
 TOOLS

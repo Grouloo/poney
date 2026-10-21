@@ -62,13 +62,26 @@ test('outside any project, the agent is told it works in the conversation folder
   assert.doesNotMatch(buildSystemPrompt({ cwd: '/proj', platform: 'x' }), /no project/);
 });
 
-test('the prompt gives the date and tells to search the web for what the model does not know', async () => {
+test('the prompt tells to search the web for what the model does not know', async () => {
   const { buildSystemPrompt } = await import('../src/agent/protocol.js');
-  const on = buildSystemPrompt({ cwd: '/p', today: '2026-10-22', platform: 'x', web: true });
-  assert.match(on, /Today is 2026-10-22\./);
+  const on = buildSystemPrompt({ cwd: '/p', platform: 'x', web: true });
+  assert.match(on, /Each user message starts with the date and time it was sent\./);
   assert.match(on, /something you do not know or that may have changed[^\n]*<web_search>/);
   assert.match(on, /Assistant: <web_search>Django latest release notes<\/web_search>/);
   const off = buildSystemPrompt({ cwd: '/p', platform: 'x', web: false });
   assert.match(off, /You have no internet access: say so/);
   assert.doesNotMatch(off, /<web_search>/);
+});
+
+test('each user message carries its date and time; the system prompt does not change with the day', async () => {
+  const { Agent, messageStamp } = await import('../src/agent/agent.js');
+  assert.equal(messageStamp(new Date(2026, 9, 22, 9, 5)), '[Thu 2026-10-22 09:05]');
+  const agent = new Agent({ cwd: '/tmp', config: { baseUrl: 'http://127.0.0.1:9', model: 'm' } });
+  agent.now = () => new Date(2026, 9, 22, 14, 30);
+  await agent.send('hello').catch(() => {});
+  assert.equal(agent.messages[0].content, '[Thu 2026-10-22 14:30] hello');
+  agent.now = () => new Date(2026, 9, 23, 8, 0);
+  const a = await agent.defaultSystemPrompt();
+  agent.now = () => new Date(2026, 9, 24, 8, 0);
+  assert.equal(await agent.defaultSystemPrompt(), a);
 });

@@ -20,7 +20,9 @@ function fake(reply) {
   return new Promise((resolve) => server.listen(0, () => resolve({ server, requests, url: `http://localhost:${server.address().port}` })));
 }
 const tmp = () => fs.mkdtemp(path.join(os.tmpdir(), 'lcx-rewind-'));
-const userTexts = (agent) => agent.messages.filter((m) => m.role === 'user').map((m) => m.content);
+// (user messages start with their date and time)
+const plain = (s) => s.replace(/^\[[^\]]+\] /, '');
+const userTexts = (agent) => agent.messages.filter((m) => m.role === 'user').map((m) => plain(m.content));
 
 test('rewind removes the edited message and everything after it', async () => {
   const f = await fake((d) => `answer to ${d.messages.at(-1).content}`);
@@ -34,7 +36,7 @@ test('rewind removes the edited message and everything after it', async () => {
   await agent.send('two, edited', { turnId: 't2b' });
   f.server.close();
   assert.deepEqual(userTexts(agent), ['one', 'two, edited']);
-  assert.equal(f.requests.at(-1).messages.at(-1).content, 'two, edited');
+  assert.equal(plain(f.requests.at(-1).messages.at(-1).content), 'two, edited');
 });
 
 test('rewind works across a compaction, using the archived history', async () => {
@@ -53,7 +55,7 @@ test('rewind works across a compaction, using the archived history', async () =>
   assert.equal(agent.archives.filter(Boolean).length, 1);
 
   agent.rewind('b'); // just before "second request": the full, uncompacted history
-  assert.equal(agent.messages[0].content, 'first request');
+  assert.equal(plain(agent.messages[0].content), 'first request');
   assert.equal(agent.messages.length, 2 + 16);
   assert.ok(agent.messages.every((m) => !m.content.startsWith('[CONTEXT SUMMARY')));
   assert.equal(agent.archives.filter(Boolean).length, 0, 'archive no longer needed');

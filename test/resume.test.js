@@ -104,7 +104,7 @@ test('resume works across a compaction (the archived history is used)', async ()
   assert.match(agent.messages[0].content, /^\[CONTEXT SUMMARY/);
   await agent.resumeFrom(readId);
   m.server.close();
-  assert.equal(agent.messages[0].content, 'first', 'back to the full history');
+  assert.equal(agent.messages[0].content.replace(/^\[[^\]]+\] /, ''), 'first', 'back to the full history');
   assert.deepEqual(agent.messages.slice(0, 2).map((x) => x.role), ['user', 'assistant']);
 });
 

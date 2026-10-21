@@ -108,6 +108,13 @@ export function needsRun(file) {
     && !/(^|\/)(LICENSE|NOTICE|AUTHORS|COPYING|CHANGELOG)$/i.test(file);
 }
 
+/** "[Thu 2026-10-22 14:05]": when a user message was sent (local time). */
+export function messageStamp(d) {
+  const day = d.toLocaleDateString('en-US', { weekday: 'short' });
+  const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return `[${day} ${date} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}]`;
+}
+
 let nextId = Date.now(); // unique across restarts, since saved conversations are replayed by id
 
 export class Agent extends EventEmitter {
@@ -182,8 +189,6 @@ export class Agent extends EventEmitter {
     return buildSystemPrompt({
       cwd: this.cwd,
       offProject: this.offProject,
-      // (the date changes the prompt once a day: one full prompt read on the first message of a day)
-      today: new Date().toLocaleDateString('en-CA'),
       platform: os.platform() === 'win32' ? `Windows ${os.arch()}, commands run in cmd.exe` : `${os.platform()} ${os.arch()}`,
       projectNotes: await this.loadProjectNotes(),
       testCommand: this.config.testCommand,
@@ -826,7 +831,9 @@ export class Agent extends EventEmitter {
       turnStats.exact &&= st.exact;
       turnStats.steps++;
     };
-    if (!resume) this.messages.push({ role: 'user', content: userText });
+    // Each message carries its date and time: the model cannot know them, and here
+    // (unlike in the system prompt) they never change the cached start of the prompt.
+    if (!resume) this.messages.push({ role: 'user', content: `${messageStamp(this.now?.() ?? new Date())} ${userText}` });
     this.emit('event', { type: 'turn_start' });
 
     const system = this.systemPrompt ?? await this.defaultSystemPrompt();
