@@ -77,6 +77,8 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   resumes with its history. Saved during a turn too (at every answer and action): a crash or a Ctrl-C only loses a few
   seconds, and a turn that was interrupted is flagged when the conversation is reopened. If the window crashes, it
   reloads by itself and the agent goes on; errors go to `logs/main.log`.
+- **Quote a passage**: select text in the conversation, a "❝ Citer" button appears; it adds the passage to the
+  input as a quote (`> …`, formulas as their LaTeX source). Quotes show as quotes in the sent message.
 - **Markdown answers**: tables (GitHub style, with alignment) and LaTeX formulas rendered by KaTeX
   (`$…$`, `\(…\)` inline; `$$…$$`, `\[…\]` as blocks). Prices like "$5 and $10" stay text.
 - **File browser** that updates when the agent writes, and reveals the modified file.

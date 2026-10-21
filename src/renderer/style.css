@@ -390,3 +390,15 @@ body.running .resume-btn { display: none; }
 .md-doc .math { display: block; overflow-x: auto; overflow-y: hidden; margin: 6px 0; }
 .md-doc .katex { position: relative; }
 #viewerMode.hidden { display: none; }
+
+/* ---------- quoting a passage ---------- */
+.quote-btn {
+  position: fixed; z-index: 50; padding: 4px 10px; font-size: 12px; border-radius: 8px;
+  background: var(--accent-2); color: #fff; border: none; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+.quote-btn:hover { background: var(--accent); }
+.quote-btn.hidden { display: none; }
+.msg.user .bubble blockquote {
+  margin: 2px 0 8px; padding: 2px 10px; border-left: 3px solid var(--accent-2);
+  color: var(--muted); white-space: pre-wrap;
+}

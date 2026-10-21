@@ -235,9 +235,27 @@ function clearTranscript() {
   transcript.appendChild(div('msg notice', `Nouvelle conversation dans ${esc(shortPath(settings.workspace))}`));
 }
 
+/** A user message: plain text, with the quoted lines ("> …") shown as quotes. */
+function fillUserBubble(bubble, text) {
+  bubble.textContent = '';
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length;) {
+    if (/^>\s?/.test(lines[i])) {
+      const quoted = [];
+      while (i < lines.length && /^>\s?/.test(lines[i])) quoted.push(lines[i++].replace(/^>\s?/, ''));
+      bubble.appendChild(document.createElement('blockquote')).textContent = quoted.join('\n');
+      if (lines[i] === '') i++; // the blank line after a quote is the quote's margin
+    } else {
+      const plain = [];
+      while (i < lines.length && !/^>\s?/.test(lines[i])) plain.push(lines[i++]);
+      bubble.appendChild(document.createTextNode(plain.join('\n')));
+    }
+  }
+}
+
 function addUserMessage(text, turnId) {
   const m = div('msg user');
-  m.appendChild(div('bubble')).textContent = text;
+  fillUserBubble(m.appendChild(div('bubble')), text);
   if (turnId) {
     // Messages sent before this feature have no rewind point: no edit button.
     const btn = document.createElement('button');
@@ -385,6 +403,68 @@ function autosize() {
   input.style.overflowY = input.scrollHeight > 220 ? 'auto' : 'hidden';
 }
 input.addEventListener('input', autosize);
+
+// ---------- quote a passage of the conversation (select it, then "Citer") ----------
+const quoteBtn = document.createElement('button');
+quoteBtn.className = 'quote-btn hidden';
+quoteBtn.type = 'button';
+quoteBtn.textContent = '❝ Citer';
+quoteBtn.title = 'Citer ce passage dans votre message';
+document.body.appendChild(quoteBtn);
+let quoteRange = null;
+
+/** The selected text; formulas give back their LaTeX source instead of their rendering. */
+function selectionText(range) {
+  const box = document.createElement('div');
+  box.appendChild(range.cloneContents());
+  box.querySelectorAll('.katex').forEach((k) => {
+    const src = k.querySelector('annotation')?.textContent;
+    const display = Boolean(k.closest('.katex-display'));
+    k.replaceWith(src ? (display ? `$$${src}$$` : `$${src}$`) : k.textContent);
+  });
+  box.querySelectorAll('.edit-msg, .resume-btn, button').forEach((b) => b.remove());
+  box.style.cssText = 'position:fixed;left:-10000px;top:0;white-space:pre-wrap;width:600px';
+  document.body.appendChild(box);
+  const text = box.innerText;
+  box.remove();
+  return text.replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function hideQuoteBtn() {
+  quoteBtn.classList.add('hidden');
+  quoteRange = null;
+}
+
+transcript.addEventListener('mouseup', () => setTimeout(() => {
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed || !sel.rangeCount) return hideQuoteBtn();
+  const range = sel.getRangeAt(0);
+  if (!transcript.contains(range.commonAncestorContainer) || !sel.toString().trim()) return hideQuoteBtn();
+  quoteRange = range.cloneRange();
+  const rects = range.getClientRects();
+  const r = rects[rects.length - 1] || range.getBoundingClientRect();
+  quoteBtn.classList.remove('hidden');
+  const w = quoteBtn.offsetWidth;
+  quoteBtn.style.left = `${Math.max(8, Math.min(window.innerWidth - w - 8, r.right - w / 2))}px`;
+  quoteBtn.style.top = `${Math.min(window.innerHeight - 40, r.bottom + 6)}px`;
+}, 0));
+document.addEventListener('mousedown', (e) => { if (e.target !== quoteBtn) hideQuoteBtn(); });
+transcript.addEventListener('scroll', hideQuoteBtn);
+quoteBtn.addEventListener('mousedown', (e) => e.preventDefault()); // keep the selection
+quoteBtn.onclick = () => {
+  if (!quoteRange) return;
+  const text = selectionText(quoteRange);
+  hideQuoteBtn();
+  window.getSelection()?.removeAllRanges();
+  if (!text) return;
+  const quote = text.split('\n').map((l) => `> ${l}`.trimEnd()).join('\n');
+  const cur = input.value;
+  const sep = !cur ? '' : cur.endsWith('\n\n') ? '' : cur.endsWith('\n') ? '\n' : '\n\n';
+  input.value = `${cur}${sep}${quote}\n\n`;
+  autosize();
+  input.focus();
+  input.setSelectionRange(input.value.length, input.value.length);
+};
 
 // ---------- generation timing ----------
 
