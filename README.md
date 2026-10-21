@@ -15,6 +15,9 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
 - **Short system prompt** (~1,100 tokens) with a few examples, instead of several thousand. It includes rules for
   talking with the user, against the habits of small fine-tuned models: answer first and briefly, no restating the
   user, no filler; read irony and sarcasm as such; ask one question when the request is unclear instead of guessing.
+  It also gives today's date, and tells the model to search the web (with an example) when the user mentions
+  something it does not know or that may have changed, instead of guessing. The date changes the prompt once a day:
+  the first message of a day re-reads the whole prompt.
 - **The model's own temperature** by default (left to the server and the model's preset); a value can still be set.
   A forced low temperature (0.2, the old default) made answers flat and loops likelier.
 - **Tools as text tags**, not JSON: `<write path="a.py">…</write>`, `<run>…</run>`.

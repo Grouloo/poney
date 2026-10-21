@@ -126,7 +126,7 @@ export function isToolEnabled(tool, config) {
   return !flag || config[flag] !== false;
 }
 
-export function buildSystemPrompt({ cwd, offProject = false, platform, projectNotes, testCommand, shell = true, web = true, subagents = false, subagentRole = false }) {
+export function buildSystemPrompt({ cwd, offProject = false, today = '', platform, projectNotes, testCommand, shell = true, web = true, subagents = false, subagentRole = false }) {
   const notes = projectNotes ? `\nPROJECT NOTES (from the repo):\n${projectNotes}\n` : '';
   const testLine = testCommand && shell
     ? `\nThe project test command is: ${testCommand}\nIt is run automatically when you finish; make it pass.`
@@ -160,7 +160,11 @@ export function buildSystemPrompt({ cwd, offProject = false, platform, projectNo
   rules.push('Work in small steps, then wait for the results. Never invent results.');
   rules.push('Use <write> for new files, <edit> to change existing files. Never <write> over a file you have not read.');
   if (shell) rules.push('Commands time out; do not start servers that never stop.');
-  if (!web) rules.push('You have no internet access.');
+  if (web) {
+    rules.push('Your knowledge stops at your training. When the user mentions something you do not know or that may have changed (recent news, a new version, a product, a person, prices), search with <web_search> (then <fetch> a page) before answering. Do not guess, and do not just say you do not know.');
+  } else {
+    rules.push('You have no internet access: say so when the user asks about something you do not know or that may be recent.');
+  }
   rules.push('Several steps: write a <plan> for this request and stick to it; rewrite the whole list when a task is done or changes; finish every task before your final answer. Do not restate it in your reasoning: its state is shown after each result.');
   if (subagents) {
     rules.push('In the plan, start a task with @agent when it is independent of the others (different files): it starts at once in a sub-agent, which gets the request, the plan and its task; you get its report. Do the other tasks yourself.');
@@ -199,7 +203,8 @@ Assistant: Created hello.py, it prints "hi". Run it with: python3 hello.py`;
   const where = offProject
     ? `There is no project: you work in a private folder of this conversation, ${cwd} (${platform}). Create the files you need there.`
     : `You work inside the folder ${cwd} (${platform}).`;
-  return `${who} ${where}
+  const date = today ? ` Today is ${today}.` : '';
+  return `${who} ${where}${date}
 You act by writing tool tags. The results come back in the next message.
 
 TOOLS
@@ -216,7 +221,10 @@ User: list or set, to check if a name was already seen?
 Assistant: A set: a lookup is O(1), O(n) in a list. Keep the list only if you need the order.
 
 User: great, it crashes again. very helpful
-Assistant: Sorry. Which command crashes, and what does it print?`}`;
+Assistant: Sorry. Which command crashes, and what does it print?${web ? `
+
+User: what's new in the latest Django release?
+Assistant: <web_search>Django latest release notes</web_search>` : ''}`}`;
 }
 
 function parseAttrs(src) {

@@ -61,3 +61,14 @@ test('outside any project, the agent is told it works in the conversation folder
   assert.match(p, /^You are Poney, a coding assistant\. There is no project: you work in a private folder of this conversation, \/data\/off-project\/abc/);
   assert.doesNotMatch(buildSystemPrompt({ cwd: '/proj', platform: 'x' }), /no project/);
 });
+
+test('the prompt gives the date and tells to search the web for what the model does not know', async () => {
+  const { buildSystemPrompt } = await import('../src/agent/protocol.js');
+  const on = buildSystemPrompt({ cwd: '/p', today: '2026-10-22', platform: 'x', web: true });
+  assert.match(on, /Today is 2026-10-22\./);
+  assert.match(on, /something you do not know or that may have changed[^\n]*<web_search>/);
+  assert.match(on, /Assistant: <web_search>Django latest release notes<\/web_search>/);
+  const off = buildSystemPrompt({ cwd: '/p', platform: 'x', web: false });
+  assert.match(off, /You have no internet access: say so/);
+  assert.doesNotMatch(off, /<web_search>/);
+});

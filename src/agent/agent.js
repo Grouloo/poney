@@ -182,6 +182,8 @@ export class Agent extends EventEmitter {
     return buildSystemPrompt({
       cwd: this.cwd,
       offProject: this.offProject,
+      // (the date changes the prompt once a day: one full prompt read on the first message of a day)
+      today: new Date().toLocaleDateString('en-CA'),
       platform: os.platform() === 'win32' ? `Windows ${os.arch()}, commands run in cmd.exe` : `${os.platform()} ${os.arch()}`,
       projectNotes: await this.loadProjectNotes(),
       testCommand: this.config.testCommand,
