@@ -346,3 +346,21 @@ fieldset label.check input { width: auto; }
 .resume-btn:hover { color: var(--accent); border-color: var(--border); }
 body.running .resume-btn { display: none; }
 .msg-editor .edit-error { margin: 6px 0; }
+
+/* ---------- agent's plan (pinned above the input) ---------- */
+.plan-panel { max-width: 820px; margin: 0 auto 8px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); font-size: 13px; }
+.plan-head { display: flex; align-items: center; gap: 8px; width: 100%; background: none; border: none; color: var(--text); padding: 6px 10px; font-size: 12px; text-align: left; }
+.plan-title { font-weight: 600; }
+.plan-count { color: var(--muted); }
+.plan-chev { margin-left: auto; color: var(--muted); transition: transform 0.15s; }
+.plan-panel.collapsed .plan-chev { transform: rotate(-90deg); }
+.plan-panel.collapsed .plan-list { display: none; }
+.plan-list { list-style: none; margin: 0; padding: 0 10px 8px; max-height: 28vh; overflow-y: auto; }
+.plan-list li { display: flex; align-items: baseline; gap: 8px; padding: 2px 0; }
+.plan-box { width: 14px; flex: none; text-align: center; color: var(--muted); }
+.plan-list li.done .plan-box { color: #3fb950; }
+.plan-list li.done .plan-text { color: var(--muted); text-decoration: line-through; }
+.plan-list li.failed .plan-box { color: #f85149; }
+.plan-list li.running .plan-text { font-weight: 600; }
+.plan-list .tag { margin-left: 4px; font-size: 11px; color: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 0 6px; white-space: nowrap; }
+.plan-panel.hidden { display: none; }

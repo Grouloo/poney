@@ -24,6 +24,8 @@ export const TOOLS = {
   fetch: { args: ['url'], bodyArg: 'url', needsBody: false, observes: true },
   // Delegates a task to a sub-agent. Consecutive <agent> tags run at the same time.
   agent: { args: ['title'], bodyArg: 'task', needsBody: true, observes: true },
+  // The task list (see plan.js). Tasks marked @agent start in sub-agents.
+  plan: { args: [], bodyArg: 'body', needsBody: true, observes: false },
 };
 
 // Common aliases small models reach for. Mapped to canonical names.
@@ -37,6 +39,7 @@ const ALIASES = {
   search_web: 'web_search', websearch: 'web_search', google: 'web_search',
   fetch_url: 'fetch', browse: 'fetch', open_url: 'fetch',
   subagent: 'agent', sub_agent: 'agent', delegate: 'agent', spawn_agent: 'agent', task: 'agent',
+  todo: 'plan', todos: 'plan', todo_list: 'plan', todowrite: 'plan', todo_write: 'plan', update_plan: 'plan', task_list: 'plan',
 };
 
 const ALL_NAMES = [...Object.keys(TOOLS), ...Object.keys(ALIASES)];
@@ -68,6 +71,27 @@ export function toolSchemas(config = {}) {
     fn('run', 'Run a shell command (scripts, tests, installs)', { command: 'shell command' }, ['command']),
     fn('web_search', 'Search the internet', { query: 'search query' }, ['query']),
     fn('fetch', 'Read a web page', { url: 'full URL' }, ['url']),
+    {
+      type: 'function',
+      function: {
+        name: 'plan',
+        description: 'Write or update your task list (the whole list each time). Tasks with agent=true are independent: they start at once in sub-agents.',
+        parameters: {
+          type: 'object',
+          properties: {
+            tasks: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: { task: { type: 'string' }, done: { type: 'boolean' }, agent: { type: 'boolean', description: 'independent task for a sub-agent' } },
+                required: ['task'],
+              },
+            },
+          },
+          required: ['tasks'],
+        },
+      },
+    },
     {
       type: 'function',
       function: {
@@ -120,6 +144,9 @@ export function buildSystemPrompt({ cwd, platform, projectNotes, testCommand, sh
     tools.push('<web_search>query</web_search>          search the internet');
     tools.push('<fetch>https://url</fetch>              read a web page');
   }
+  tools.push(subagents
+    ? '<plan>\n- [x] done task\n- [ ] next task\n- [ ] @agent independent task (files: …)\n</plan>                                 your task list'
+    : '<plan>\n- [x] done task\n- [ ] next task\n</plan>                                 your task list');
   if (subagents) {
     tools.push('<agent title="short name">\ncomplete task, with all the context it needs\n</agent>                                delegate an independent task to a sub-agent');
   }
@@ -134,7 +161,9 @@ export function buildSystemPrompt({ cwd, platform, projectNotes, testCommand, sh
   rules.push('Use <write> for new files, <edit> to change existing files. Never <write> over a file you have not read.');
   if (shell) rules.push('Commands time out; do not start servers that never stop.');
   if (!web) rules.push('You have no internet access.');
+  rules.push('For work with several steps, write a <plan> first, and write it again (the whole list) when a task is done or the plan changes. Do not restate your plan in your reasoning: where it stands is shown after each result.');
   if (subagents) {
+    rules.push('In the plan, start a task with @agent when it is independent of the others (different files): it starts at once in a sub-agent, which gets the request, the plan and its task; you get its report. Do the other tasks yourself.');
     rules.push('Sub-agents: put ALL the independent tasks in ONE message (one <agent> tag each, one after the other): they run at the same time, then you get all the reports. Do not launch them one by one. Use them only for tasks that touch different files. A sub-agent cannot see this conversation: write in the task everything it needs (files, goal, constraints).');
   }
   rules.push(subagentRole
@@ -324,6 +353,12 @@ function jsonToTag(name, a = {}) {
       const list = Array.isArray(a.tasks) ? a.tasks : [a];
       return list.map((t) => (typeof t === 'string' ? { task: t } : t))
         .map((t) => `<agent${quoteAttr('title', t.title ?? t.name)}>\n${t.task ?? t.prompt ?? t.description ?? ''}\n</agent>`).join('\n');
+    }
+    case 'plan': {
+      const list = Array.isArray(a.tasks) ? a.tasks : Array.isArray(a.todos) ? a.todos : null;
+      if (!list) return `<plan>\n${a.plan ?? a.body ?? ''}\n</plan>`;
+      return `<plan>\n${list.map((t) => (typeof t === 'string' ? { task: t } : t))
+        .map((t) => `- [${t.done || t.status === 'completed' || t.status === 'done' ? 'x' : ' '}] ${t.agent ? '@agent ' : ''}${t.task ?? t.content ?? t.text ?? t.title ?? ''}`).join('\n')}\n</plan>`;
     }
     default: return `<${tool}${['path', 'start', 'end', 'pattern', 'depth'].map((k) => quoteAttr(k, a[k])).join('')} />`;
   }

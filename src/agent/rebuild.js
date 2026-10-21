@@ -15,6 +15,7 @@ export function actionTag(tool, a = {}) {
     case 'search': return `<search${attr('pattern', a.pattern)}${attr('path', a.path)} />`;
     case 'read': return `<read${attr('path', a.path)}${attr('start', a.start)}${attr('end', a.end)} />`;
     case 'agent': return `<agent${attr('title', a.title)}>\n${a.task ?? ''}\n</agent>`;
+    case 'plan': return `<plan>\n${a.body ?? ''}\n</plan>`;
     default: return `<${tool}${attr('path', a.path)}${attr('depth', a.depth)} />`;
   }
 }

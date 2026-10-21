@@ -51,6 +51,12 @@
   </main>
 
   <footer class="composer">
+    <div id="planPanel" class="plan-panel hidden">
+      <button class="plan-head" type="button" title="Afficher / masquer le plan de l’agent">
+        <span class="plan-title">Plan</span><span class="plan-count"></span><span class="plan-chev">▾</span>
+      </button>
+      <ol class="plan-list"></ol>
+    </div>
     <div class="composer-box">
       <textarea id="input" rows="1" placeholder="Décrivez une tâche…" title="Entrée pour envoyer, Maj+Entrée pour un retour à la ligne"></textarea>
       <button id="sendBtn" class="primary">Envoyer</button>

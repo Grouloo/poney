@@ -5,6 +5,7 @@ import os from 'node:os';
 import { streamChat, complete, serverContextLength } from './llm.js';
 import { TOOLS, buildSystemPrompt, parseActions, splitThinking, formatResult, isToolEnabled, withReasoning, findRepetition, normalizeToolCalls, stripReasoning, legacyReasoningToNotes, stripChannelMarkers, toolSchemas } from './protocol.js';
 import { executeAction, runShell, truncateMiddle } from './tools.js';
+import { parsePlan, mergePlan, tasksToDelegate, setStatus, formatPlan, planReminder, subAgentTask } from './plan.js';
 import {
   summaryTokens, mechanicalSummary, DEFAULT_CHARS_PER_TOKEN,
   makeEstimator, contextPlan, answerTokens, isValidSample, historyTokens, splitForCompaction, extractFacts, buildSummaryRequest, cleanSummary,
@@ -122,6 +123,7 @@ export class Agent extends EventEmitter {
     this.readVersions = new Map(); // file -> version this agent last read or wrote
     this.messages = [];
     this.untested = false; // files changed since the last successful command
+    this.taskPlan = null; // the task list written with <plan> (see plan.js)
     this.running = false;
     this.abort = null;
     this.systemPrompt = null; // custom prompt for this conversation; null = generated default
@@ -196,6 +198,7 @@ export class Agent extends EventEmitter {
     this.stop();
     this.messages = [];
     this.untested = false;
+    this.taskPlan = null;
     this.systemPrompt = null;
     this.lastUsage = null;
     this.currentTask = null;
@@ -220,6 +223,8 @@ export class Agent extends EventEmitter {
       const earlier = i >= 0 ? this.checkpoints.slice(0, i) : this.checkpoints.filter((c) => keepTurnIds?.has(c.turnId));
       this.messages = rebuilt;
       this.untested = false;
+      this.taskPlan = null;
+      this.emit('event', { type: 'plan', tasks: [] });
       // (action resume points cannot be rebuilt: they are dropped)
       this.checkpoints = earlier.filter((c) => c.turnId).map((c) => ({ turnId: c.turnId, rebuild: true }));
       this.archives = [];
@@ -257,6 +262,7 @@ export class Agent extends EventEmitter {
     if (this.running) throw new Error('Agent is running.');
     this.messages = rebuilt.messages;
     this.untested = false;
+    this.taskPlan = null;
     // Message checkpoints up to the request being resumed stay (rebuilt on use); later ones go.
     const t = rebuilt.turnId ? this.checkpoints.findIndex((c) => c.turnId === rebuilt.turnId) : -1;
     this.checkpoints = (t >= 0 ? this.checkpoints.slice(0, t + 1) : []).filter((c) => c.turnId).map((c) => ({ turnId: c.turnId, rebuild: true }));
@@ -272,6 +278,8 @@ export class Agent extends EventEmitter {
     if (!base) throw new Error('L’historique de ce point de reprise n’est plus disponible.');
     this.messages = base.slice(0, cp.length).map((m) => ({ ...m }));
     this.untested = cp.untested;
+    this.taskPlan = cp.plan ? structuredClone(cp.plan) : null;
+    this.emit('event', { type: 'plan', tasks: this.taskPlan?.tasks ?? [] });
     this.checkpoints = this.checkpoints.slice(0, i);
     // Earlier checkpoints still pointing at the restored archive now match the
     // current history; archives nobody points at any more are dropped.
@@ -427,7 +435,8 @@ export class Agent extends EventEmitter {
     const fallback = !summary;
     summary ??= mechanicalSummary(old);
 
-    const content = buildSummaryMessage({ summary, facts: extractFacts(old), task });
+    let content = buildSummaryMessage({ summary, facts: extractFacts(old), task });
+    if (this.taskPlan?.tasks.length) content += `\n\nCURRENT PLAN:\n${formatPlan(this.taskPlan)}`;
     // Keep the history being replaced for the rewind points that need it.
     if (this.checkpoints.some((c) => c.archive == null)) {
       const k = this.archives.push(this.messages) - 1;
@@ -517,6 +526,48 @@ export class Agent extends EventEmitter {
     const text = report || (error ? `Error: ${error}` : endReason === 'max_steps' ? 'Stopped: step limit reached before the end.' : '(no report)');
     this.emit('event', { type: 'action_end', id, ok, output: text, meta: { title, steps: stats?.steps, tokens: stats?.tokens, ms: stats?.totalMs } });
     return formatResult('agent', { title, status: ok ? 'done' : endReason || 'failed' }, truncateMiddle(text, Math.max(1000, maxReportChars)));
+  }
+
+  // ----- plan -----
+
+  /**
+   * Applies a <plan>: the new task list, and the @agent tasks started in
+   * sub-agents (each gets the request, the plan and its task); waits for them.
+   */
+  async runPlan(action, signal, actId) {
+    const written = parsePlan(action.args.body);
+    if (!written.length) {
+      const text = 'Empty plan: write one task per line, like "- [ ] task" ("- [x] task" when done).';
+      return { ok: false, text, result: formatResult('plan', {}, text) };
+    }
+    this.taskPlan = mergePlan(this.taskPlan, written);
+    let todo = tasksToDelegate(this.taskPlan);
+    let note = '';
+    if (todo.length && (this.role === 'sub' || !isToolEnabled('agent', this.config))) {
+      note = '\n(Sub-agents are not available: do the @agent tasks yourself.)';
+      todo = [];
+    }
+    let reports = [];
+    if (todo.length) {
+      for (const t of todo) setStatus(this.taskPlan, t, 'running');
+      this.emit('event', { type: 'plan', tasks: this.taskPlan.tasks });
+      const ids = todo.map(() => nextId++);
+      // Resuming from one of these sub-agents re-runs the plan step.
+      const cp = this.checkpoints.at(-1);
+      if (cp?.kind === 'action' && cp.actIds.includes(actId)) cp.actIds.push(...ids);
+      const group = todo.map((t) => ({ tool: 'agent', args: { title: t.text.slice(0, 60), task: subAgentTask(this.taskPlan, t, this.currentTask) } }));
+      try {
+        reports = await this.runSubAgents(group, signal, ids);
+      } catch (e) {
+        for (const t of todo) setStatus(this.taskPlan, t, 'pending'); // stopped: to be started again
+        this.emit('event', { type: 'plan', tasks: this.taskPlan.tasks });
+        throw e;
+      }
+      todo.forEach((t, k) => setStatus(this.taskPlan, t, /\bstatus="done"/.test(reports[k]) ? 'done' : 'failed'));
+    }
+    this.emit('event', { type: 'plan', tasks: this.taskPlan.tasks });
+    const text = `${formatPlan(this.taskPlan)}${note}${reports.length ? `\n\nSub-agent reports:\n${reports.join('\n')}` : ''}`;
+    return { ok: true, text, result: formatResult('plan', {}, text) };
   }
 
   // ----- generation -----
@@ -745,7 +796,7 @@ export class Agent extends EventEmitter {
 
   async send(userText, { turnId, resume } = {}) {
     if (this.running) throw new Error('Agent is already running.');
-    if (turnId && !resume) this.checkpoints.push({ turnId, archive: null, length: this.messages.length, untested: this.untested });
+    if (turnId && !resume) this.checkpoints.push({ turnId, archive: null, length: this.messages.length, untested: this.untested, plan: structuredClone(this.taskPlan) });
     this.running = true;
     this.abort = new AbortController();
     const { signal } = this.abort;
@@ -915,6 +966,7 @@ export class Agent extends EventEmitter {
           if (toRun.length && (toRun[0].tool === 'agent') !== (a.tool === 'agent')) break;
           toRun.push(a);
           if (TOOLS[a.tool].observes && a.tool !== 'agent') break;
+          if (a.tool === 'plan' && /@agent|\(agent\)/i.test(a.args.body || '')) break; // reports needed first
         }
         const last = toRun[toRun.length - 1];
         this.messages.push({ role: 'assistant', content: this.assistantContent(gen, gen.text.slice(0, last.end).trim()) });
@@ -929,6 +981,7 @@ export class Agent extends EventEmitter {
           archive: null,
           length: this.messages.length,
           untested: this.untested,
+          plan: structuredClone(this.taskPlan),
           remaining: toRun.slice(fromIndex).map(({ tool, args, raw, start, end, complete }) => ({ tool, args, raw, start, end, complete })),
           priorResults: [...results],
           turnStartIndex: this.turnStartIndex,
@@ -974,6 +1027,12 @@ export class Agent extends EventEmitter {
               continue;
             }
           }
+          if (action.tool === 'plan') {
+            const out = await this.runPlan(action, signal, actId);
+            this.emit('event', { type: 'action_end', id: actId, ok: out.ok, output: out.text, meta: { tasks: this.taskPlan?.tasks.length ?? 0 } });
+            results.push(out.result);
+            continue;
+          }
           const r = await executeAction(action, {
             cwd: this.cwd,
             config,
@@ -1013,6 +1072,11 @@ export class Agent extends EventEmitter {
         let content = results.join('\n');
         if (skipped > 0) content += `\n(${skipped} later action(s) were NOT run. Look at the result above first, then continue.)`;
         if (cutNote) content += `\n${cutNote}`;
+        // Where the plan stands (not after the plan itself, which shows it in full).
+        if (this.taskPlan && !toRun.some((a) => a.tool === 'plan')) {
+          const line = planReminder(this.taskPlan);
+          if (line) content += `\n${line}`;
+        }
         this.messages.push({ role: 'user', content });
       }
     } catch (e) {

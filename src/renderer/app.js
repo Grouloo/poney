@@ -211,7 +211,22 @@ function onWorkspaceChanged() {
   refreshGauge();
 }
 
+/** The agent's task list, pinned above the input (hidden when there is none). */
+const PLAN_ICON = { pending: '○', running: '<span class="spin">◌</span>', done: '✓', failed: '✕' };
+function renderPlan(tasks = []) {
+  const panel = $('planPanel');
+  panel.classList.toggle('hidden', !tasks.length);
+  if (!tasks.length) return;
+  const done = tasks.filter((t) => t.status === 'done').length;
+  panel.querySelector('.plan-count').textContent = `${done}/${tasks.length}`;
+  panel.querySelector('.plan-list').innerHTML = tasks.map((t) =>
+    `<li class="${t.status}"><span class="plan-box">${PLAN_ICON[t.status] || '○'}</span><span class="plan-text">${esc(t.text)}</span>${t.agent ? '<span class="tag">sous-agent</span>' : ''}</li>`).join('');
+  panel.classList.toggle('all-done', done === tasks.length);
+}
+$('planPanel').querySelector('.plan-head').onclick = () => $('planPanel').classList.toggle('collapsed');
+
 function clearTranscript() {
+  renderPlan([]);
   transcript.innerHTML = '';
   bubbles.clear();
   cards.clear();
@@ -301,6 +316,7 @@ async function resumeFromAction(id) {
 }
 
 function replayTranscript(events) {
+  renderPlan([]); // the last plan event of the conversation shows it again
   transcript.innerHTML = '';
   bubbles.clear();
   cards.clear();
@@ -440,11 +456,15 @@ function summarize(tool, args) {
     case 'fetch': return args.url || '';
     case 'search': return `${args.pattern || ''}  ${args.path ? `in ${args.path}` : ''}`;
     case 'read': return `${args.path || ''}${args.start ? `:${args.start}-${args.end || ''}` : ''}`;
+    case 'plan': {
+      const n = (args.body || '').split('\n').filter((l) => l.trim()).length;
+      return `${n} tâche${n > 1 ? 's' : ''}`;
+    }
     default: return args.path || '.';
   }
 }
 
-const TOOL_LABEL = { list: 'Lister', read: 'Lire', search: 'Chercher', write: 'Écrire', edit: 'Modifier', run: 'Exécuter', web_search: 'Web', fetch: 'Page web', agent: 'Sous-agent' };
+const TOOL_LABEL = { list: 'Lister', read: 'Lire', search: 'Chercher', write: 'Écrire', edit: 'Modifier', run: 'Exécuter', web_search: 'Web', fetch: 'Page web', agent: 'Sous-agent', plan: 'Plan' };
 
 function renderDiff(diff) {
   return `<pre class="diff">${diff.split('\n').map((l) => {
@@ -501,7 +521,7 @@ function onEvent(ev) {
   if (ev.agentId) {
     const card = cards.get(ev.agentId);
     const log = card?.querySelector('.sub-log');
-    if (!log || ev.type === 'final') return;
+    if (!log || ev.type === 'final' || ev.type === 'plan') return; // (a sub-agent's own plan is not pinned)
     if (ev.type === 'delta') {
       card.dataset.tokens = Number(card.dataset.tokens || 0) + 1;
       card.querySelector('.sub-tokens').textContent = `${card.dataset.tokens} tokens`;
@@ -660,6 +680,9 @@ function onEvent(ev) {
     }
     case 'notice':
       add(div('notice', esc(ev.text)));
+      break;
+    case 'plan':
+      renderPlan(ev.tasks);
       break;
     case 'context':
       if (!replaying) renderGauge(ev);

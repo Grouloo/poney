@@ -109,6 +109,7 @@ function saveConversation() {
   if (!conv || !agent) return;
   conv.messages = agent.messages;
   conv.untested = agent.untested;
+  conv.plan = agent.taskPlan;
   conv.systemPrompt = agent.systemPrompt;
   conv.checkpoints = agent.checkpoints;
   conv.archives = agent.archives;
@@ -233,6 +234,7 @@ ipcMain.handle('conversations:open', (_, id) => {
   a.reset();
   a.messages = loaded.messages;
   a.untested = loaded.untested;
+  a.taskPlan = loaded.plan ?? null;
   a.systemPrompt = loaded.systemPrompt ?? null;
   a.checkpoints = loaded.checkpoints ?? [];
   a.archives = loaded.archives ?? [];
