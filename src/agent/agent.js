@@ -98,6 +98,15 @@ const INVISIBLE_TIMEOUT_MS = 45_000;
 // Non-space characters of prose allowed after a completed action before we stop the generation.
 const NARRATION_LIMIT = 400;
 
+/**
+ * Whether a changed file is something to run before finishing: not documentation,
+ * nor data/config formats (JSON gets a syntax check; YAML, TOML… have nothing to run).
+ */
+export function needsRun(file) {
+  return !/\.(md|markdown|mdx|txt|rst|adoc|org|csv|tsv|log|json|jsonc|ya?ml|toml|ini|cfg|conf)$/i.test(file)
+    && !/(^|\/)(LICENSE|NOTICE|AUTHORS|COPYING|CHANGELOG)$/i.test(file);
+}
+
 let nextId = Date.now(); // unique across restarts, since saved conversations are replayed by id
 
 export class Agent extends EventEmitter {
@@ -766,6 +775,7 @@ export class Agent extends EventEmitter {
     const shellOn = config.shellEnabled !== false;
 
     let changedThisTurn = false;
+    let codeChangedThisTurn = false; // the test gates only ask to test this turn's code
     let gateNudges = 0;
     let loopNudges = 0;
     let testFailures = 0;
@@ -872,7 +882,7 @@ export class Agent extends EventEmitter {
           }
 
           // Test gate 1: project test command must pass.
-          if (config.testCommand && changedThisTurn && shellOn) {
+          if (config.testCommand && codeChangedThisTurn && shellOn) {
             notice(`Vérification : ${config.testCommand}`);
             const actId = nextId++;
             this.emit('event', { type: 'action_start', id: actId, tool: 'run', args: { command: config.testCommand }, auto: true });
@@ -885,7 +895,7 @@ export class Agent extends EventEmitter {
               continue;
             }
             if (r.code === 0) this.untested = false;
-          } else if (this.untested && shellOn && gateNudges < 2) {
+          } else if (this.untested && codeChangedThisTurn && shellOn && gateNudges < 2) {
             // Test gate 2: no unverified changes.
             gateNudges++;
             notice('Code modifié mais pas testé : le modèle est relancé pour tester.');
@@ -980,7 +990,7 @@ export class Agent extends EventEmitter {
 
           if (r.changed) {
             changedThisTurn = true;
-            if (!/\.(md|txt|rst|csv|log)$/i.test(r.changed)) this.untested = true;
+            if (needsRun(r.changed)) { this.untested = true; codeChangedThisTurn = true; }
           }
           if (action.tool === 'run' && r.exitCode === 0) this.untested = false;
 

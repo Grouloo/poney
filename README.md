@@ -23,8 +23,9 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
 - **Guard against rewrites from memory**: `<write>` on an existing file is refused if its content is not
   visible in the history (read with `<read>` or written by the model, and not removed by a compaction).
   A large shrink of a file (more than half of its lines) triggers a warning.
-- **Test gate**: the agent cannot finish while it has modified code that has not run successfully.
-  If a *test command* is configured, it runs automatically and must pass.
+- **Test gate**: the agent cannot finish while code it modified during the turn has not run successfully.
+  If a *test command* is configured, it runs automatically and must pass. Documentation and data/config files
+  (Markdown, text, JSON, YAML, TOML…) do not count: there is nothing to run.
 - **Early stop** of the generation as soon as an action needs a result (no invented results).
 - **Context management**: bounded tool outputs, adjustable `num_ctx` (native Ollama), and **compaction**:
   as late as possible, when the next call would no longer fit in the window (minimal answer + estimation
