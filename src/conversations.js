@@ -19,10 +19,15 @@ export class ConversationStore {
     return path.join(this.dir, `${id}.json`);
   }
 
-  create(workspace, title) {
+  static newId() {
+    return `${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
+  }
+
+  create(workspace, title, { id = ConversationStore.newId(), offProject = false } = {}) {
     const now = Date.now();
     return {
-      id: `${now.toString(36)}-${crypto.randomBytes(3).toString('hex')}`,
+      id,
+      ...(offProject ? { offProject: true } : {}),
       workspace,
       title: ConversationStore.cleanTitle(title) || 'Sans titre',
       createdAt: now,
@@ -77,7 +82,8 @@ export class ConversationStore {
       if (!name.endsWith('.json')) continue;
       try {
         const c = JSON.parse(fs.readFileSync(path.join(this.dir, name), 'utf8'));
-        if (c.workspace === workspace) out.push({ id: c.id, title: c.title, updatedAt: c.updatedAt });
+        // workspace null: the conversations outside any project (each has its own folder)
+        if (workspace === null ? c.offProject : c.workspace === workspace && !c.offProject) out.push({ id: c.id, title: c.title, updatedAt: c.updatedAt });
       } catch {}
     }
     return out.sort((a, b) => b.updatedAt - a.updatedAt);

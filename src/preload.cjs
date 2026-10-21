@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('api', {
   resumeFrom: (actId) => ipcRenderer.invoke('agent:resumeFrom', actId),
   stop: () => ipcRenderer.invoke('agent:stop'),
   reset: () => ipcRenderer.invoke('agent:reset'),
+  newOffProject: () => ipcRenderer.invoke('conversations:newOffProject'),
   approve: (id, ok, always) => ipcRenderer.invoke('agent:approve', { id, ok, always }),
   onEvent: (fn) => ipcRenderer.on('agent:event', (_, ev) => fn(ev)),
   onApproval: (fn) => ipcRenderer.on('agent:approval', (_, req) => fn(req)),

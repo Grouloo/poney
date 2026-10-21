@@ -111,9 +111,10 @@ export function needsRun(file) {
 let nextId = Date.now(); // unique across restarts, since saved conversations are replayed by id
 
 export class Agent extends EventEmitter {
-  constructor({ cwd, config, approve, shared, role = 'main' }) {
+  constructor({ cwd, config, approve, shared, role = 'main', offProject = false }) {
     super();
     this.cwd = cwd;
+    this.offProject = offProject; // a conversation outside any project: cwd is its own folder
     this.role = role; // 'main' or 'sub' (a sub-agent cannot start sub-agents)
     this.config = { ...DEFAULT_CONFIG, ...config, ...(role === 'sub' ? { subagentsEnabled: false } : {}) };
     this.approve = approve || (async () => true);
@@ -180,6 +181,7 @@ export class Agent extends EventEmitter {
   async defaultSystemPrompt() {
     return buildSystemPrompt({
       cwd: this.cwd,
+      offProject: this.offProject,
       platform: os.platform() === 'win32' ? `Windows ${os.arch()}, commands run in cmd.exe` : `${os.platform()} ${os.arch()}`,
       projectNotes: await this.loadProjectNotes(),
       testCommand: this.config.testCommand,
@@ -496,6 +498,7 @@ export class Agent extends EventEmitter {
     }
     const child = new Agent({
       cwd: this.cwd,
+      offProject: this.offProject,
       config: this.config,
       role: 'sub',
       shared: this.shared,

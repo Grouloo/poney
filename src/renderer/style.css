@@ -187,6 +187,11 @@ body.no-sidebar #sidebar { display: none; }
   border-radius: 8px; padding: 7px 10px; margin-bottom: 8px;
 }
 .new-conv:hover { border-color: var(--accent-2); }
+.new-row { display: flex; gap: 6px; }
+.new-row .new-conv { flex: 1; }
+.new-row .new-conv.off { flex: 0 0 auto; }
+.list-head { margin: 14px 4px 6px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+#offSection.hidden { display: none; }
 .list { list-style: none; margin: 0; padding: 0; }
 .list li {
   display: flex; align-items: center; gap: 6px; padding: 7px 8px; border-radius: 7px; cursor: pointer;

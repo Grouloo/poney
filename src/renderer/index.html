@@ -29,8 +29,15 @@
       <button data-tab="filesPane">Fichiers</button>
     </div>
     <div id="convPane" class="pane">
-      <button id="newBtn" class="new-conv">＋ Nouvelle conversation</button>
+      <div class="new-row">
+        <button id="newBtn" class="new-conv" title="Nouvelle conversation dans le dossier de projet">＋ Nouvelle conversation</button>
+        <button id="newOffBtn" class="new-conv off" title="Conversation hors projet : l’agent a les mêmes outils, mais ses fichiers restent dans un dossier propre à la conversation">＋ Hors projet</button>
+      </div>
       <ul id="convList" class="list"></ul>
+      <div id="offSection" class="hidden">
+        <div class="list-head">Hors projet</div>
+        <ul id="offList" class="list"></ul>
+      </div>
     </div>
     <div id="filesPane" class="pane hidden">
       <div class="files-head">

@@ -42,3 +42,22 @@ test('data of the old app name is moved once, without overwriting', async () => 
   moveAppData(from, to); // a second run never overwrites
   assert.equal(fsSync.readFileSync(path.join(to, 'settings.json'), 'utf8'), '{"changed":true}');
 });
+
+test('conversations outside any project are listed apart, with their own folder', async () => {
+  const store = new ConversationStore(await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-conv-')));
+  const p = store.create('/proj', 'in the project');
+  const o = store.create('/data/off-project/abc', 'just chatting', { id: 'abc', offProject: true });
+  store.save(p);
+  store.save(o);
+  assert.equal(o.id, 'abc');
+  assert.deepEqual(store.list('/proj').map((c) => c.title), ['in the project']);
+  assert.deepEqual(store.list(null).map((c) => c.title), ['just chatting']);
+  assert.deepEqual(store.list('/data/off-project/abc'), []); // never mixed with a project
+});
+
+test('outside any project, the agent is told it works in the conversation folder', async () => {
+  const { buildSystemPrompt } = await import('../src/agent/protocol.js');
+  const p = buildSystemPrompt({ cwd: '/data/off-project/abc', offProject: true, platform: 'darwin arm64' });
+  assert.match(p, /^You are Poney, a coding assistant\. There is no project: you work in a private folder of this conversation, \/data\/off-project\/abc/);
+  assert.doesNotMatch(buildSystemPrompt({ cwd: '/proj', platform: 'x' }), /no project/);
+});

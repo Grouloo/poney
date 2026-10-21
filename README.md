@@ -83,6 +83,10 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   reloads by itself and the agent goes on; errors go to `logs/main.log`.
 - **Quote a passage**: select text in the conversation, a "❝ Citer" button appears; it adds the passage to the
   input as a quote (`> …`, formulas as their LaTeX source). Quotes show as quotes in the sent message.
+- **Conversations outside any project** ("＋ Hors projet"): same tools, but the agent works in a folder of the
+  conversation's own (`~/Library/Application Support/poney/off-project/<id>/`), shown in the file browser. They are
+  listed in their own section, whatever the project; deleting one deletes its folder. A new one abandoned before
+  its first message leaves nothing behind.
 - **Markdown answers**: tables (GitHub style, with alignment) and LaTeX formulas rendered by KaTeX
   (`$…$`, `\(…\)` inline; `$$…$$`, `\[…\]` as blocks). Prices like "$5 and $10" stay text.
 - **File browser** that updates when the agent writes, and reveals the modified file.

@@ -57,9 +57,14 @@ function shortPath(p) {
   return p ? p.replace(/^\/Users\/[^/]+/, '~') : 'Choisir un dossier…';
 }
 
+// Outside any project, the agent works in a folder of the conversation's own.
+const offMode = () => Boolean(settings.active?.offProject);
+const activeDir = () => settings.active?.cwd || '';
+
 function renderSettings() {
-  $('workspaceLabel').textContent = shortPath(settings.workspace);
-  $('workspaceBtn').title = settings.workspace || 'Choisir un dossier';
+  $('workspaceLabel').textContent = offMode() ? 'Hors projet' : shortPath(settings.workspace);
+  $('workspaceBtn').querySelector('.chip-icon').textContent = offMode() ? '💬' : '📁';
+  $('workspaceBtn').title = offMode() ? 'Conversation hors projet (cliquer pour choisir un dossier de projet)' : settings.workspace || 'Choisir un dossier';
   const shellOn = settings.config.shellEnabled !== false;
   $('webEnabled').checked = settings.config.webEnabled !== false;
   $('shellEnabled').checked = shellOn;
@@ -83,6 +88,11 @@ function renderSettings() {
       b.onclick = async () => { settings = await window.api.setWorkspace(dir); renderSettings(); onWorkspaceChanged(); };
       recent.appendChild(b);
     }
+    const off = document.createElement('button');
+    off.textContent = '💬 Hors projet';
+    off.title = 'Conversation sans dossier de projet : les fichiers restent dans la conversation';
+    off.onclick = () => $('newOffBtn').click();
+    recent.appendChild(off);
   }
 }
 
@@ -189,18 +199,35 @@ $('settingsBtn').onclick = () => $('settings').classList.toggle('hidden');
 $('closeSettings').onclick = () => $('settings').classList.add('hidden');
 $('workspaceBtn').onclick = async () => {
   if (running) return;
-  const before = settings.workspace;
+  const before = activeDir();
   settings = await window.api.chooseWorkspace();
   renderSettings();
-  if (settings.workspace !== before) onWorkspaceChanged();
+  if (activeDir() !== before) onWorkspaceChanged();
 };
 $('newBtn').onclick = async () => {
   if (running) await window.api.stop();
-  await window.api.reset();
-  clearTranscript();
-  refreshConversations();
-  refreshPromptBadge();
-  refreshGauge();
+  const before = activeDir();
+  settings = await window.api.reset();
+  renderSettings();
+  if (activeDir() !== before) onWorkspaceChanged();
+  else {
+    clearTranscript();
+    refreshConversations();
+    refreshPromptBadge();
+    refreshGauge();
+  }
+};
+$('newOffBtn').onclick = async () => {
+  if (running) await window.api.stop();
+  try {
+    settings = await window.api.newOffProject();
+  } catch (e) {
+    $('status').textContent = errorText(e);
+    return;
+  }
+  renderSettings();
+  onWorkspaceChanged();
+  input.focus();
 };
 
 function onWorkspaceChanged() {
@@ -232,7 +259,9 @@ function clearTranscript() {
   transcript.innerHTML = '';
   bubbles.clear();
   cards.clear();
-  transcript.appendChild(div('msg notice', `Nouvelle conversation dans ${esc(shortPath(settings.workspace))}`));
+  transcript.appendChild(div('msg notice', offMode()
+    ? 'Nouvelle conversation hors projet : les fichiers de l’agent restent dans un dossier propre à cette conversation.'
+    : `Nouvelle conversation dans ${esc(shortPath(settings.workspace))}`));
 }
 
 /** A user message: plain text, with the quoted lines ("> …") shown as quotes. */
@@ -358,10 +387,11 @@ async function submit() {
   }
   const text = input.value.trim();
   if (!text) return;
-  if (!settings.workspace) {
+  if (!activeDir()) {
     settings = await window.api.chooseWorkspace();
     renderSettings();
-    if (!settings.workspace) return;
+    if (!activeDir()) return;
+    onWorkspaceChanged();
   }
   if (!settings.config.model) {
     $('settings').classList.remove('hidden');
@@ -860,12 +890,17 @@ let renaming = false; // a title is being edited: don't rebuild the list under t
 
 async function refreshConversations() {
   if (renaming) return;
-  const { current, items } = await window.api.listConversations();
+  const { current, items, offProject = [] } = await window.api.listConversations();
   currentConversation = current;
-  const list = $('convList');
+  fillConversationList($('convList'), items, current, settings.workspace ? 'Aucune conversation dans ce dossier.' : 'Choisissez un dossier.');
+  $('offSection').classList.toggle('hidden', !offProject.length);
+  fillConversationList($('offList'), offProject, current, '');
+}
+
+function fillConversationList(list, items, current, emptyNote) {
   list.innerHTML = '';
   if (!items.length) {
-    list.innerHTML = `<li class="empty-note">${settings.workspace ? 'Aucune conversation dans ce dossier.' : 'Choisissez un dossier.'}</li>`;
+    if (emptyNote) list.innerHTML = `<li class="empty-note">${emptyNote}</li>`;
     return;
   }
   for (const c of items) {
@@ -880,14 +915,21 @@ async function refreshConversations() {
     li.querySelector('.title').ondblclick = (e) => { e.stopPropagation(); startRename(li, c); };
     li.querySelector('.del').onclick = async (e) => {
       e.stopPropagation();
-      if (!confirm(`Supprimer la conversation « ${c.title} » ?`)) return;
+      if (!confirm(list.id === 'offList'
+        ? `Supprimer la conversation « ${c.title} » et les fichiers de son dossier ?`
+        : `Supprimer la conversation « ${c.title} » ?`)) return;
       try {
         await window.api.deleteConversation(c.id);
       } catch (err) {
         alert(err.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''));
         return;
       }
-      if (c.id === current) clearTranscript();
+      if (c.id === current) {
+        settings = await window.api.getSettings();
+        renderSettings();
+        clearTranscript();
+        refreshTree();
+      }
       refreshConversations();
     };
     list.appendChild(li);
@@ -933,9 +975,10 @@ function startRename(li, c) {
 async function openConversation(id) {
   if (running || id === currentConversation) return;
   const { events, settings: s } = await window.api.openConversation(id);
-  if (s.workspace !== settings.workspace) {
-    settings = s;
-    renderSettings();
+  const moved = s.active?.cwd !== activeDir();
+  settings = s;
+  renderSettings();
+  if (moved) {
     expanded.clear();
     refreshTree();
     closeViewer();
@@ -999,8 +1042,9 @@ function fileIcon(name) {
 
 let treeRefresh = null;
 async function refreshTree() {
-  $('filesRoot').textContent = shortPath(settings.workspace);
-  if (!settings.workspace) {
+  $('filesRoot').textContent = offMode() ? 'Dossier de la conversation' : shortPath(settings.workspace);
+  $('filesRoot').title = activeDir();
+  if (!activeDir()) {
     $('fileTree').innerHTML = '';
     return;
   }

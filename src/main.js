@@ -75,12 +75,47 @@ const pendingApprovals = new Map();
 
 const send = (channel, payload) => win && !win.isDestroyed() && win.webContents.send(channel, payload);
 
+// A conversation outside any project works in its own folder, inside the app's
+// data: { id, dir } while one is open (or being started), null otherwise.
+let offProject = null;
+const offProjectRoot = () => path.join(app.getPath('userData'), 'off-project');
+const activeCwd = () => offProject?.dir ?? settings.workspace;
+
+function startOffProject(id = ConversationStore.newId(), dir = path.join(offProjectRoot(), id)) {
+  leaveOffProject();
+  fs.mkdirSync(dir, { recursive: true });
+  offProject = { id, dir };
+}
+
+/** Leaves the conversation outside projects; its folder goes if nothing was ever sent nor written. */
+function leaveOffProject() {
+  if (offProject && conv?.id !== offProject.id) removeIfEmpty(offProject.dir);
+  offProject = null;
+}
+
+function removeIfEmpty(dir) {
+  try { if (!fs.readdirSync(dir).length) fs.rmdirSync(dir); } catch {}
+}
+
+/** Folders of conversations never started (the app was closed before the first message). */
+function pruneOffProject() {
+  try {
+    for (const id of fs.readdirSync(offProjectRoot())) {
+      if (!fs.existsSync(path.join(store.dir, `${id}.json`))) removeIfEmpty(path.join(offProjectRoot(), id));
+    }
+  } catch {}
+}
+
+/** The settings, plus where the agent works now (for the window). */
+const publicSettings = () => ({ ...settings, active: { offProject: Boolean(offProject), cwd: activeCwd() || '' } });
+
 function getAgent() {
-  if (!settings.workspace) throw new Error('Choisissez d’abord un dossier de projet.');
-  if (!agent || agent.cwd !== settings.workspace) {
+  if (!activeCwd()) throw new Error('Choisissez d’abord un dossier de projet.');
+  if (!agent || agent.cwd !== activeCwd()) {
     agent?.reset();
     agent = new Agent({
-      cwd: settings.workspace,
+      cwd: activeCwd(),
+      offProject: Boolean(offProject),
       config: settings.config,
       approve: (req) => new Promise((resolve) => {
         pendingApprovals.set(req.id, resolve);
@@ -140,33 +175,36 @@ function setWorkspace(dir) {
   settings.recent = [dir, ...settings.recent.filter((d) => d !== dir)].slice(0, 8);
   saveSettings();
   startNewConversation();
+  leaveOffProject();
   agent = null;
 }
 
-ipcMain.handle('settings:get', () => settings);
+ipcMain.handle('settings:get', () => publicSettings());
 ipcMain.handle('settings:setConfig', (_, patch) => {
   settings.config = { ...settings.config, ...patch };
   saveSettings();
   if (agent) agent.config = { ...DEFAULT_CONFIG, ...settings.config };
-  return settings;
+  return publicSettings();
 });
 ipcMain.handle('workspace:choose', async () => {
   const r = await dialog.showOpenDialog(win, { properties: ['openDirectory', 'createDirectory'], defaultPath: settings.workspace || undefined });
-  if (r.canceled || !r.filePaths[0]) return settings;
+  if (r.canceled || !r.filePaths[0]) return publicSettings();
   setWorkspace(r.filePaths[0]);
-  return settings;
+  return publicSettings();
 });
 ipcMain.handle('workspace:set', (_, dir) => {
   setWorkspace(dir);
-  return settings;
+  return publicSettings();
 });
-ipcMain.handle('workspace:reveal', () => settings.workspace && shell.openPath(settings.workspace));
+ipcMain.handle('workspace:reveal', () => activeCwd() && shell.openPath(activeCwd()));
 ipcMain.handle('models:list', async (_, cfg) => listModels({ ...settings.config, ...cfg }));
 ipcMain.handle('agent:send', async (_, text, turnId) => {
   const a = getAgent();
   if (a.running) throw new Error('L’agent est déjà en cours d’exécution.');
   if (!conv) {
-    conv = store.create(settings.workspace, text);
+    conv = offProject
+      ? store.create(offProject.dir, text, { id: offProject.id, offProject: true })
+      : store.create(settings.workspace, text);
     conv.systemPrompt = a.systemPrompt; // edited before the first message
   }
   store.record(conv, { type: 'user_message', text, turnId });
@@ -198,7 +236,11 @@ ipcMain.handle('agent:stop', () => {
   resolveApprovals(false);
   agent?.stop();
 });
-ipcMain.handle('agent:reset', () => startNewConversation());
+ipcMain.handle('agent:reset', () => {
+  leaveOffProject(); // "new conversation": back to the project
+  startNewConversation();
+  return publicSettings();
+});
 
 // Resume the conversation from a past action: everything after it is removed,
 // the action runs again and the agent goes on (events stream as for a message).
@@ -226,16 +268,28 @@ ipcMain.handle('agent:resumeFrom', (_, actId) => {
 });
 
 ipcMain.handle('conversations:list', () => ({
-  current: conv?.id ?? null,
+  current: conv?.id ?? offProject?.id ?? null,
   items: settings.workspace ? store.list(settings.workspace) : [],
+  offProject: store.list(null),
 }));
+// A new conversation outside any project (the agent works in a folder of its own).
+ipcMain.handle('conversations:newOffProject', () => {
+  if (agent?.running) throw new Error('L’agent est en cours d’exécution.');
+  startNewConversation();
+  startOffProject();
+  return publicSettings();
+});
 ipcMain.handle('session:current', () => ({ events: conv?.events ?? [], running: !!agent?.running }));
 ipcMain.handle('conversations:open', (_, id) => {
   if (agent?.running) throw new Error('L’agent est en cours d’exécution.');
   const loaded = store.load(id);
   // Conversations saved before rewind points existed: give them some.
   if (migrateLegacy(loaded)) store.save(loaded, { touch: false });
-  if (loaded.workspace !== settings.workspace) setWorkspace(loaded.workspace);
+  if (loaded.offProject) startOffProject(loaded.id, loaded.workspace);
+  else {
+    leaveOffProject();
+    if (loaded.workspace !== settings.workspace) setWorkspace(loaded.workspace);
+  }
   const a = getAgent();
   a.reset();
   a.messages = loaded.messages;
@@ -252,7 +306,7 @@ ipcMain.handle('conversations:open', (_, id) => {
     store.save(loaded, { touch: false });
   }
   conv = loaded;
-  return { events: loaded.events, settings };
+  return { events: loaded.events, settings: publicSettings() };
 });
 ipcMain.handle('conversations:rename', (_, id, title) => {
   // The open conversation is held in memory and saved after each turn: rename
@@ -270,7 +324,14 @@ ipcMain.handle('conversations:delete', (_, id) => {
     if (agent?.running) throw new Error('L’agent est en cours d’exécution.');
     startNewConversation();
   }
+  let removed = null;
+  try { removed = store.load(id); } catch {}
   store.delete(id);
+  // Outside any project, the conversation's folder goes with it (only that folder).
+  if (removed?.offProject && path.dirname(removed.workspace) === offProjectRoot()) {
+    fs.rmSync(removed.workspace, { recursive: true, force: true });
+    if (offProject?.id === id) startOffProject(); // the window stays outside projects, on a new conversation
+  }
 });
 
 ipcMain.handle('prompt:get', async () => {
@@ -301,7 +362,7 @@ ipcMain.handle('tor:check', async () => {
   }
 });
 ipcMain.handle('context:get', async () => {
-  if (!settings.workspace) return null;
+  if (!activeCwd()) return null;
   return getAgent().contextStats();
 });
 ipcMain.handle('context:compact', async () => {
@@ -313,10 +374,10 @@ ipcMain.handle('context:compact', async () => {
   return r;
 });
 
-ipcMain.handle('files:list', (_, rel) => listDir(settings.workspace, rel));
-ipcMain.handle('files:read', (_, rel) => readFileForViewer(settings.workspace, rel));
-ipcMain.handle('files:openExternal', (_, rel) => shell.openPath(path.join(settings.workspace, rel)));
-ipcMain.handle('files:reveal', (_, rel) => shell.showItemInFolder(path.join(settings.workspace, rel)));
+ipcMain.handle('files:list', (_, rel) => listDir(activeCwd(), rel));
+ipcMain.handle('files:read', (_, rel) => readFileForViewer(activeCwd(), rel));
+ipcMain.handle('files:openExternal', (_, rel) => shell.openPath(path.join(activeCwd(), rel)));
+ipcMain.handle('files:reveal', (_, rel) => shell.showItemInFolder(path.join(activeCwd(), rel)));
 ipcMain.handle('agent:approve', (_, { id, ok, always }) => {
   if (always) {
     settings.config.approval = 'auto';
@@ -325,7 +386,7 @@ ipcMain.handle('agent:approve', (_, { id, ok, always }) => {
   }
   pendingApprovals.get(id)?.(ok);
   pendingApprovals.delete(id);
-  return settings;
+  return publicSettings();
 });
 
 function createWindow() {
@@ -368,6 +429,7 @@ app.whenReady().then(() => {
   if (process.platform === 'darwin') app.dock?.setIcon(path.join(here, '..', 'assets', 'icon.png'));
   loadSettings();
   store = new ConversationStore(path.join(app.getPath('userData'), 'conversations'));
+  pruneOffProject();
   createWindow();
   app.on('activate', () => BrowserWindow.getAllWindows().length === 0 && createWindow());
 });
