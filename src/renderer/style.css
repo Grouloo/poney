@@ -364,3 +364,29 @@ body.running .resume-btn { display: none; }
 .plan-list li.running .plan-text { font-weight: 600; }
 .plan-list .tag { margin-left: 4px; font-size: 11px; color: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 0 6px; white-space: nowrap; }
 .plan-panel.hidden { display: none; }
+
+/* ---------- formatted Markdown documents (viewer) ---------- */
+.md-doc { max-width: 780px; margin: 0 auto; padding: 18px 26px 40px; line-height: 1.6; font-size: 14px; }
+.md-doc h1, .md-doc h2 { border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+.md-doc h1 { font-size: 1.8em; margin: 0.4em 0 0.6em; }
+.md-doc h2 { font-size: 1.4em; margin: 1.4em 0 0.6em; }
+.md-doc h3 { font-size: 1.15em; margin: 1.2em 0 0.5em; }
+.md-doc h4, .md-doc h5, .md-doc h6 { font-size: 1em; margin: 1em 0 0.4em; }
+.md-doc p, .md-doc ul, .md-doc ol, .md-doc blockquote, .md-doc table, .md-doc pre { margin: 0 0 12px; }
+.md-doc ul, .md-doc ol { padding-left: 26px; }
+.md-doc li > ul, .md-doc li > ol { margin: 2px 0; }
+.md-doc li:has(> input[type="checkbox"]) { list-style: none; margin-left: -20px; }
+.md-doc a { color: var(--accent, #4c8dff); text-decoration: none; }
+.md-doc a:hover { text-decoration: underline; }
+.md-doc code { font-family: var(--mono); font-size: 0.9em; background: var(--panel-2); padding: 1px 5px; border-radius: 4px; }
+.md-doc pre { background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; overflow-x: auto; }
+.md-doc pre code { background: none; padding: 0; font-size: 12.5px; }
+.md-doc blockquote { border-left: 3px solid var(--border); padding: 2px 14px; color: var(--muted); }
+.md-doc table { border-collapse: collapse; display: block; overflow-x: auto; }
+.md-doc th, .md-doc td { border: 1px solid var(--border); padding: 5px 12px; }
+.md-doc th { background: var(--panel-2); }
+.md-doc img { max-width: 100%; background: none; display: inline; margin: 0; } /* (badges sit in a line) */
+.md-doc hr { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
+.md-doc .math { display: block; overflow-x: auto; overflow-y: hidden; margin: 6px 0; }
+.md-doc .katex { position: relative; }
+#viewerMode.hidden { display: none; }

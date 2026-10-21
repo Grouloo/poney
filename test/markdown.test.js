@@ -32,3 +32,15 @@ test('markdown: an unclosed formula while streaming stays text, bad LaTeX does n
   assert.match(markdown('$\\frac{$'), /./);
   assert.match(markdown('<script>alert(1)</script>'), /&lt;script&gt;/);
 });
+
+test('documents: full Markdown with formulas; "$" in code stays code', async () => {
+  const { documentHtml } = await import('../src/renderer/document.js');
+  const html = documentHtml('# T\n\n*it* $x^2$ `$HOME`\n\n> quote $$\\sum i$$\n\n```sh\necho $PATH $HOME\n```\n\n1. one\n- [x] done');
+  assert.match(html, /<h1>T<\/h1>/);
+  assert.match(html, /<em>it<\/em> <span class="katex">/);
+  assert.match(html, /<code>\$HOME<\/code>/);
+  assert.match(html, /<blockquote>\s*<p>quote <span class="math"><span class="katex-display">/);
+  assert.match(html, /<code class="language-sh">echo \$PATH \$HOME/);
+  assert.match(html, /<ol>\s*<li>one<\/li>/);
+  assert.match(html, /<input checked="" disabled="" type="checkbox"> done/);
+});

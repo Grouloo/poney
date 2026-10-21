@@ -2,6 +2,8 @@ import { parseActions, splitThinking, normalizeToolCalls } from '../agent/protoc
 import hljs from '../../node_modules/@highlightjs/cdn-assets/es/highlight.min.js';
 import { fmtNum, fmtDuration } from './format.js';
 import { markdown, esc } from './markdown.js';
+import { documentHtml } from './document.js';
+import DOMPurify from '../../node_modules/dompurify/dist/purify.es.mjs';
 
 const $ = (id) => document.getElementById(id);
 const transcript = $('transcript');
@@ -977,7 +979,14 @@ async function openFile(rel, { keepScroll = false } = {}) {
   $('viewerPath').title = f.path;
   document.querySelectorAll('.tree .node').forEach((n) => n.classList.toggle('active', n.dataset.path === f.path));
 
-  if (f.kind === 'text') {
+  const markdownFile = f.kind === 'text' && /\.(md|markdown|mdx)$/i.test(f.path);
+  $('viewerMode').classList.toggle('hidden', !markdownFile);
+  if (markdownFile && mdView === 'preview') {
+    $('viewerMode').textContent = 'Code';
+    $('viewerInfo').textContent = `${f.content.split('\n').length} lignes · ${formatSize(f.size)}${f.truncated ? ' · tronqué' : ''}`;
+    showDocument(body, f);
+  } else if (f.kind === 'text') {
+    if (markdownFile) $('viewerMode').textContent = 'Aperçu';
     const lines = f.content.split('\n');
     if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
     $('viewerInfo').textContent = `${lines.length} lignes · ${formatSize(f.size)}${f.truncated ? ' · tronqué' : ''}`;
@@ -1004,6 +1013,63 @@ async function openFile(rel, { keepScroll = false } = {}) {
     body.innerHTML = `<div class="center">${esc(msg)}</div>`;
   }
   body.scrollTop = scroll;
+}
+
+// ---------- Markdown documents: formatted view by default, code view on demand ----------
+let mdView = 'preview';
+try { mdView = localStorage.getItem('mdView') || 'preview'; } catch {}
+$('viewerMode').onclick = () => {
+  mdView = mdView === 'preview' ? 'code' : 'preview';
+  try { localStorage.setItem('mdView', mdView); } catch {}
+  if (openPath) openFile(openPath);
+};
+
+/** A path relative to the folder of `from` (both relative to the project), or null if outside or not a file. */
+function resolveLink(from, href) {
+  if (!href || /^[a-z][\w+.-]*:/i.test(href) || href.startsWith('#') || href.startsWith('/')) return null;
+  const parts = from.split('/').slice(0, -1);
+  for (const seg of decodeURI(href.split(/[?#]/)[0]).split('/')) {
+    if (seg === '..') { if (!parts.length) return null; parts.pop(); } else if (seg && seg !== '.') parts.push(seg);
+  }
+  return parts.join('/') || null;
+}
+
+function showDocument(body, f) {
+  body.innerHTML = '';
+  const doc = document.createElement('article');
+  doc.className = 'md-doc';
+  doc.innerHTML = DOMPurify.sanitize(documentHtml(f.content));
+  body.appendChild(doc);
+  doc.querySelectorAll('pre code').forEach((el) => {
+    const lang = (el.className.match(/language-([\w+-]+)/) || [])[1];
+    if (lang && hljs.getLanguage(lang)) el.innerHTML = hljs.highlight(el.textContent, { language: lang, ignoreIllegals: true }).value;
+    el.classList.add('hljs');
+  });
+  // Images of the project: loaded through the app (remote ones are not loaded).
+  doc.querySelectorAll('img').forEach(async (img) => {
+    const rel = resolveLink(f.path, img.getAttribute('src'));
+    if (!rel) return;
+    try {
+      const r = await window.api.readFile(rel);
+      if (r.kind === 'image') img.src = r.src;
+    } catch {}
+  });
+  // Links: web pages in the browser, project files in the viewer, never in this window.
+  doc.addEventListener('click', (e) => {
+    const a = e.target.closest('a[href]');
+    if (!a) return;
+    e.preventDefault();
+    const href = a.getAttribute('href');
+    if (/^(https?:|mailto:)/i.test(href)) window.open(href);
+    else if (href.startsWith('#')) {
+      const id = decodeURIComponent(href.slice(1)).toLowerCase();
+      const h = [...doc.querySelectorAll('h1,h2,h3,h4,h5,h6')].find((x) => x.textContent.trim().toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '') === id);
+      h?.scrollIntoView({ block: 'start' });
+    } else {
+      const rel = resolveLink(f.path, href);
+      if (rel) openFile(rel);
+    }
+  });
 }
 
 $('viewerClose').onclick = closeViewer;

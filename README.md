@@ -116,7 +116,10 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   `@agent` are independent: they start at once in sub-agents, each given the request, the whole plan (its task
   marked) and its task; the plan step waits for their reports. A delegated task is never started twice. The plan
   is saved with the conversation, kept through compaction and restored by rewinds.
-- **Viewer** with syntax highlighting and image preview; paths in the agent's actions are clickable.
+- **Viewer** with syntax highlighting and image preview; paths in the agent's actions are clickable. Markdown
+  documents open formatted (GitHub Markdown, LaTeX formulas, highlighted code, project images; links to project
+  files open in the viewer, web links in the browser), with a "Code" button to see the source; the choice is
+  remembered. Raw HTML in a document is sanitized.
 
 ## Platforms
 

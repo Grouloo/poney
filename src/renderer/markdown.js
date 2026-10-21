@@ -4,7 +4,7 @@ import katex from '../../node_modules/katex/dist/katex.mjs';
 
 export const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-function tex(src, displayMode) {
+export function tex(src, displayMode) {
   try {
     return katex.renderToString(src.trim(), { displayMode, throwOnError: false, output: 'htmlAndMathml' });
   } catch {
