@@ -66,32 +66,117 @@ function saveSettings() {
   fs.writeFileSync(settingsFile(), JSON.stringify(settings, null, 2));
 }
 
-// ---------- agent ----------
+// ---------- sessions ----------
+// Each open conversation is a session: its agent, its transcript, its pending
+// approvals. The window shows the active one; the others go on in the background
+// (a generation is not stopped by switching), and keep their state for when the
+// user comes back.
 let win = null;
-let agent = null;
 let store = null;
-let conv = null; // current conversation, created on the first message
-const pendingApprovals = new Map();
+const sessions = new Map(); // key (the conversation id, chosen up front) -> Session
+let active = null;
+const MAX_IDLE_SESSIONS = 8; // sessions kept in memory while idle (the others are reloaded from disk)
 
 const send = (channel, payload) => win && !win.isDestroyed() && win.webContents.send(channel, payload);
 
-// A conversation outside any project works in its own folder, inside the app's
-// data: { id, dir } while one is open (or being started), null otherwise.
-let offProject = null;
 const offProjectRoot = () => path.join(app.getPath('userData'), 'off-project');
-const activeCwd = () => offProject?.dir ?? settings.workspace;
 
-function startOffProject(id = ConversationStore.newId(), dir = path.join(offProjectRoot(), id)) {
-  leaveOffProject();
-  fs.mkdirSync(dir, { recursive: true });
-  offProject = { id, dir };
+class Session {
+  constructor({ id = ConversationStore.newId(), cwd, offProject = false, conv = null }) {
+    this.key = id;
+    this.cwd = cwd;
+    this.offProject = offProject; // a conversation outside any project: cwd is its own folder
+    this.conv = conv; // saved conversation, created on the first message
+    this.agent = null;
+    this.approvals = new Map(); // id -> { req, resolve }
+    this.saveTimer = null;
+    this.partial = null; // the answer being written: { id, text, thinking }
+    this.unread = false; // finished in the background, not seen since
+    this.usedAt = Date.now();
+  }
+
+  get running() { return Boolean(this.agent?.running); }
+
+  getAgent() {
+    if (!this.cwd) throw new Error('Choisissez d’abord un dossier de projet.');
+    if (!this.agent || this.agent.cwd !== this.cwd) {
+      this.agent?.reset();
+      const agent = new Agent({
+        cwd: this.cwd,
+        offProject: this.offProject,
+        config: settings.config,
+        approve: (req) => new Promise((resolve) => {
+          this.approvals.set(req.id, { req, resolve });
+          if (this === active) send('agent:approval', { ...req, session: this.key });
+        }),
+      });
+      agent.on('event', (ev) => this.onEvent(ev));
+      this.agent = agent;
+    }
+    this.agent.config = { ...DEFAULT_CONFIG, ...settings.config };
+    return this.agent;
+  }
+
+  onEvent(ev) {
+    // The answer being written, to draw it again when the user comes back mid-generation.
+    if (!ev.agentId) {
+      if (ev.type === 'assistant_start') this.partial = { id: ev.id, text: '', thinking: '' };
+      else if (ev.type === 'delta' && this.partial?.id === ev.id && ev.kind !== 'tool') this.partial[ev.kind === 'thinking' ? 'thinking' : 'text'] += ev.text;
+      else if (ev.type === 'assistant_end') this.partial = null;
+    }
+    if (this === active) send('agent:event', { ...ev, session: this.key });
+    if (ev.type === 'turn_start' || ev.type === 'turn_end') {
+      if (ev.type === 'turn_end' && this !== active) this.unread = true;
+      send('sessions:changed');
+    }
+    if (!this.conv) return;
+    store.record(this.conv, ev);
+    // Saved during the turn too: a crash or a forced quit loses a few seconds, not the turn.
+    if (ev.type === 'turn_start') this.conv.inProgress = true;
+    if (ev.type === 'turn_end') {
+      this.conv.inProgress = false;
+      this.save();
+    } else if (!ev.agentId && SAVED_DURING_TURN.has(ev.type)) this.saveSoon();
+  }
+
+  saveSoon() {
+    this.saveTimer ??= setTimeout(() => this.save(), 3000);
+  }
+
+  save() {
+    clearTimeout(this.saveTimer);
+    this.saveTimer = null;
+    const { conv, agent } = this;
+    if (!conv || !agent) return;
+    conv.messages = agent.messages;
+    conv.untested = agent.untested;
+    conv.plan = agent.taskPlan;
+    conv.memory = agent.memory;
+    conv.memoryShownAt = agent.memoryShownAt;
+    conv.chapters = agent.chapters;
+    conv.systemPrompt = agent.systemPrompt;
+    conv.checkpoints = agent.checkpoints;
+    conv.archives = agent.archives;
+    store.save(conv);
+    send('conversations:changed', conv.id);
+  }
+
+  resolveApprovals(value) {
+    for (const { resolve } of this.approvals.values()) resolve(value);
+    this.approvals.clear();
+  }
+
+  /** Gone from memory: idle, saved. Its folder goes too if it is outside projects and was never used. */
+  close() {
+    this.save();
+    this.resolveApprovals(false);
+    this.agent?.stop();
+    if (this.offProject && !this.conv) removeIfEmpty(this.cwd);
+    sessions.delete(this.key);
+  }
 }
 
-/** Leaves the conversation outside projects; its folder goes if nothing was ever sent nor written. */
-function leaveOffProject() {
-  if (offProject && conv?.id !== offProject.id) removeIfEmpty(offProject.dir);
-  offProject = null;
-}
+const SAVED_DURING_TURN = new Set(['assistant_end', 'action_end', 'compaction', 'error', 'notice']);
 
 function removeIfEmpty(dir) {
   try { if (!fs.readdirSync(dir).length) fs.rmdirSync(dir); } catch {}
@@ -106,121 +191,91 @@ function pruneOffProject() {
   } catch {}
 }
 
+/** Makes a session the one shown. The previous one goes on; if it was empty and idle, it goes away. */
+function activate(s) {
+  const prev = active;
+  active = s;
+  sessions.set(s.key, s);
+  s.unread = false;
+  s.usedAt = Date.now();
+  if (prev && prev !== s && !prev.conv && !prev.running) prev.close();
+  // Idle sessions beyond the limit: saved and dropped (reloaded from disk when opened).
+  const idle = [...sessions.values()].filter((x) => x !== active && !x.running && !x.approvals.size).sort((a, b) => b.usedAt - a.usedAt);
+  for (const x of idle.slice(MAX_IDLE_SESSIONS)) x.close();
+  send('sessions:changed');
+  return s;
+}
+
+const activeCwd = () => active?.cwd ?? settings.workspace;
+/** The active session, a new one in the current project if there is none. */
+const current = () => active ?? activate(new Session({ cwd: settings.workspace }));
+const saveAll = () => { for (const s of sessions.values()) s.save(); };
+
 /** The settings, plus where the agent works now (for the window). */
-const publicSettings = () => ({ ...settings, active: { offProject: Boolean(offProject), cwd: activeCwd() || '' } });
+const publicSettings = () => ({ ...settings, active: { offProject: Boolean(active?.offProject), cwd: activeCwd() || '', session: active?.key ?? null } });
 
-function getAgent() {
-  if (!activeCwd()) throw new Error('Choisissez d’abord un dossier de projet.');
-  if (!agent || agent.cwd !== activeCwd()) {
-    agent?.reset();
-    agent = new Agent({
-      cwd: activeCwd(),
-      offProject: Boolean(offProject),
-      config: settings.config,
-      approve: (req) => new Promise((resolve) => {
-        pendingApprovals.set(req.id, resolve);
-        send('agent:approval', req);
-      }),
-    });
-    agent.on('event', (ev) => {
-      send('agent:event', ev);
-      if (!conv) return;
-      store.record(conv, ev);
-      // Saved during the turn too: a crash or a forced quit loses a few seconds, not the turn.
-      if (ev.type === 'turn_start') conv.inProgress = true;
-      if (ev.type === 'turn_end') {
-        conv.inProgress = false;
-        saveConversation();
-      } else if (!ev.agentId && SAVED_DURING_TURN.has(ev.type)) saveSoon();
-    });
-  }
-  agent.config = { ...DEFAULT_CONFIG, ...settings.config };
-  return agent;
-}
-
-const SAVED_DURING_TURN = new Set(['assistant_end', 'action_end', 'compaction', 'error', 'notice']);
-let saveTimer = null;
-function saveSoon() {
-  saveTimer ??= setTimeout(saveConversation, 3000);
-}
-
-function saveConversation() {
-  clearTimeout(saveTimer);
-  saveTimer = null;
-  if (!conv || !agent) return;
-  conv.messages = agent.messages;
-  conv.untested = agent.untested;
-  conv.plan = agent.taskPlan;
-  conv.memory = agent.memory;
-  conv.memoryShownAt = agent.memoryShownAt;
-  conv.chapters = agent.chapters;
-  conv.systemPrompt = agent.systemPrompt;
-  conv.checkpoints = agent.checkpoints;
-  conv.archives = agent.archives;
-  store.save(conv);
-  send('conversations:changed', conv.id);
-}
-
-function startNewConversation() {
-  resolveApprovals(false);
-  agent?.reset();
-  conv = null;
-}
-
-function resolveApprovals(value) {
-  for (const resolve of pendingApprovals.values()) resolve(value);
-  pendingApprovals.clear();
-}
-
+/** Changes the current project (sessions in other folders go on). */
 function setWorkspace(dir) {
-  if (agent && agent.running) throw new Error('L’agent est en cours d’exécution.');
   settings.workspace = dir;
   settings.recent = [dir, ...settings.recent.filter((d) => d !== dir)].slice(0, 8);
   saveSettings();
-  startNewConversation();
-  leaveOffProject();
-  agent = null;
+}
+
+/** What the window needs to show a session. */
+function sessionView(s) {
+  return {
+    events: s.conv?.events ?? [],
+    running: s.running,
+    partial: s.partial,
+    approvals: [...s.approvals.values()].map(({ req }) => ({ ...req, session: s.key })),
+    session: s.key,
+    settings: publicSettings(),
+  };
 }
 
 ipcMain.handle('settings:get', () => publicSettings());
 ipcMain.handle('settings:setConfig', (_, patch) => {
   settings.config = { ...settings.config, ...patch };
   saveSettings();
-  if (agent) agent.config = { ...DEFAULT_CONFIG, ...settings.config };
+  for (const s of sessions.values()) if (s.agent) s.agent.config = { ...DEFAULT_CONFIG, ...settings.config };
   return publicSettings();
 });
 ipcMain.handle('workspace:choose', async () => {
   const r = await dialog.showOpenDialog(win, { properties: ['openDirectory', 'createDirectory'], defaultPath: settings.workspace || undefined });
   if (r.canceled || !r.filePaths[0]) return publicSettings();
   setWorkspace(r.filePaths[0]);
+  activate(new Session({ cwd: settings.workspace }));
   return publicSettings();
 });
 ipcMain.handle('workspace:set', (_, dir) => {
   setWorkspace(dir);
+  activate(new Session({ cwd: settings.workspace }));
   return publicSettings();
 });
 ipcMain.handle('workspace:reveal', () => activeCwd() && shell.openPath(activeCwd()));
 ipcMain.handle('models:list', async (_, cfg) => listModels({ ...settings.config, ...cfg }));
 ipcMain.handle('agent:send', async (_, text, turnId) => {
-  const a = getAgent();
+  const s = current();
+  const a = s.getAgent();
   if (a.running) throw new Error('L’agent est déjà en cours d’exécution.');
-  if (!conv) {
-    conv = offProject
-      ? store.create(offProject.dir, text, { id: offProject.id, offProject: true })
-      : store.create(settings.workspace, text);
-    conv.systemPrompt = a.systemPrompt; // edited before the first message
+  if (!s.conv) {
+    s.conv = store.create(s.cwd, text, { id: s.key, offProject: s.offProject });
+    s.conv.systemPrompt = a.systemPrompt; // edited before the first message
   }
-  store.record(conv, { type: 'user_message', text, turnId });
+  store.record(s.conv, { type: 'user_message', text, turnId });
   // Events stream back through 'agent:event'.
-  a.send(text, { turnId }).catch((e) => send('agent:event', { type: 'error', message: e.message }));
-  saveConversation(); // after send() has set this message's rewind point, so that it is saved with it
+  a.send(text, { turnId }).catch((e) => s.onEvent({ type: 'error', message: e.message }));
+  s.save(); // after send() has set this message's rewind point, so that it is saved with it
+  send('sessions:changed');
   return true;
 });
 // Restart the conversation from an earlier user message (edited by the user):
 // the agent goes back to its state before that message, and the transcript is cut there.
 ipcMain.handle('agent:rewind', (_, turnId) => {
-  const a = getAgent();
+  const s = current();
+  const a = s.getAgent();
   if (a.running) throw new Error('L’agent est en cours d’exécution.');
+  const { conv } = s;
   if (!conv) throw new Error('Aucune conversation ouverte.');
   const at = conv.events.findIndex((e) => e.type === 'user_message' && e.turnId === turnId);
   if (at < 0) throw new Error('Message introuvable dans cette conversation.');
@@ -232,24 +287,27 @@ ipcMain.handle('agent:rewind', (_, turnId) => {
     keepTurnIds: new Set(before.filter((e) => e.type === 'user_message' && e.turnId).map((e) => e.turnId)),
   } : {});
   conv.events = conv.events.slice(0, at);
-  saveConversation();
+  s.save();
   return { events: conv.events };
 });
 ipcMain.handle('agent:stop', () => {
-  resolveApprovals(false);
-  agent?.stop();
+  if (!active) return;
+  active.resolveApprovals(false);
+  active.agent?.stop();
 });
+// "New conversation" in the current project; the one shown before goes on.
 ipcMain.handle('agent:reset', () => {
-  leaveOffProject(); // "new conversation": back to the project
-  startNewConversation();
+  activate(new Session({ cwd: settings.workspace }));
   return publicSettings();
 });
 
 // Resume the conversation from a past action: everything after it is removed,
 // the action runs again and the agent goes on (events stream as for a message).
 ipcMain.handle('agent:resumeFrom', (_, actId) => {
-  const a = getAgent();
+  const s = current();
+  const a = s.getAgent();
   if (a.running) throw new Error('L’agent est en cours d’exécution.');
+  const { conv } = s;
   if (!conv) throw new Error('Aucune conversation ouverte.');
   const cp = a.findActionCheckpoint(actId);
   if (cp) {
@@ -258,7 +316,7 @@ ipcMain.handle('agent:resumeFrom', (_, actId) => {
     if (at < 0) throw new Error('Action introuvable dans cette conversation.');
     conv.events = conv.events.slice(0, at);
     store.save(conv);
-    a.resumeFrom(actId).catch((e) => send('agent:event', { type: 'error', message: e.message }));
+    a.resumeFrom(actId).catch((e) => s.onEvent({ type: 'error', message: e.message }));
     return { events: conv.events };
   }
   // No resume point (action saved before they existed): rebuild the state from the transcript.
@@ -266,36 +324,40 @@ ipcMain.handle('agent:resumeFrom', (_, actId) => {
   if (!rebuilt) throw new Error('Impossible de reprendre depuis cette action : elle est introuvable dans la conversation.');
   conv.events = conv.events.slice(0, rebuilt.cutAt);
   store.save(conv);
-  a.resumeFromRebuilt(rebuilt).catch((e) => send('agent:event', { type: 'error', message: e.message }));
+  a.resumeFromRebuilt(rebuilt).catch((e) => s.onEvent({ type: 'error', message: e.message }));
   return { events: conv.events };
 });
 
-// Every conversation, with its project (the window groups them by project).
+// Every conversation, with its project (the window groups them by project), and
+// which ones are working or have finished in the background.
 ipcMain.handle('conversations:list', () => ({
-  current: conv?.id ?? offProject?.id ?? null,
+  current: active?.key ?? null,
   all: store.listAll(),
   recent: settings.recent || [],
+  running: [...sessions.values()].filter((s) => s.running).map((s) => s.key),
+  unread: [...sessions.values()].filter((s) => s.unread).map((s) => s.key),
+  waiting: [...sessions.values()].filter((s) => s.approvals.size).map((s) => s.key),
 }));
 // A new conversation outside any project (the agent works in a folder of its own).
 ipcMain.handle('conversations:newOffProject', () => {
-  if (agent?.running) throw new Error('L’agent est en cours d’exécution.');
-  startNewConversation();
-  startOffProject();
+  const id = ConversationStore.newId();
+  const dir = path.join(offProjectRoot(), id);
+  fs.mkdirSync(dir, { recursive: true });
+  activate(new Session({ id, cwd: dir, offProject: true }));
   return publicSettings();
 });
-ipcMain.handle('session:current', () => ({ events: conv?.events ?? [], running: !!agent?.running }));
+ipcMain.handle('session:current', () => sessionView(current()));
 ipcMain.handle('conversations:open', (_, id) => {
-  if (agent?.running) throw new Error('L’agent est en cours d’exécution.');
+  // Already open (maybe still working): shown as it is now.
+  const open = sessions.get(id);
+  if (open) return sessionView(activate(open));
   const loaded = store.load(id);
   // Conversations saved before rewind points existed: give them some.
   if (migrateLegacy(loaded)) store.save(loaded, { touch: false });
-  if (loaded.offProject) startOffProject(loaded.id, loaded.workspace);
-  else {
-    leaveOffProject();
-    if (loaded.workspace !== settings.workspace) setWorkspace(loaded.workspace);
-  }
-  const a = getAgent();
-  a.reset();
+  if (loaded.offProject) fs.mkdirSync(loaded.workspace, { recursive: true });
+  else if (loaded.workspace !== settings.workspace) setWorkspace(loaded.workspace);
+  const s = new Session({ id: loaded.id, cwd: loaded.workspace, offProject: Boolean(loaded.offProject), conv: loaded });
+  const a = s.getAgent();
   a.messages = loaded.messages;
   a.untested = loaded.untested;
   a.taskPlan = loaded.plan ?? null;
@@ -312,56 +374,70 @@ ipcMain.handle('conversations:open', (_, id) => {
     store.record(loaded, { type: 'notice', text: 'L’app s’est arrêtée pendant ce tour. Le travail est sauvegardé jusqu’ici : « ↻ Reprendre d’ici » sur la dernière action pour continuer, ou envoyez un message.' });
     store.save(loaded, { touch: false });
   }
-  conv = loaded;
-  return { events: loaded.events, settings: publicSettings() };
+  return sessionView(activate(s));
 });
 ipcMain.handle('conversations:rename', (_, id, title) => {
-  // The open conversation is held in memory and saved after each turn: rename
+  // An open conversation is held in memory and saved after each turn: rename
   // it there too, or the next save would bring the old title back.
-  if (conv?.id === id) {
+  const s = sessions.get(id);
+  if (s?.conv) {
     const clean = ConversationStore.cleanTitle(title);
-    if (clean) conv.title = clean;
-    store.save(conv, { touch: false });
-    return conv.title;
+    if (clean) s.conv.title = clean;
+    store.save(s.conv, { touch: false });
+    return s.conv.title;
   }
   return store.rename(id, title);
 });
 ipcMain.handle('conversations:delete', (_, id) => {
-  if (conv?.id === id) {
-    if (agent?.running) throw new Error('L’agent est en cours d’exécution.');
-    startNewConversation();
-  }
+  const s = sessions.get(id);
+  if (s?.running) throw new Error('Cette conversation est en cours : arrêtez-la d’abord.');
   let removed = null;
   try { removed = store.load(id); } catch {}
+  if (s) {
+    s.resolveApprovals(false);
+    sessions.delete(id);
+    if (s === active) {
+      active = null;
+      // The window stays where it was: a new conversation there.
+      if (s.offProject) {
+        const nid = ConversationStore.newId();
+        const dir = path.join(offProjectRoot(), nid);
+        fs.mkdirSync(dir, { recursive: true });
+        activate(new Session({ id: nid, cwd: dir, offProject: true }));
+      } else activate(new Session({ cwd: settings.workspace }));
+    }
+  }
   store.delete(id);
   // Outside any project, the conversation's folder goes with it (only that folder).
   if (removed?.offProject && path.dirname(removed.workspace) === offProjectRoot()) {
     fs.rmSync(removed.workspace, { recursive: true, force: true });
-    if (offProject?.id === id) startOffProject(); // the window stays outside projects, on a new conversation
   }
+  send('sessions:changed');
 });
 
 // The conversation's memory, seen and edited by the user.
-ipcMain.handle('memory:get', () => (activeCwd() ? getAgent().memory : []));
+ipcMain.handle('memory:get', () => (activeCwd() ? current().getAgent().memory : []));
 ipcMain.handle('memory:set', (_, notes) => {
-  const a = getAgent();
+  const s = current();
+  const a = s.getAgent();
   if (a.running) throw new Error('L’agent est en cours d’exécution.');
   a.setMemory(notes); // (its 'memory' event is recorded with the conversation)
-  saveConversation();
+  s.save();
   return a.memory;
 });
 
 ipcMain.handle('prompt:get', async () => {
-  const a = getAgent();
+  const a = current().getAgent();
   return { default: await a.defaultSystemPrompt(), custom: a.systemPrompt, running: a.running };
 });
 ipcMain.handle('prompt:set', async (_, text) => {
-  const a = getAgent();
+  const s = current();
+  const a = s.getAgent();
   const def = await a.defaultSystemPrompt();
   a.systemPrompt = text == null || text.trim() === def.trim() ? null : text;
-  if (conv) {
-    conv.systemPrompt = a.systemPrompt;
-    store.save(conv);
+  if (s.conv) {
+    s.conv.systemPrompt = a.systemPrompt;
+    store.save(s.conv);
   }
   return { default: def, custom: a.systemPrompt, running: a.running };
 });
@@ -380,14 +456,15 @@ ipcMain.handle('tor:check', async () => {
 });
 ipcMain.handle('context:get', async () => {
   if (!activeCwd()) return null;
-  return getAgent().contextStats();
+  return current().getAgent().contextStats();
 });
 ipcMain.handle('context:compact', async () => {
-  const a = getAgent();
+  const s = current();
+  const a = s.getAgent();
   if (a.running) throw new Error('L’agent est en cours d’exécution.');
   if (!a.messages.length) return { compacted: false, reason: 'La conversation est vide.' };
   const r = await a.compact();
-  saveConversation();
+  s.save();
   return r;
 });
 
@@ -399,10 +476,16 @@ ipcMain.handle('agent:approve', (_, { id, ok, always }) => {
   if (always) {
     settings.config.approval = 'auto';
     saveSettings();
-    if (agent) agent.config.approval = 'auto';
+    for (const s of sessions.values()) if (s.agent) s.agent.config.approval = 'auto';
   }
-  pendingApprovals.get(id)?.(ok);
-  pendingApprovals.delete(id);
+  // (the approval may belong to any session)
+  for (const s of sessions.values()) {
+    const p = s.approvals.get(id);
+    if (!p) continue;
+    p.resolve(ok);
+    s.approvals.delete(id);
+    send('sessions:changed');
+  }
   return publicSettings();
 });
 
@@ -426,12 +509,12 @@ function createWindow() {
   // The window's page crashed or froze: the agent (here) goes on; save, and give a fresh page.
   win.webContents.on('render-process-gone', (_, details) => {
     logError('render-process-gone', details);
-    saveConversation();
+    saveAll();
     if (details.reason !== 'clean-exit' && win && !win.isDestroyed()) win.reload();
   });
   win.on('unresponsive', () => {
     logError('unresponsive', 'window not responding');
-    saveConversation();
+    saveAll();
   });
   win.webContents.on('console-message', (_, level, message, line, source) => {
     if (level >= 3) logError('renderer', `${message} (${source}:${line})`);
@@ -450,21 +533,21 @@ app.whenReady().then(() => {
   createWindow();
   app.on('activate', () => BrowserWindow.getAllWindows().length === 0 && createWindow());
 });
-app.on('before-quit', () => saveConversation());
+app.on('before-quit', () => saveAll());
 // Ctrl-C in the terminal, kill: Electron quits without 'before-quit'.
 for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
   process.on(sig, () => {
-    saveConversation();
+    saveAll();
     app.exit(0);
   });
 }
 process.on('uncaughtException', (e) => {
   logError('uncaughtException', e);
-  saveConversation();
+  saveAll();
   send('agent:event', { type: 'error', message: `Erreur interne (détails dans logs/main.log) : ${e.message}` });
 });
 process.on('unhandledRejection', (e) => logError('unhandledRejection', e));
 app.on('window-all-closed', () => {
-  agent?.stop();
+  for (const s of sessions.values()) s.agent?.stop();
   if (process.platform !== 'darwin') app.quit();
 });

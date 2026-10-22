@@ -94,6 +94,11 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   reloads by itself and the agent goes on; errors go to `logs/main.log`.
 - **Quote a passage**: select text in the conversation, a "❝ Citer" button appears; it adds the passage to the
   input as a quote (`> …`, formulas as their LaTeX source). Quotes show as quotes in the sent message.
+- **Several conversations at once**: switching conversation does not stop the one shown; it goes on in the
+  background (its events are recorded, not drawn). Coming back shows it as it is now, the answer being written
+  included, at the same reading position (or following the end if you were there). In the list: a spinner while
+  one works in the background, an orange dot when it waits for an approval, a blue dot when it finished unseen.
+  Idle conversations stay in memory (8 at most) for a quick return. Generations at the same time share the GPU.
 - **Sidebar grouped by project**: all the conversations, one collapsible group per project (the open one stays
   unfolded), a "＋" on each group to start a conversation there, and "＋ Ajouter un projet…".
 - **Conversations outside any project** (the "Hors projet" group): same tools, but the agent works in a folder of

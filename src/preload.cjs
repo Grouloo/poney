@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld('api', {
   renameConversation: (id, title) => ipcRenderer.invoke('conversations:rename', id, title),
   deleteConversation: (id) => ipcRenderer.invoke('conversations:delete', id),
   onConversationsChanged: (fn) => ipcRenderer.on('conversations:changed', (_, id) => fn(id)),
+  onSessionsChanged: (fn) => ipcRenderer.on('sessions:changed', () => fn()),
 
   getMemory: () => ipcRenderer.invoke('memory:get'),
   setMemory: (notes) => ipcRenderer.invoke('memory:set', notes),

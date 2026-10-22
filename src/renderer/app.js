@@ -86,7 +86,7 @@ function renderSettings() {
       const b = document.createElement('button');
       b.textContent = `📁 ${dir.split(/[\\/]/).filter(Boolean).pop() || dir}`;
       b.title = dir;
-      b.onclick = async () => { settings = await window.api.setWorkspace(dir); renderSettings(); onWorkspaceChanged(); };
+      b.onclick = async () => { rememberScroll(); settings = await window.api.setWorkspace(dir); renderSettings(); onWorkspaceChanged(); };
       recent.appendChild(b);
     }
     const off = document.createElement('button');
@@ -199,13 +199,14 @@ $('torTest').onclick = async () => {
 $('settingsBtn').onclick = () => $('settings').classList.toggle('hidden');
 $('closeSettings').onclick = () => $('settings').classList.add('hidden');
 $('workspaceBtn').onclick = async () => {
-  if (running) return;
+  rememberScroll();
   const before = activeDir();
   settings = await window.api.chooseWorkspace();
   renderSettings();
   if (activeDir() !== before) onWorkspaceChanged();
 };
 function onWorkspaceChanged() {
+  setRunning(false); // a new conversation there (the one shown before goes on in the background)
   clearTranscript();
   closeViewer();
   expanded.clear();
@@ -900,9 +901,12 @@ function onApproval(req) {
   scrollDown(true);
 }
 
-window.api.onEvent(onEvent);
+// Only the events of the conversation shown are drawn (the others are replayed when opened).
+const shown = (x) => !x.session || x.session === settings.active?.session;
+window.api.onEvent((ev) => { if (shown(ev)) onEvent(ev); });
 window.api.onConversationsChanged(() => refreshConversations());
-window.api.onApproval(onApproval);
+window.api.onSessionsChanged(() => refreshConversations());
+window.api.onApproval((req) => { if (shown(req)) onApproval(req); });
 
 // ---------- sidebar ----------
 let replaying = false;
@@ -931,13 +935,15 @@ let renaming = false; // a title is being edited: don't rebuild the list under t
 
 // ---------- conversations, grouped by project ----------
 const OFF_KEY = '@off-project';
+let sessionStates = { busy: new Set(), unread: new Set(), waiting: new Set() };
 let collapsedGroups = new Set();
 try { collapsedGroups = new Set(JSON.parse(localStorage.getItem('collapsedGroups') || '[]')); } catch {}
 const baseName = (p) => p.split(/[\\/]/).filter(Boolean).pop() || p;
 
 async function refreshConversations() {
   if (renaming) return;
-  const { current, all, recent } = await window.api.listConversations();
+  const { current, all, recent, running: busy = [], unread = [], waiting = [] } = await window.api.listConversations();
+  sessionStates = { busy: new Set(busy), unread: new Set(unread), waiting: new Set(waiting) };
   currentConversation = current;
   // One group per project (those with conversations, the recent ones, the open one), then "Hors projet".
   const groups = new Map();
@@ -990,7 +996,7 @@ async function refreshConversations() {
 
 /** A new conversation in a project folder, or outside any project (dir null). */
 async function newConversationIn(dir) {
-  if (running) await window.api.stop();
+  rememberScroll(); // (the conversation shown goes on in the background)
   const before = activeDir();
   try {
     if (dir === null) settings = await window.api.newOffProject();
@@ -1001,6 +1007,7 @@ async function newConversationIn(dir) {
     return;
   }
   renderSettings();
+  setRunning(false); // a new conversation is idle
   if (activeDir() !== before) onWorkspaceChanged();
   else {
     clearTranscript();
@@ -1014,7 +1021,11 @@ async function newConversationIn(dir) {
 function conversationItem(c, current) {
   const li = document.createElement('li');
   li.classList.toggle('active', c.id === current);
-  li.innerHTML = '<span class="title"></span><span class="when"></span><button class="ren" title="Renommer">✎</button><button class="del" title="Supprimer">✕</button>';
+  // Working in the background, waiting for an approval, or finished while elsewhere.
+  const state = sessionStates.waiting.has(c.id) ? 'waiting' : sessionStates.busy.has(c.id) ? 'busy' : sessionStates.unread.has(c.id) ? 'unread' : '';
+  if (state) li.classList.add(state);
+  li.innerHTML = '<span class="state"></span><span class="title"></span><span class="when"></span><button class="ren" title="Renommer">✎</button><button class="del" title="Supprimer">✕</button>';
+  li.querySelector('.state').title = { waiting: 'Attend votre autorisation', busy: 'En cours', unread: 'Terminé, pas encore lu' }[state] || '';
   li.querySelector('.title').textContent = c.title;
   li.querySelector('.title').title = c.title;
   li.querySelector('.when').textContent = relativeTime(c.updatedAt);
@@ -1079,18 +1090,49 @@ function startRename(li, c) {
   inp.onblur = () => finish(true);
 }
 
+// Reading position of each conversation ('bottom': it follows what is being written).
+const scrollPos = new Map();
+function rememberScroll() {
+  const key = settings.active?.session;
+  if (!key) return;
+  const atBottom = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 40;
+  scrollPos.set(key, atBottom ? 'bottom' : transcript.scrollTop);
+}
+
+/** Draws a session as it is now: transcript, answer being written, pending approvals, reading position. */
+function showSession(view) {
+  replayTranscript(view.events);
+  const p = view.partial;
+  if (p) {
+    if (!bubbles.has(p.id)) onEvent({ type: 'assistant_start', id: p.id }); // (the replay may have started it)
+    if (p.thinking) onEvent({ type: 'delta', id: p.id, kind: 'thinking', text: p.thinking });
+    if (p.text) onEvent({ type: 'delta', id: p.id, kind: 'text', text: p.text });
+  }
+  setRunning(Boolean(view.running));
+  for (const req of view.approvals || []) onApproval(req);
+  const pos = scrollPos.get(view.session);
+  transcript.scrollTop = typeof pos === 'number' ? pos : transcript.scrollHeight;
+}
+
 async function openConversation(id) {
-  if (running || id === currentConversation) return;
-  const { events, settings: s } = await window.api.openConversation(id);
-  const moved = s.active?.cwd !== activeDir();
-  settings = s;
+  if (id === currentConversation) return;
+  rememberScroll(); // (the conversation shown goes on in the background)
+  let view;
+  try {
+    view = await window.api.openConversation(id);
+  } catch (e) {
+    $('status').textContent = errorText(e);
+    return;
+  }
+  const moved = view.settings.active?.cwd !== activeDir();
+  settings = view.settings;
   renderSettings();
   if (moved) {
     expanded.clear();
     refreshTree();
     closeViewer();
   }
-  replayTranscript(events);
+  showSession(view);
   refreshConversations();
   refreshPromptBadge();
   refreshGauge();
@@ -1439,8 +1481,6 @@ refreshPromptBadge();
 refreshGauge();
 // Window reloaded (after a crash) while a conversation was open: draw it again.
 const session = await window.api.currentSession();
-if (session.events.length) {
-  replayTranscript(session.events);
-  if (session.running) setRunning(true);
-}
+settings = session.settings;
+if (session.events.length || session.partial) showSession(session);
 input.focus();
