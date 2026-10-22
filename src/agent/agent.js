@@ -5,7 +5,7 @@ import os from 'node:os';
 import { streamChat, complete, serverContextLength } from './llm.js';
 import { TOOLS, buildSystemPrompt, parseActions, splitThinking, formatResult, isToolEnabled, withReasoning, findRepetition, normalizeToolCalls, stripReasoning, legacyReasoningToNotes, stripChannelMarkers, toolSchemas } from './protocol.js';
 import { executeAction, runShell, truncateMiddle } from './tools.js';
-import { remember, forget, memoryBlock } from './memory.js';
+import { remember, forget, memoryBlock, standingInstructions, instructionNote, replacedAutoNote } from './memory.js';
 import { recall, autoRecall, recalledBlock, keywordsOf } from './history.js';
 import { parsePlan, mergePlan, tasksToDelegate, setStatus, formatPlan, planReminder, subAgentTask } from './plan.js';
 import {
@@ -874,6 +874,19 @@ export class Agent extends EventEmitter {
     // Each message carries its date and time: the model cannot know them, and here
     // (unlike in the system prompt) they never change the cached start of the prompt.
     if (!resume) {
+      // Lasting instructions ("answer in English", "from now on…") are noted by the app
+      // itself, in the user's words: small models rarely note them, then drift back.
+      if (this.role === 'main' && this.config.memoryEnabled !== false) {
+        const added = [];
+        for (const s of standingInstructions(userText)) {
+          const r = remember(this.memory, instructionNote(s));
+          if (r.notes !== this.memory) { this.memory = r.notes; added.push(s); }
+        }
+        if (added.length) {
+          this.emit('event', { type: 'memory', notes: this.memory });
+          this.emit('event', { type: 'noted', turnId, notes: added });
+        }
+      }
       let content = `${messageStamp(this.now?.() ?? new Date())} ${userText}`;
       // The memory is recalled with the message when its last full view is far back
       // (a third of the window): it stays in view without costing room at every message.
@@ -1121,7 +1134,12 @@ export class Agent extends EventEmitter {
             continue;
           }
           if (action.tool === 'remember' || action.tool === 'forget') {
-            const r = (action.tool === 'remember' ? remember : forget)(this.memory, action.tool === 'remember' ? action.args.note : action.args.id);
+            let base = this.memory;
+            if (action.tool === 'remember') {
+              const k = replacedAutoNote(base, String(action.args.note ?? ''));
+              if (k >= 0) base = base.filter((_, i) => i !== k); // the model's own wording replaces the app's note
+            }
+            const r = (action.tool === 'remember' ? remember : forget)(base, action.tool === 'remember' ? action.args.note : action.args.id);
             if (r.notes !== this.memory) {
               this.memory = r.notes;
               this.emit('event', { type: 'memory', notes: this.memory });

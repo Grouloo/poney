@@ -142,7 +142,10 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   for word into compaction summaries, and come back with a user message when their last full view is more than a
   third of the window behind, so they stay in view without costing room at every message. The 🧠 button under the
   input shows them; you can add or remove notes (shown to the agent with your next message). Saved with the
-  conversation, restored by rewinds.
+  conversation, restored by rewinds. Lasting instructions in the user's messages ("réponds toujours en anglais",
+  "from now on…", "tutoie-moi", "retiens que…") are noted by the app itself, in the user's words, and shown under
+  the message; when the model notes the same thing in its own words, its note replaces the app's. The prompt has an
+  example of noting a constraint before answering.
 - **Plan** (`<plan>`, like Claude Code's task list): for one request, the agent writes its task list (`- [ ]` /
   `- [x]`) and rewrites it as it goes; it stays pinned above the input. A new message starts without a plan. The
   agent cannot finish while tasks are left unchecked (it is sent back to them twice at most; it may also rewrite

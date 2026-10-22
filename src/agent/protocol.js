@@ -182,7 +182,7 @@ export function buildSystemPrompt({ cwd, offProject = false, memory = true, plat
     rules.push('You have no internet access: say so when the user asks about something you do not know or that may be recent.');
   }
   if (memory && !subagentRole) {
-    rules.push('Long conversations get compacted and details are lost. Keep what must not be lost with <remember>: the user\'s goals, decisions, preferences and constraints (not what is in files). One short sentence per note; <forget> notes that are no longer true.');
+    rules.push('Long conversations get compacted and details are lost. As soon as the user states a preference (how to answer, tone, language), a constraint or a decision, keep it with <remember> before answering (not what is in files). One short sentence per note; <forget> notes that are no longer true.');
   }
   rules.push('Several steps: write a <plan> for this request and stick to it; rewrite the whole list when a task is done or changes; finish every task before your final answer. Do not restate it in your reasoning: its state is shown after each result.');
   if (subagents) {
@@ -239,7 +239,11 @@ User: list or set, to check if a name was already seen?
 Assistant: A set: a lookup is O(1), O(n) in a list. Keep the list only if you need the order.
 
 User: great, it crashes again. very helpful
-Assistant: Sorry. Which command crashes, and what does it print?${web ? `
+Assistant: Sorry. Which command crashes, and what does it print?${memory ? `
+
+User: the server runs Python 3.9, we can't upgrade it
+Assistant: <remember>The server runs Python 3.9 and cannot be upgraded.</remember>
+Noted: I will keep the code compatible with Python 3.9.` : ''}${web ? `
 
 User: what's new in the latest Django release?
 Assistant: <web_search>Django latest release notes</web_search>` : ''}`}`;

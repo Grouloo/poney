@@ -813,6 +813,16 @@ function onEvent(ev) {
     case 'memory':
       renderMemory(ev.notes);
       break;
+    case 'noted': {
+      // Lasting instructions of the user message, noted in the memory by the app.
+      const msg = [...(target || transcript).querySelectorAll('.msg.user')].pop();
+      if (!msg) break;
+      const d = div('noted');
+      d.textContent = `🧠 Noté dans la mémoire : ${ev.notes.map((n) => `« ${n} »`).join(', ')}`;
+      d.title = 'Gardé pour toute la conversation (malgré le compactage). Retirable via 🧠 sous la zone de saisie.';
+      msg.appendChild(d);
+      break;
+    }
     case 'recalled': {
       // Passages of the older history attached to the last user message.
       const msg = [...(target || transcript).querySelectorAll('.msg.user')].pop();

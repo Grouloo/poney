@@ -62,3 +62,26 @@ test('the memory survives a compaction word for word, and comes back with a mess
     f.server.close();
   }
 });
+
+test('lasting instructions of the user are spotted (French and English); questions, quotes and complaints are not', async () => {
+  const { standingInstructions } = await import('../src/agent/memory.js');
+  const yes = ['Réponds toujours en anglais, et sois concis. Peux-tu regarder le parseur ?', 'À partir de maintenant, pas d’emojis.', 'Tutoie-moi', 'retiens que la prod est sur le port 8080', 'From now on, answer in French.', 'Je veux que tu commentes ton code en français'];
+  for (const t of yes) assert.equal(standingInstructions(t).length, 1, t);
+  assert.deepEqual(standingInstructions(yes[0]), ['Réponds toujours en anglais, et sois concis.']);
+  for (const t of ['ça ne marche jamais ce truc', 'Is it always slow?', 'Corrige le bug du parseur', '> réponds toujours en anglais\nok merci']) assert.deepEqual(standingInstructions(t), [], t);
+});
+
+test('the app notes a lasting instruction itself, in the user\'s words, once', async () => {
+  const f = await fake(() => 'ok');
+  const agent = new Agent({ cwd: await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-mem-')), config: { baseUrl: f.url, model: 'm' } });
+  const noted = [];
+  agent.on('event', (e) => e.type === 'noted' && noted.push(e.notes));
+  try {
+    await agent.send('Salut ! Réponds toujours en anglais. On commence ?');
+    await agent.send('Réponds toujours en anglais.');
+  } finally {
+    f.server.close();
+  }
+  assert.deepEqual(agent.memory, ['The user asked: « Réponds toujours en anglais. »']);
+  assert.deepEqual(noted, [['Réponds toujours en anglais.']]);
+});
