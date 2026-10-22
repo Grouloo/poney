@@ -12,7 +12,7 @@ export function actionTag(tool, a = {}) {
     case 'run': return `<run>${a.command ?? ''}</run>`;
     case 'web_search': return `<web_search>${a.query ?? ''}</web_search>`;
     case 'fetch': return `<fetch>${a.url ?? ''}</fetch>`;
-    case 'search': return `<search${attr('pattern', a.pattern)}${attr('path', a.path)} />`;
+    case 'search': return a.query ? `<search${attr('path', a.path)}>${a.query}</search>` : `<search${attr('pattern', a.pattern)}${attr('path', a.path)} />`;
     case 'read': return `<read${attr('path', a.path)}${attr('start', a.start)}${attr('end', a.end)} />`;
     case 'agent': return `<agent${attr('title', a.title)}>\n${a.task ?? ''}\n</agent>`;
     case 'plan': return `<plan>\n${a.body ?? ''}\n</plan>`;

@@ -4,7 +4,7 @@
 import { stripReasoning } from './protocol.js';
 import { SUMMARY_MARKER } from './context.js';
 
-const fold = (s) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+const fold = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 const STOP = new Set(['the', 'and', 'for', 'with', 'that', 'this', 'les', 'des', 'une', 'pour', 'avec', 'dans', 'que', 'qui', 'est', 'sur', 'pas', 'par',
   // words of the tool protocol, everywhere in a history
   'path', 'tool', 'result', 'read', 'write', 'edit', 'list', 'search', 'fetch', 'recall', 'remember', 'forget', 'plan', 'agent', 'lines', 'exit', 'command', 'created']);

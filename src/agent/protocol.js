@@ -16,7 +16,8 @@
 export const TOOLS = {
   list: { args: ['path', 'depth'], bodyArg: 'path', needsBody: false, observes: true },
   read: { args: ['path', 'start', 'end'], bodyArg: 'path', needsBody: false, observes: true },
-  search: { args: ['pattern', 'path'], bodyArg: 'pattern', needsBody: false, observes: true },
+  // Keywords in the body: ranked search over the project; pattern="regex": every matching line.
+  search: { args: ['pattern', 'path', 'query'], bodyArg: 'query', needsBody: false, observes: true },
   write: { args: ['path'], bodyArg: 'content', needsBody: true, observes: false },
   edit: { args: ['path'], bodyArg: 'body', needsBody: true, observes: false },
   run: { args: ['timeout'], bodyArg: 'command', needsBody: true, observes: true },
@@ -73,7 +74,7 @@ export function toolSchemas(config = {}) {
   const all = [
     fn('list', 'List files in a folder', { path: 'folder, default "."' }, []),
     fn('read', 'Read a file (with line numbers)', { path: 'file path', start: 'first line', end: 'last line' }, ['path']),
-    fn('search', 'Search text in files', { pattern: 'regex', path: 'folder' }, ['pattern']),
+    fn('search', 'Find where something is in the project: the most relevant files and lines for some keywords', { query: 'keywords (names of functions, classes, messages…)', path: 'folder, default "."', pattern: 'instead of keywords: a regular expression, to list every matching line' }, []),
     fn('write', 'Create or overwrite a whole file', { path: 'file path', content: 'full file content' }, ['path', 'content']),
     fn('edit', 'Replace exact existing lines in a file', { path: 'file path', old: 'exact existing lines', new: 'replacement lines' }, ['path', 'old', 'new']),
     fn('run', 'Run a shell command (scripts, tests, installs)', { command: 'shell command' }, ['command']),
@@ -146,7 +147,7 @@ export function buildSystemPrompt({ cwd, offProject = false, memory = true, plat
   const tools = [
     '<list path="." />                       list files',
     '<read path="a.py" start="1" end="200" />  read a file (with line numbers)',
-    '<search pattern="regex" path="." />     search text in files',
+    '<search>keywords</search>               find where something is in the project (best files and lines)',
     '<write path="a.py">\nfull file content\n</write>                                create or overwrite a file',
     '<edit path="a.py">\n<old>exact existing lines</old>\n<new>replacement lines</new>\n</edit>                                 change part of a file',
   ];
@@ -167,7 +168,10 @@ export function buildSystemPrompt({ cwd, offProject = false, memory = true, plat
     tools.push('<agent title="short name">\ncomplete task, with all the context it needs\n</agent>                                delegate an independent task to a sub-agent');
   }
 
-  const rules = ['Read the files you need before changing them. Never guess file contents.'];
+  const rules = [
+    'Read the files you need before changing them. Never guess file contents.',
+    'To find code you have not seen, <search> for it first, then <read> only the lines you need (start, end). Do not read files one by one to explore.',
+  ];
   if (shell) {
     rules.push('ALWAYS TEST. After changing code, run it or its tests with <run>. If it fails, fix the code (not the test, unless the test is wrong) and run again.');
   } else {
@@ -412,6 +416,7 @@ function jsonToTag(name, a = {}) {
       return `<plan>\n${list.map((t) => (typeof t === 'string' ? { task: t } : t))
         .map((t) => `- [${t.done || t.status === 'completed' || t.status === 'done' ? 'x' : ' '}] ${t.agent ? '@agent ' : ''}${t.task ?? t.content ?? t.text ?? t.title ?? ''}`).join('\n')}\n</plan>`;
     }
+    case 'search': return a.query || a.keywords ? `<search${quoteAttr('path', a.path)}>${a.query ?? a.keywords}</search>` : `<search${quoteAttr('pattern', a.pattern)}${quoteAttr('path', a.path)} />`;
     default: return `<${tool}${['path', 'start', 'end', 'pattern', 'depth'].map((k) => quoteAttr(k, a[k])).join('')} />`;
   }
 }

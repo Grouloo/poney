@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { rankedSearch } from './codesearch.js';
 import { parseEditBody } from './protocol.js';
 import { webSearch, fetchUrl } from './web.js';
 import { requireTor, proxyEnv } from './tor.js';
@@ -87,9 +88,18 @@ async function readTool(cwd, args, ctx = {}) {
 }
 
 // ---------- search ----------
-async function searchTool(cwd, args) {
-  const pattern = args.pattern || args.query;
-  if (!pattern) throw new ToolError('Missing "pattern".');
+// <search>keywords</search>: ranked search over the project (see codesearch.js).
+// <search pattern="regex" />: every line matching a regular expression.
+const REGEX_CHARS = /[\\^$|()[\]{}*+?]/;
+async function searchTool(cwd, args, ctx = {}) {
+  const words = args.query || (args.pattern && !REGEX_CHARS.test(args.pattern) && /\s/.test(args.pattern.trim()) ? args.pattern : '');
+  if (words) {
+    const { rel } = resolveInside(cwd, args.path || '.');
+    const r = await rankedSearch(cwd, rel, words, { ignoredDirs: IGNORED_DIRS, maxChars: Math.min(4000, ctx.maxResultChars || 4000) });
+    return { output: r.output, meta: { query: words, path: rel, files: r.count } };
+  }
+  const pattern = args.pattern;
+  if (!pattern) throw new ToolError('Missing keywords: <search>what you look for</search>.');
   const { abs, rel } = resolveInside(cwd, args.path || '.');
   let re;
   try { re = new RegExp(pattern, 'i'); } catch { re = new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'); }

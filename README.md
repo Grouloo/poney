@@ -24,7 +24,14 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
 - **Tools as text tags**, not JSON: `<write path="a.py">…</write>`, `<run>…</run>`.
   Code does not need escaping. The parser is lenient: aliases (`bash`, `read_file`…),
   arguments as attributes or child tags, optional quotes, ``` fences removed.
-- **Only 8 tools**: list, read, search, write, edit, run, web_search, fetch (plus `plan` and `agent`).
+- **Only 8 tools**: list, read, search, write, edit, run, web_search, fetch (plus `plan`, `agent`, `remember`,
+  `forget`, `recall`).
+- **Project search like a web search** (`<search>keywords</search>`): files ranked by relevance (rare words weigh
+  more, words in the path and definitions that contain them count more, tests after the code), each with its best
+  lines and their numbers, then the agent reads only those lines. Whole words, identifiers split the code way
+  (`loadConfig`, `load_config` → load, config), word roots match; git's file list when there is one (respects
+  .gitignore). The prompt asks to search first instead of reading files one by one. `pattern="regex"` still lists
+  every matching line. About 1 s for 3,000 files, less once cached.
 - **Lenient editing**: `<old>` may have the wrong indentation (re-indented automatically),
   and on failure the agent gets the closest lines of the file.
 - **Syntax check** after every write (.py, .js, .json).

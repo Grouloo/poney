@@ -577,7 +577,7 @@ function summarize(tool, args) {
     case 'run': return args.command || '';
     case 'web_search': return args.query || '';
     case 'fetch': return args.url || '';
-    case 'search': return `${args.pattern || ''}  ${args.path ? `in ${args.path}` : ''}`;
+    case 'search': return `${args.query || args.pattern || ''}  ${args.path && args.path !== '.' ? `in ${args.path}` : ''}`;
     case 'read': return `${args.path || ''}${args.start ? `:${args.start}-${args.end || ''}` : ''}`;
     case 'recall': return args.query || '';
     case 'remember': return args.note || '';
