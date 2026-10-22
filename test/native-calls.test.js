@@ -86,8 +86,8 @@ test("Gemma's raw native arguments (unquoted keys, <|\"|> delimiters) are unders
 test('tool schemas follow the toggles', async () => {
   const { toolSchemas } = await import('../src/agent/protocol.js');
   const names = (c) => toolSchemas(c).map((t) => t.function.name);
-  assert.deepEqual(names({}), ['list', 'read', 'search', 'write', 'edit', 'run', 'web_search', 'fetch', 'remember', 'forget', 'plan', 'agent']);
-  assert.deepEqual(names({ shellEnabled: false, webEnabled: false, subagentsEnabled: false }), ['list', 'read', 'search', 'write', 'edit', 'remember', 'forget', 'plan']);
+  assert.deepEqual(names({}), ['list', 'read', 'search', 'write', 'edit', 'run', 'web_search', 'fetch', 'remember', 'forget', 'recall', 'plan', 'agent']);
+  assert.deepEqual(names({ shellEnabled: false, webEnabled: false, subagentsEnabled: false }), ['list', 'read', 'search', 'write', 'edit', 'remember', 'forget', 'recall', 'plan']);
 });
 
 test('tools are declared only to LM Studio models with tool_use, and native calls show progress', async () => {
@@ -113,7 +113,7 @@ test('tools are declared only to LM Studio models with tool_use, and native call
     server.close();
     assert.equal(Boolean(bodies[0].tools), expectTools, model);
     if (expectTools) {
-      assert.deepEqual(bodies[0].tools.map((t) => t.function.name), ['list', 'read', 'search', 'write', 'edit', 'web_search', 'fetch', 'remember', 'forget', 'plan', 'agent']);
+      assert.deepEqual(bodies[0].tools.map((t) => t.function.name), ['list', 'read', 'search', 'write', 'edit', 'web_search', 'fetch', 'remember', 'forget', 'recall', 'plan', 'agent']);
       assert.ok(deltas.includes('tool'), 'progress shown while the native call streams');
     }
     assert.deepEqual(actions, ['list']);

@@ -141,26 +141,34 @@ export function renderTranscript(messages, maxChars) {
   return text;
 }
 
-export const SUMMARY_SYSTEM_PROMPT = `You summarize a coding session so that the work can continue with a fresh memory.
-Write at most 200 words, as short bullet points under exactly these headings:
-Goal:
-Done so far:
-Current state: (what works, what fails, exact error messages)
-Next step:
-Be concrete: file names, function names, commands. Never invent anything.`;
+/**
+ * Length of the summary, in words: about 4% of the window (a 200-word cap made it
+ * too thin to go on with, above all in a conversation rather than a task).
+ */
+export function summaryWords(numCtx = 16384) {
+  return Math.max(250, Math.min(900, Math.round(numCtx * 0.03)));
+}
+
+// Headings that suit a task as well as a conversation.
+const SUMMARY_FORMAT = (words) => `at most ${words} words, under exactly these headings:
+Context: who the user is and what this conversation is about (their goals, preferences, constraints).
+Discussion: the main points in order: what the user said and asked, what was answered, explained or decided, and why. Keep the specifics: names, numbers, dates, versions, the user's exact wording when it matters.
+Work done: files changed, commands run and their results, what works, what fails (exact errors). "None" if there was no work.
+Open: questions not settled, what the user expects next.
+Write facts, not commentary. Never invent anything. An earlier summary in the conversation must be carried over, not dropped.`;
 
 /**
  * Messages for the summarizer. The instruction comes AFTER the conversation:
  * small models tend to continue a transcript instead of following an
  * instruction placed before it.
  */
-export function buildSummaryRequest(messages, maxChars, { retry = false } = {}) {
+export function buildSummaryRequest(messages, maxChars, { retry = false, words = summaryWords() } = {}) {
   return [
-    { role: 'system', content: SUMMARY_SYSTEM_PROMPT },
+    { role: 'system', content: `You summarize a conversation between a user and an assistant (which may use tools on files), so that it can go on with a fresh memory. Write ${SUMMARY_FORMAT(words)}` },
     {
       role: 'user',
       content: `<conversation>\n${renderTranscript(messages, maxChars)}\n</conversation>\n\n` +
-        'Now write the summary of the conversation above, with the 4 headings Goal:, Done so far:, Current state:, Next step:. ' +
+        'Now write the summary of the conversation above, with the 4 headings Context:, Discussion:, Work done:, Open:. ' +
         'Do not copy the conversation and do not write any tool tag.' +
         (retry ? ' Write the summary directly, without long reasoning.' : ''),
     },
@@ -168,9 +176,8 @@ export function buildSummaryRequest(messages, maxChars, { retry = false } = {}) 
 }
 
 export const SUMMARY_INLINE_INSTRUCTION = 'PAUSE THE TASK: do not use any tool now. ' +
-  'Write only a summary of the whole conversation so far, so that the work can continue with a fresh memory: ' +
-  'at most 200 words, short bullet points under exactly these headings: Goal:, Done so far:, Current state: (what works, what fails, exact errors), Next step:. ' +
-  'Be concrete (files, functions, commands). Never invent anything.';
+  'Write only a summary of the whole conversation so far, so that it can go on with a fresh memory: ';
+const inlineInstruction = (words) => `${SUMMARY_INLINE_INSTRUCTION}${SUMMARY_FORMAT(words)}`;
 
 /**
  * Summary request that reuses the server's prompt cache: the exact prompt of the
@@ -179,24 +186,25 @@ export const SUMMARY_INLINE_INSTRUCTION = 'PAUSE THE TASK: do not use any tool n
  * The instruction is appended to the last user message when there is one, to
  * keep roles alternating (some chat templates, e.g. Gemma's, require it).
  */
-export function buildInlineSummaryRequest(prompt) {
+export function buildInlineSummaryRequest(prompt, { words = summaryWords() } = {}) {
   const msgs = prompt.map((m) => ({ ...m }));
   const last = msgs[msgs.length - 1];
-  if (last.role === 'user') last.content = `${last.content}\n\n${SUMMARY_INLINE_INSTRUCTION}`;
-  else msgs.push({ role: 'user', content: SUMMARY_INLINE_INSTRUCTION });
+  if (last.role === 'user') last.content = `${last.content}\n\n${inlineInstruction(words)}`;
+  else msgs.push({ role: 'user', content: inlineInstruction(words) });
   return msgs;
 }
 
-// Headings in English or French (small models often answer in the user's language).
+// Headings in English or French (small models often answer in the user's language),
+// current ones and those of older versions.
 const SUMMARY_HEADINGS = [
-  /goal|objecti|but\s*:/i,
-  /done so far|déjà fait|fait jusqu|réalisé|accompli/i,
-  /current state|état actuel|etat actuel|situation/i,
-  /next step|prochaine|étape suivante|à faire/i,
+  /context|contexte|goal|objecti|but\s*:/i,
+  /discussion|échanges|done so far|déjà fait|fait jusqu|accompli/i,
+  /work done|travail|réalisé|current state|état actuel|etat actuel|situation/i,
+  /open|en suspens|ouvert|questions|next step|prochaine|étape suivante|à faire/i,
 ];
 
 /** Returns {summary} when usable, else {summary: null, reason} (reason in French, shown in the UI). */
-export function cleanSummary(text) {
+export function cleanSummary(text, { maxChars = 8000 } = {}) {
   let t = (text || '').replace(/<(think|reasoning)>[\s\S]*?<\/\1>/g, '').trim();
   t = t.replace(/^```\w*\n?|\n?```$/g, '').trim();
   if (!t) return { summary: null, reason: 'réponse vide' };
@@ -207,7 +215,7 @@ export function cleanSummary(text) {
   if (SUMMARY_HEADINGS.filter((h) => h.test(t)).length < 2) {
     return { summary: null, reason: 'format non respecté (rubriques manquantes)' };
   }
-  return { summary: t.length > 3000 ? `${t.slice(0, 3000)}…` : t };
+  return { summary: t.length > maxChars ? `${t.slice(0, maxChars)}…` : t };
 }
 
 const HARNESS_PREFIXES = ['You showed code', 'You changed files', 'Your reply was empty', 'Your message was cut', '(stopped', '(earlier conversation'];
@@ -220,7 +228,7 @@ export function mechanicalSummary(messages) {
   const parts = ['(The automatic summary failed. Notes extracted from the conversation:)'];
   const prev = messages.find((m) => m.content.startsWith(SUMMARY_MARKER));
   if (prev) {
-    const body = prev.content.split('\n').slice(1).join('\n').split(/\n(?:Files changed:|Last commands:|\[CURRENT TASK\]|Continue the task)/)[0].trim();
+    const body = prev.content.split('\n').slice(1).join('\n').split(/\n(?:Files changed:|Last commands:|\[CURRENT TASK\]|MEMORY \(|CURRENT PLAN:|Continue (?:the task )?from here)/)[0].trim();
     if (body) parts.push(`Earlier summary:\n${body.slice(0, 1500)}`);
   }
   const requests = messages
@@ -241,7 +249,7 @@ export function buildSummaryMessage({ summary, facts, task }) {
   const parts = [`${SUMMARY_MARKER} — older messages were replaced by this summary]`, summary.trim() || '(no summary)'];
   if (facts) parts.push(facts);
   if (task) parts.push(`[CURRENT TASK]\n${task}`);
-  parts.push('Continue the task from here. Re-read files if you need their exact content.');
+  parts.push('Continue from here. Re-read files if you need their exact content; find the details of older messages with <recall>.');
   return parts.join('\n\n');
 }
 

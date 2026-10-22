@@ -6,9 +6,10 @@ import { streamChat, complete, serverContextLength } from './llm.js';
 import { TOOLS, buildSystemPrompt, parseActions, splitThinking, formatResult, isToolEnabled, withReasoning, findRepetition, normalizeToolCalls, stripReasoning, legacyReasoningToNotes, stripChannelMarkers, toolSchemas } from './protocol.js';
 import { executeAction, runShell, truncateMiddle } from './tools.js';
 import { remember, forget, memoryBlock } from './memory.js';
+import { recall } from './history.js';
 import { parsePlan, mergePlan, tasksToDelegate, setStatus, formatPlan, planReminder, subAgentTask } from './plan.js';
 import {
-  summaryTokens, mechanicalSummary, DEFAULT_CHARS_PER_TOKEN,
+  summaryTokens, summaryWords, mechanicalSummary, DEFAULT_CHARS_PER_TOKEN,
   makeEstimator, contextPlan, answerTokens, isValidSample, historyTokens, splitForCompaction, extractFacts, buildSummaryRequest, cleanSummary,
   buildInlineSummaryRequest,
   buildSummaryMessage, calibrate, SUMMARY_MARKER, filesInContext,
@@ -90,7 +91,7 @@ const STALL_MS = 10_000;
 /** The user request carried by a message (unwraps a compaction summary). */
 function taskFromMessage(content) {
   if (!content.startsWith(SUMMARY_MARKER)) return content;
-  const m = content.match(/\[CURRENT TASK\]\n([\s\S]*?)\n\nContinue the task from here\./);
+  const m = content.match(/\[CURRENT TASK\]\n([\s\S]*?)\n\nContinue (?:the task )?from here\./);
   return m ? m[1] : null;
 }
 
@@ -425,6 +426,7 @@ export class Agent extends EventEmitter {
     if (inlineRoom >= 600) attempts.push({ inline: true, maxTokens: Math.min(summaryTokens(cfg.numCtx), inlineRoom) });
     attempts.push({ inline: false }, { inline: false, retry: true });
     const maxTokens = summaryTokens(cfg.numCtx);
+    const words = summaryWords(cfg.numCtx);
     let maxChars = Math.max(3000, Math.floor((cfg.numCtx - maxTokens - 800) * this.charsPerToken * 0.85));
     let summary = null;
     let failure = null;
@@ -438,9 +440,9 @@ export class Agent extends EventEmitter {
           temperature: attempt.retry ? 0.4 : 0.1,
           signal,
           onProgress: (progress) => this.emit('event', { type: 'prompt_progress', id: 'compaction', progress }),
-          messages: attempt.inline ? buildInlineSummaryRequest(prompt) : buildSummaryRequest(old, maxChars, { retry: attempt.retry }),
+          messages: attempt.inline ? buildInlineSummaryRequest(prompt, { words }) : buildSummaryRequest(old, maxChars, { retry: attempt.retry, words }),
         });
-        const c = cleanSummary(r.text);
+        const c = cleanSummary(r.text, { maxChars: words * 9 });
         summary = c.summary;
         if (!summary) {
           failure = !r.text.trim() && r.thinking.trim()
@@ -460,11 +462,9 @@ export class Agent extends EventEmitter {
     let content = buildSummaryMessage({ summary, facts: extractFacts(old), task });
     if (this.taskPlan?.tasks.length) content += `\n\nCURRENT PLAN:\n${formatPlan(this.taskPlan)}`;
     if (this.memory.length) content += `\n\n${memoryBlock(this.memory)}`; // the notes survive the compaction, word for word
-    // Keep the history being replaced for the rewind points that need it.
-    if (this.checkpoints.some((c) => c.archive == null)) {
-      const k = this.archives.push(this.messages) - 1;
-      for (const c of this.checkpoints) if (c.archive == null) c.archive = k;
-    }
+    // Keep the history being replaced: for <recall>, and for the rewind points that point into it.
+    const k = this.archives.push(this.messages) - 1;
+    for (const c of this.checkpoints) if (c.archive == null) c.archive = k;
     this.messages = [{ role: 'user', content }, ...recent];
     this.memoryShownAt = 0;
     this.turnStartIndex = task ? 0 : turnStart - old.length + 1;
@@ -1088,6 +1088,12 @@ export class Agent extends EventEmitter {
               stopBatch = true;
               continue;
             }
+          }
+          if (action.tool === 'recall') {
+            const r = recall(this.archives, this.messages, action.args.query, { maxChars: Math.min(3000, this.maxResultChars) });
+            this.emit('event', { type: 'action_end', id: actId, ok: r.ok, output: r.text, meta: {} });
+            results.push(formatResult('recall', { query: action.args.query }, r.text));
+            continue;
           }
           if (action.tool === 'remember' || action.tool === 'forget') {
             const r = (action.tool === 'remember' ? remember : forget)(this.memory, action.tool === 'remember' ? action.args.note : action.args.id);

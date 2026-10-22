@@ -29,6 +29,8 @@ export const TOOLS = {
   // The conversation's memory (see memory.js).
   remember: { args: [], bodyArg: 'note', needsBody: true, observes: false },
   forget: { args: ['id'], bodyArg: 'id', needsBody: true, observes: false },
+  // Search the earlier part of the conversation, out of the context (see history.js).
+  recall: { args: ['query'], bodyArg: 'query', needsBody: false, observes: true },
 };
 
 // Common aliases small models reach for. Mapped to canonical names.
@@ -43,6 +45,7 @@ const ALIASES = {
   fetch_url: 'fetch', browse: 'fetch', open_url: 'fetch',
   subagent: 'agent', sub_agent: 'agent', delegate: 'agent', spawn_agent: 'agent', task: 'agent',
   memorize: 'remember', memorise: 'remember', save_memory: 'remember', add_memory: 'remember',
+  search_history: 'recall', recall_history: 'recall', search_conversation: 'recall',
   delete_memory: 'forget', remove_memory: 'forget', unremember: 'forget',
   todo: 'plan', todos: 'plan', todo_list: 'plan', todowrite: 'plan', todo_write: 'plan', update_plan: 'plan', task_list: 'plan',
 };
@@ -78,6 +81,7 @@ export function toolSchemas(config = {}) {
     fn('fetch', 'Read a web page', { url: 'full URL' }, ['url']),
     fn('remember', 'Keep a short note in the memory of this conversation (goals, decisions, preferences, constraints)', { note: 'one short sentence' }, ['note']),
     fn('forget', 'Remove a note from the memory', { id: 'number of the note' }, ['id']),
+    fn('recall', 'Search the earlier part of this conversation (no longer in view) for keywords', { query: 'keywords' }, ['query']),
     {
       type: 'function',
       function: {
@@ -155,6 +159,7 @@ export function buildSystemPrompt({ cwd, offProject = false, memory = true, plat
     tools.push('<remember>one short fact to keep</remember>    note it in your memory of this conversation');
     tools.push('<forget>2</forget>                       remove note 2 from your memory');
   }
+  if (!subagentRole) tools.push('<recall>keywords</recall>               search the earlier part of this conversation (no longer in view)');
   tools.push(subagents
     ? '<plan>\n- [x] done task\n- [ ] next task\n- [ ] @agent independent task (files: …)\n</plan>                                 your task list'
     : '<plan>\n- [x] done task\n- [ ] next task\n</plan>                                 your task list');
@@ -394,6 +399,7 @@ function jsonToTag(name, a = {}) {
       return list.map((t) => (typeof t === 'string' ? { task: t } : t))
         .map((t) => `<agent${quoteAttr('title', t.title ?? t.name)}>\n${t.task ?? t.prompt ?? t.description ?? ''}\n</agent>`).join('\n');
     }
+    case 'recall': return `<recall>${a.query ?? a.keywords ?? a.q ?? ''}</recall>`;
     case 'remember': return `<remember>${a.note ?? a.text ?? a.content ?? a.fact ?? ''}</remember>`;
     case 'forget': return `<forget>${a.id ?? a.number ?? a.index ?? a.note ?? ''}</forget>`;
     case 'plan': {

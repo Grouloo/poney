@@ -125,6 +125,11 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   read is refused (it must be read again), and writes to the same file are serialized. One card per sub-agent in the
   transcript (task, live log, report); "Sous-agents" switch.
   One GPU: speed is shared; measured with gemma-4 on two modules + tests: 6 min 56 instead of 10 min 41.
+- **Compaction summaries for conversations too**: about 4% of the window (~490 words for 16k), under the headings
+  Context / Discussion / Work done / Open, with the specifics kept (names, numbers, the user's wording); an earlier
+  summary is carried over, not dropped. The replaced history is always archived.
+- **`<recall>keywords</recall>`**: searches the part of the conversation no longer in view (the archives) and brings
+  back excerpts of the matching messages, in order (accents ignored, quoted phrases kept whole).
 - **Memory per conversation** (`<remember>` / `<forget>`): the agent notes what must not be lost in a long
   conversation (goals, decisions, preferences, constraints), at most 20 short notes (~600 tokens). The notes go word
   for word into compaction summaries, and come back with a user message when their last full view is more than a

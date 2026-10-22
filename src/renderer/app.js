@@ -579,6 +579,7 @@ function summarize(tool, args) {
     case 'fetch': return args.url || '';
     case 'search': return `${args.pattern || ''}  ${args.path ? `in ${args.path}` : ''}`;
     case 'read': return `${args.path || ''}${args.start ? `:${args.start}-${args.end || ''}` : ''}`;
+    case 'recall': return args.query || '';
     case 'remember': return args.note || '';
     case 'forget': return `note ${args.id || ''}`;
     case 'plan': {
@@ -589,7 +590,7 @@ function summarize(tool, args) {
   }
 }
 
-const TOOL_LABEL = { list: 'Lister', read: 'Lire', search: 'Chercher', write: 'Écrire', edit: 'Modifier', run: 'Exécuter', web_search: 'Web', fetch: 'Page web', agent: 'Sous-agent', plan: 'Plan', remember: 'Mémoriser', forget: 'Oublier' };
+const TOOL_LABEL = { list: 'Lister', read: 'Lire', search: 'Chercher', write: 'Écrire', edit: 'Modifier', run: 'Exécuter', web_search: 'Web', fetch: 'Page web', agent: 'Sous-agent', plan: 'Plan', remember: 'Mémoriser', forget: 'Oublier', recall: 'Retrouver' };
 
 function renderDiff(diff) {
   return `<pre class="diff">${diff.split('\n').map((l) => {
