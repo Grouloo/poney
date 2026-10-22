@@ -7,7 +7,7 @@ import { TOOLS, buildSystemPrompt, parseActions, splitThinking, formatResult, is
 import { executeAction, runShell, truncateMiddle } from './tools.js';
 import { remember, forget, memoryBlock, standingInstructions, instructionNote, replacedAutoNote } from './memory.js';
 import { recall, autoRecall, recalledBlock, keywordsOf } from './history.js';
-import { parsePlan, mergePlan, tasksToDelegate, setStatus, formatPlan, planReminder, subAgentTask } from './plan.js';
+import { parsePlan, mergePlan, nextGroup, setStatus, formatPlan, subAgentTask } from './plan.js';
 import {
   summaryTokens, summaryWords, mechanicalSummary, DEFAULT_CHARS_PER_TOKEN,
   makeEstimator, contextPlan, answerTokens, isValidSample, historyTokens, splitForCompaction, extractFacts, buildSummaryRequest, cleanSummary,
@@ -581,43 +581,58 @@ export class Agent extends EventEmitter {
   // ----- plan -----
 
   /**
-   * Applies a <plan>: the new task list, and the @agent tasks started in
-   * sub-agents (each gets the request, the plan and its task); waits for them.
+   * Carries out a <plan>: each task in a sub-agent, in order (consecutive
+   * @parallel tasks at the same time); a task is done when its sub-agent stops.
+   * A failure stops the plan there: the model gets the reports and may write a
+   * new plan (tasks already done are not run again).
    */
   async runPlan(action, signal, actId) {
     const written = parsePlan(action.args.body);
     if (!written.length) {
-      const text = 'Empty plan: write one task per line, like "- [ ] task" ("- [x] task" when done).';
+      const text = 'Empty plan: write one task per line, like "- task".';
       return { ok: false, text, result: formatResult('plan', {}, text) };
     }
     this.taskPlan = mergePlan(this.taskPlan, written);
-    let todo = tasksToDelegate(this.taskPlan);
-    let note = '';
-    if (todo.length && (this.role === 'sub' || !isToolEnabled('agent', this.config))) {
-      note = '\n(Sub-agents are not available: do the @agent tasks yourself.)';
-      todo = [];
+    const plan = this.taskPlan;
+    this.emit('event', { type: 'plan', tasks: plan.tasks });
+    if (this.role === 'sub' || !isToolEnabled('agent', this.config)) {
+      // No sub-agents: a list for the model, which does the tasks itself.
+      const text = `${formatPlan(plan)}\n(Sub-agents are not available: do these tasks yourself, in order.)`;
+      return { ok: true, text, result: formatResult('plan', {}, text) };
     }
-    let reports = [];
-    if (todo.length) {
-      for (const t of todo) setStatus(this.taskPlan, t, 'running');
-      this.emit('event', { type: 'plan', tasks: this.taskPlan.tasks });
-      const ids = todo.map(() => nextId++);
-      // Resuming from one of these sub-agents re-runs the plan step.
-      const cp = this.checkpoints.at(-1);
-      if (cp?.kind === 'action' && cp.actIds.includes(actId)) cp.actIds.push(...ids);
-      const group = todo.map((t) => ({ tool: 'agent', args: { title: t.text.slice(0, 60), task: subAgentTask(this.taskPlan, t, this.currentTask) } }));
+    const reports = [];
+    let failed = false;
+    for (let group = nextGroup(plan); group.length && !failed; group = nextGroup(plan)) {
+      for (const t of group) setStatus(plan, t, 'running');
+      this.emit('event', { type: 'plan', tasks: plan.tasks });
+      const ids = group.map(() => nextId++);
+      // Resuming from one of these sub-agents re-runs the plan step (done tasks are kept).
+      const cp = this.checkpoints.findLast((c) => c.kind === 'action' && c.actIds.includes(actId));
+      if (cp) cp.actIds.push(...ids);
+      const agents = group.map((t) => ({ tool: 'agent', args: { title: t.text.slice(0, 60), task: subAgentTask(plan, t, this.currentTask) } }));
+      let results;
       try {
-        reports = await this.runSubAgents(group, signal, ids);
+        results = await this.runSubAgents(agents, signal, ids);
       } catch (e) {
-        for (const t of todo) setStatus(this.taskPlan, t, 'pending'); // stopped: to be started again
-        this.emit('event', { type: 'plan', tasks: this.taskPlan.tasks });
+        for (const t of group) setStatus(plan, t, 'pending'); // stopped: to be started again
+        this.emit('event', { type: 'plan', tasks: plan.tasks });
         throw e;
       }
-      todo.forEach((t, k) => setStatus(this.taskPlan, t, /\bstatus="done"/.test(reports[k]) ? 'done' : 'failed'));
+      group.forEach((t, k) => {
+        const ok = /\bstatus="done"/.test(results[k]);
+        const report = results[k].replace(/^<result[^>]*>\n?|\n?<\/result>$/g, '').trim();
+        setStatus(plan, t, ok ? 'done' : 'failed', report);
+        if (!ok) failed = true;
+        reports.push(`${ok ? '' : '[FAILED] '}${t.text}:\n${report}`);
+      });
+      this.emit('event', { type: 'plan', tasks: plan.tasks });
     }
-    this.emit('event', { type: 'plan', tasks: this.taskPlan.tasks });
-    const text = `${formatPlan(this.taskPlan)}${note}${reports.length ? `\n\nSub-agent reports:\n${reports.join('\n')}` : ''}`;
-    return { ok: true, text, result: formatResult('plan', {}, text) };
+    const left = plan.tasks.filter((t) => t.status !== 'done').length;
+    const end = failed
+      ? `\nA task failed, the plan stopped there (${left} task(s) not done). Fix it with a new <plan> (done tasks are not run again), or tell the user.`
+      : '\nAll the tasks are done: check the reports, then answer the user (or write a new <plan> if something is missing).';
+    const text = `${formatPlan(plan)}${reports.length ? `\n\nReports:\n${reports.join('\n\n')}` : ''}${end}`;
+    return { ok: !failed, text, result: formatResult('plan', {}, text) };
   }
 
   // ----- generation -----
@@ -918,7 +933,6 @@ export class Agent extends EventEmitter {
     let testFailures = 0;
     let emptyReplies = 0;
     let codeDumpNudged = false;
-    let planNudges = 0;
     let invisibleRetried = false;
     const recent = [];
     let reason = 'done';
@@ -1019,16 +1033,6 @@ export class Agent extends EventEmitter {
             continue;
           }
 
-          // Plan gate: the agent sticks to its plan until every task is checked off
-          // (or the plan is rewritten without the tasks no longer needed).
-          const unfinished = this.taskPlan?.tasks.filter((t) => t.status !== 'done') ?? [];
-          if (unfinished.length && planNudges < 2) {
-            planNudges++;
-            notice(`Plan inachevé (${unfinished.length} tâche${unfinished.length > 1 ? 's' : ''}) : le modèle est relancé pour le terminer.`);
-            this.messages.push({ role: 'user', content: `Your plan is not finished. Tasks left:\n${unfinished.map((t) => `- ${t.text}${t.status === 'failed' ? ' (its sub-agent failed)' : ''}`).join('\n')}\nDo the next task now. If a task is done, check it off in the <plan>; if it is no longer needed, rewrite the <plan> without it.` });
-            continue;
-          }
-
           // Test gate 1: project test command must pass.
           if (config.testCommand && codeChangedThisTurn && shellOn) {
             notice(`Vérification : ${config.testCommand}`);
@@ -1063,7 +1067,7 @@ export class Agent extends EventEmitter {
           if (toRun.length && (toRun[0].tool === 'agent') !== (a.tool === 'agent')) break;
           toRun.push(a);
           if (TOOLS[a.tool].observes && a.tool !== 'agent') break;
-          if (a.tool === 'plan' && /@agent|\(agent\)/i.test(a.args.body || '')) break; // reports needed first
+          if (a.tool === 'plan') break; // its tasks run now: the reports are needed first
         }
         const last = toRun[toRun.length - 1];
         this.messages.push({ role: 'assistant', content: this.assistantContent(gen, gen.text.slice(0, last.end).trim()) });
@@ -1194,11 +1198,6 @@ export class Agent extends EventEmitter {
         let content = results.join('\n');
         if (skipped > 0) content += `\n(${skipped} later action(s) were NOT run. Look at the result above first, then continue.)`;
         if (cutNote) content += `\n${cutNote}`;
-        // Where the plan stands (not after the plan itself, which shows it in full).
-        if (this.taskPlan && !toRun.some((a) => a.tool === 'plan')) {
-          const line = planReminder(this.taskPlan);
-          if (line) content += `\n${line}`;
-        }
         this.messages.push({ role: 'user', content });
       }
     } catch (e) {

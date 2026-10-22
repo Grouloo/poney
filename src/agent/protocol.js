@@ -87,7 +87,7 @@ export function toolSchemas(config = {}) {
       type: 'function',
       function: {
         name: 'plan',
-        description: 'Write or update your task list (the whole list each time). Tasks with agent=true are independent: they start at once in sub-agents.',
+        description: 'A plan: the tasks of the request, each carried out by a sub-agent, in order (consecutive parallel tasks at the same time). You get their reports.',
         parameters: {
           type: 'object',
           properties: {
@@ -95,7 +95,7 @@ export function toolSchemas(config = {}) {
               type: 'array',
               items: {
                 type: 'object',
-                properties: { task: { type: 'string' }, done: { type: 'boolean' }, agent: { type: 'boolean', description: 'independent task for a sub-agent' } },
+                properties: { task: { type: 'string', description: 'complete task: goal, files' }, parallel: { type: 'boolean', description: 'can run at the same time as the next parallel tasks' } },
                 required: ['task'],
               },
             },
@@ -162,8 +162,8 @@ export function buildSystemPrompt({ cwd, offProject = false, memory = true, plat
   }
   if (!subagentRole) tools.push('<recall>keywords</recall>               search the earlier part of this conversation (no longer in view)');
   tools.push(subagents
-    ? '<plan>\n- [x] done task\n- [ ] next task\n- [ ] @agent independent task (files: …)\n</plan>                                 your task list'
-    : '<plan>\n- [x] done task\n- [ ] next task\n</plan>                                 your task list');
+    ? '<plan>\n- first task (goal, files)\n- @parallel a task independent of the next one\n- @parallel the next one\n- last task\n</plan>                                 a plan: each task is done by a sub-agent'
+    : '<plan>\n- first task\n- next task\n</plan>                                 your task list');
   if (subagents) {
     tools.push('<agent title="short name">\ncomplete task, with all the context it needs\n</agent>                                delegate an independent task to a sub-agent');
   }
@@ -188,9 +188,10 @@ export function buildSystemPrompt({ cwd, offProject = false, memory = true, plat
   if (memory && !subagentRole) {
     rules.push('Long conversations get compacted and details are lost. As soon as the user states a preference (how to answer, tone, language), a constraint or a decision, keep it with <remember> before answering (not what is in files). One short sentence per note; <forget> notes that are no longer true.');
   }
-  rules.push('Several steps: write a <plan> for this request and stick to it; rewrite the whole list when a task is done or changes; finish every task before your final answer. Do not restate it in your reasoning: its state is shown after each result.');
+  rules.push(subagents
+    ? 'For a request with several steps, write a <plan>: each task is carried out by a sub-agent, in order (consecutive @parallel tasks, touching different files, at the same time); you get their reports. Write each task so that it can be done alone (goal, files). Do not do the tasks yourself: answer from the reports, or write a new <plan> for what is missing.'
+    : 'Several steps: write a <plan> first, then do the tasks in order.');
   if (subagents) {
-    rules.push('In the plan, start a task with @agent when it is independent of the others (different files): it starts at once in a sub-agent, which gets the request, the plan and its task; you get its report. Do the other tasks yourself.');
     rules.push('Sub-agents: put ALL the independent tasks in ONE message (one <agent> tag each, one after the other): they run at the same time, then you get all the reports. Do not launch them one by one. Use them only for tasks that touch different files. A sub-agent cannot see this conversation: write in the task everything it needs (files, goal, constraints).');
   }
   rules.push(subagentRole
@@ -414,7 +415,7 @@ function jsonToTag(name, a = {}) {
       const list = Array.isArray(a.tasks) ? a.tasks : Array.isArray(a.todos) ? a.todos : null;
       if (!list) return `<plan>\n${a.plan ?? a.body ?? ''}\n</plan>`;
       return `<plan>\n${list.map((t) => (typeof t === 'string' ? { task: t } : t))
-        .map((t) => `- [${t.done || t.status === 'completed' || t.status === 'done' ? 'x' : ' '}] ${t.agent ? '@agent ' : ''}${t.task ?? t.content ?? t.text ?? t.title ?? ''}`).join('\n')}\n</plan>`;
+        .map((t) => `- ${t.done || t.status === 'completed' || t.status === 'done' ? '[x] ' : ''}${t.parallel || t.agent ? '@parallel ' : ''}${t.task ?? t.content ?? t.text ?? t.title ?? ''}`).join('\n')}\n</plan>`;
     }
     case 'search': return a.query || a.keywords ? `<search${quoteAttr('path', a.path)}>${a.query ?? a.keywords}</search>` : `<search${quoteAttr('pattern', a.pattern)}${quoteAttr('path', a.path)} />`;
     default: return `<${tool}${['path', 'start', 'end', 'pattern', 'depth'].map((k) => quoteAttr(k, a[k])).join('')} />`;

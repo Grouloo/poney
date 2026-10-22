@@ -5,46 +5,45 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { Agent } from '../src/agent/agent.js';
-import { parsePlan, mergePlan, tasksToDelegate, setStatus, planReminder, subAgentTask } from '../src/agent/plan.js';
+import { parsePlan, mergePlan, nextGroup, setStatus, subAgentTask } from '../src/agent/plan.js';
 import { normalizeToolCalls } from '../src/agent/protocol.js';
 
-test('a plan is parsed from checklists, plain lists and @agent marks', () => {
-  assert.deepEqual(parsePlan('Plan:\n- [x] Read the code\n- [ ] @agent Write docs (files: a.py)\n2. Fix the bug\n* [ ] (agent) Add tests\n'), [
-    { text: 'Read the code', done: true, agent: false },
-    { text: 'Write docs (files: a.py)', done: false, agent: true },
-    { text: 'Fix the bug', done: false, agent: false },
-    { text: 'Add tests', done: false, agent: true },
+test('a plan is parsed from lists, checkboxes and @parallel marks (@agent of earlier versions too)', () => {
+  assert.deepEqual(parsePlan('Plan:\n- Read the code\n- [x] Done already\n2. @parallel Write docs\n* (agent) Add tests\n'), [
+    { text: 'Read the code', done: false, parallel: false },
+    { text: 'Done already', done: true, parallel: false },
+    { text: 'Write docs', done: false, parallel: true },
+    { text: 'Add tests', done: false, parallel: true },
   ]);
 });
 
-test('a delegated task is never started twice; checking it off marks it done', () => {
-  let plan = mergePlan(null, parsePlan('- [ ] @agent Docs\n- [ ] Fix'));
-  const [docs] = tasksToDelegate(plan);
-  setStatus(plan, docs, 'failed');
-  plan = mergePlan(plan, parsePlan('- [ ] @agent Docs.\n- [ ] Fix')); // rewritten, still unchecked
-  assert.deepEqual(tasksToDelegate(plan), []);
-  assert.equal(plan.tasks[0].status, 'failed');
-  assert.match(planReminder(plan), /0\/2 done\. Next: Docs\. \[failed/);
-  plan = mergePlan(plan, parsePlan('- [x] Docs\n- [ ] Fix')); // done by the main agent itself
+test('tasks run in order, consecutive @parallel ones together; a done task is never run again', () => {
+  let plan = mergePlan(null, parsePlan('- A\n- @parallel B\n- @parallel C\n- D'));
+  assert.deepEqual(nextGroup(plan).map((t) => t.text), ['A']);
+  setStatus(plan, plan.tasks[0], 'done', 'A done');
+  assert.deepEqual(nextGroup(plan).map((t) => t.text), ['B', 'C']);
+  plan = mergePlan(plan, parsePlan('- A.\n- New task'));
   assert.equal(plan.tasks[0].status, 'done');
-  assert.equal(planReminder(plan), '(Plan: 1/2 done. Next: Fix)');
+  assert.equal(plan.tasks[0].report, 'A done');
+  assert.deepEqual(nextGroup(plan).map((t) => t.text), ['New task']);
 });
 
-test('a sub-agent gets the request, the whole plan (its task marked) and its task', () => {
-  const plan = mergePlan(null, parsePlan('- [x] Read\n- [ ] @agent Docs\n- [ ] Fix'));
+test('a sub-agent gets the request, the plan with its task marked, and the reports of the tasks done', () => {
+  const plan = mergePlan(null, parsePlan('- Read\n- Docs\n- Fix'));
+  setStatus(plan, plan.tasks[0], 'done', 'The parser is in parser.py');
   const t = subAgentTask(plan, plan.tasks[1], 'Document and fix the parser');
   assert.match(t, /The user's request:\nDocument and fix the parser/);
-  assert.match(t, /- \[ \] @agent Docs   <- YOUR TASK/);
-  assert.match(t, /- \[ \] Fix\n/);
+  assert.match(t, /- \[ \] Docs {3}<- YOUR TASK/);
+  assert.match(t, /Reports of the tasks already done:\n- Read: The parser is in parser\.py/);
   assert.match(t, /YOUR TASK: Docs$/);
 });
 
 test('Gemma native plan calls become a <plan> tag', () => {
-  assert.equal(normalizeToolCalls('<|tool_call>call:plan{tasks:[{task:<|"|>Docs<|"|>,agent:true},{task:<|"|>Read<|"|>,done:true}]}<tool_call|>'),
-    '<plan>\n- [ ] @agent Docs\n- [x] Read\n</plan>');
+  assert.equal(normalizeToolCalls('<|tool_call>call:plan{tasks:[{task:<|"|>Docs<|"|>,parallel:true},{task:<|"|>Read<|"|>}]}<tool_call|>'),
+    '<plan>\n- @parallel Docs\n- Read\n</plan>');
 });
 
-// Fake Ollama: replies chosen from the request (the sub-agent sees "YOUR TASK").
+// Fake Ollama: the reply chosen from the request (a sub-agent sees "YOUR TASK: …").
 function fake(reply) {
   const requests = [];
   const server = http.createServer((req, res) => {
@@ -53,66 +52,73 @@ function fake(reply) {
     req.on('end', () => {
       const r = JSON.parse(body);
       requests.push(r);
-      res.end(`${JSON.stringify({ message: { content: reply(r, requests.length) }, done: true, done_reason: 'stop' })}\n`);
+      res.end(`${JSON.stringify({ message: { content: reply(r) }, done: true, done_reason: 'stop' })}\n`);
     });
   });
   return new Promise((ok) => server.listen(0, () => ok({ server, requests, url: `http://localhost:${server.address().port}` })));
 }
+const taskOf = (r) => (r.messages.find((m) => m.role === 'user' && /YOUR TASK: /.test(m.content))?.content.match(/YOUR TASK: (.+)$/) || [])[1];
+const isSub = (r) => /You are a sub-agent/.test(r.messages[0].content);
 
-test('@agent tasks start in sub-agents with their context; the plan follows, and is recalled after each result', async () => {
+test('every task is done by a sub-agent, in order; done when it stops; the model only writes the list', async () => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-plan-'));
-  await fs.writeFile(path.join(cwd, 'a.txt'), 'x\n');
-  let mainStep = 0;
+  let main = 0;
   const f = await fake((r) => {
-    const sys = r.messages[0].content;
-    const last = r.messages.at(-1).content;
-    if (/You are a sub-agent/.test(sys)) {
-      return /<result/.test(last) ? 'Wrote docs.md.' : '<write path="docs.md">\n# Docs\n</write>';
+    if (isSub(r)) {
+      const task = taskOf(r);
+      if (/<result/.test(r.messages.at(-1).content)) return `Did: ${task}.`;
+      return `<write path="${task.split(' ')[1]}.md">\n${task}\n</write>`;
     }
-    mainStep++;
-    if (mainStep === 1) return '<plan>\n- [ ] @agent Write docs.md\n- [ ] Read a.txt\n</plan>';
-    if (mainStep === 2) return '<read path="a.txt" />';
-    return 'All done.';
+    main++;
+    return main === 1 ? '<plan>\n- Write a\n- @parallel Write b\n- @parallel Write c\n</plan>' : 'All three files are written.';
   });
   const agent = new Agent({ cwd, config: { baseUrl: f.url, model: 'm', approval: 'auto', shellEnabled: false } });
   const plans = [];
-  agent.on('event', (e) => e.type === 'plan' && !e.agentId && plans.push(e.tasks.map((t) => t.status).join(',')));
-  await agent.send('Document the project and read a.txt');
-  f.server.close();
-  assert.equal(await fs.readFile(path.join(cwd, 'docs.md'), 'utf8'), '# Docs\n');
-  // The sub-agent got the request, the plan and its task.
-  const subFirst = f.requests.find((r) => /You are a sub-agent/.test(r.messages[0].content));
-  assert.match(subFirst.messages.at(-1).content, /Document the project and read a\.txt[\s\S]*<- YOUR TASK[\s\S]*YOUR TASK: Write docs\.md/);
-  assert.deepEqual(plans, ['running,pending', 'done,pending']);
-  // The main agent got the reports with the plan, then a one-line reminder after its next action.
-  const mainReqs = f.requests.filter((r) => !/You are a sub-agent/.test(r.messages[0].content));
-  assert.match(mainReqs[1].messages.at(-1).content, /<result tool="plan">[\s\S]*\[x\] @agent Write docs\.md[\s\S]*Sub-agent reports/);
-  assert.match(mainReqs[2].messages.at(-1).content, /\(Plan: 1\/2 done\. Next: Read a\.txt\)$/);
-  assert.equal(agent.taskPlan.tasks.length, 2);
-});
-
-test('a plan holds for one request: the agent is sent back to unchecked tasks, and the next message starts without it', async () => {
-  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-plan-'));
-  let step = 0;
-  const f = await fake(() => {
-    step++;
-    if (step === 1) return '<plan>\n- [ ] Write a.md\n- [ ] Write b.md\n</plan>\n<write path="a.md">\nA\n</write>';
-    if (step === 2) return 'Done.'; // b.md forgotten
-    if (step === 3) return '<write path="b.md">\nB\n</write>\n<plan>\n- [x] Write a.md\n- [x] Write b.md\n</plan>';
-    return 'Done.';
-  });
-  const agent = new Agent({ cwd, config: { baseUrl: f.url, model: 'm', approval: 'auto', shellEnabled: false } });
   const notices = [];
-  agent.on('event', (e) => e.type === 'notice' && notices.push(e.text));
+  agent.on('event', (e) => {
+    if (e.type === 'plan' && !e.agentId) plans.push(e.tasks.map((t) => t.status).join(','));
+    if (e.type === 'notice') notices.push(e.text);
+  });
   try {
-    await agent.send('write a.md and b.md');
-    await agent.send('thanks');
+    await agent.send('write a, b and c');
   } finally {
     f.server.close();
   }
-  assert.equal(await fs.readFile(path.join(cwd, 'b.md'), 'utf8'), 'B\n');
-  assert.equal(notices.filter((n) => /Plan inachevé/.test(n)).length, 1);
-  // (a.md was written but not checked off: still a task left)
-  assert.match(f.requests[2].messages.at(-1).content, /Tasks left:\n- Write a\.md\n- Write b\.md/);
-  assert.equal(agent.taskPlan, null);
+  for (const x of ['a', 'b', 'c']) assert.equal(await fs.readFile(path.join(cwd, `${x}.md`), 'utf8'), `Write ${x}\n`);
+  assert.deepEqual(plans, ['pending,pending,pending', 'running,pending,pending', 'done,pending,pending', 'done,running,running', 'done,done,done']);
+  // Later tasks see the report of the first one.
+  assert.match(f.requests.find((r) => taskOf(r) === 'Write b').messages.at(-1).content, /Reports of the tasks already done:\n- Write a: Did: Write a\./);
+  // The model gets the reports, without having checked anything off, and is never sent back to its list.
+  const second = f.requests.filter((r) => !isSub(r))[1];
+  assert.match(second.messages.at(-1).content, /<result tool="plan">[\s\S]*Reports:\nWrite a:\nDid: Write a\.[\s\S]*All the tasks are done/);
+  assert.equal(notices.filter((n) => /Plan inachevé/.test(n)).length, 0);
+});
+
+test('a failed task stops the plan; a new plan runs only what is left', async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-plan-'));
+  let main = 0;
+  let broken = true;
+  const runs = {};
+  const f = await fake((r) => {
+    if (isSub(r)) {
+      const task = taskOf(r);
+      if (!/<result/.test(r.messages.at(-1).content) && r.messages.filter((m) => m.role === 'assistant').length === 0) runs[task] = (runs[task] || 0) + 1;
+      if (task === 'Step two' && broken) return ''; // nothing comes out: the sub-agent gives up
+      return `Did ${task}.`;
+    }
+    main++;
+    if (main === 1) return '<plan>\n- Step one\n- Step two\n- Step three\n</plan>';
+    if (main === 2) { broken = false; return '<plan>\n- Step one\n- Step two\n- Step three\n</plan>'; }
+    return 'Done.';
+  });
+  const agent = new Agent({ cwd, config: { baseUrl: f.url, model: 'm', approval: 'auto', shellEnabled: false } });
+  try {
+    await agent.send('do the three steps');
+  } finally {
+    f.server.close();
+  }
+  const mains = f.requests.filter((r) => !isSub(r));
+  assert.match(mains[1].messages.at(-1).content, /\[FAILED\] Step two[\s\S]*A task failed, the plan stopped there \(2 task\(s\) not done\)/);
+  assert.deepEqual(runs, { 'Step one': 1, 'Step two': 2, 'Step three': 1 });
+  assert.deepEqual(agent.taskPlan.tasks.map((t) => t.status), ['done', 'done', 'done']);
 });

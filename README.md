@@ -158,14 +158,12 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   "from now on…", "tutoie-moi", "retiens que…") are noted by the app itself, in the user's words, and shown under
   the message; when the model notes the same thing in its own words, its note replaces the app's. The prompt has an
   example of noting a constraint before answering.
-- **Plan** (`<plan>`, like Claude Code's task list): for one request, the agent writes its task list (`- [ ]` /
-  `- [x]`) and rewrites it as it goes; it stays pinned above the input. A new message starts without a plan. The
-  agent cannot finish while tasks are left unchecked (it is sent back to them twice at most; it may also rewrite
-  the plan without the tasks no longer needed). After each result, one line says where it stands
-  ("Plan: 2/5 done. Next: …"), so the model does not restate its plan in its reasoning. Tasks starting with
-  `@agent` are independent: they start at once in sub-agents, each given the request, the whole plan (its task
-  marked) and its task; the plan step waits for their reports. A delegated task is never started twice. The plan
-  is saved with the conversation, kept through compaction and restored by rewinds.
+- **Plan** (`<plan>`): for a request with several steps, the model only writes the list of tasks; each task is
+  carried out by a sub-agent, in order (consecutive `@parallel` tasks at the same time), and is done when its
+  sub-agent stops. The model never keeps its list up to date. Each sub-agent gets the request, the plan with its task
+  marked, and the reports of the tasks already done. A failed task stops the plan there; the model gets the reports
+  and may write a new plan, which runs only what is left. The plan is pinned above the input; a new message starts
+  without one. Without sub-agents, the plan is a list the model follows itself.
 - **Viewer** with syntax highlighting and image preview; paths in the agent's actions are clickable. Markdown
   documents open formatted (GitHub Markdown, LaTeX formulas, highlighted code, project images; links to project
   files open in the viewer, web links in the browser), with a "Code" button to see the source; the choice is

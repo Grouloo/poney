@@ -225,7 +225,7 @@ function renderPlan(tasks = []) {
   const done = tasks.filter((t) => t.status === 'done').length;
   panel.querySelector('.plan-count').textContent = `${done}/${tasks.length}`;
   panel.querySelector('.plan-list').innerHTML = tasks.map((t) =>
-    `<li class="${t.status}"><span class="plan-box">${PLAN_ICON[t.status] || '○'}</span><span class="plan-text">${esc(t.text)}</span>${t.agent ? '<span class="tag">sous-agent</span>' : ''}</li>`).join('');
+    `<li class="${t.status}"><span class="plan-box">${PLAN_ICON[t.status] || '○'}</span><span class="plan-text">${esc(t.text)}</span>${t.parallel ? '<span class="tag">en parallèle</span>' : ''}</li>`).join('');
   panel.classList.toggle('all-done', done === tasks.length);
 }
 $('planPanel').querySelector('.plan-head').onclick = () => $('planPanel').classList.toggle('collapsed');
