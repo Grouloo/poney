@@ -32,3 +32,63 @@ test('the summary is sized from the window and suits a conversation', () => {
   assert.match(req[1].content, /Context:, Discussion:, Work done:, Open:/);
   assert.ok(cleanSummary('Context: chat about databases\nDiscussion: chose PostgreSQL\nWork done: None\nOpen: deployment day').summary);
 });
+
+import { splitChapter, chapterDates, capChapters, SUMMARY_MARKER } from '../src/agent/context.js';
+import { autoRecall } from '../src/agent/history.js';
+import http from 'node:http';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { Agent } from '../src/agent/agent.js';
+
+test('automatic recall: a rare word or a root finds the passage; words in view and small talk do not', () => {
+  const current = [{ role: 'user', content: `${SUMMARY_MARKER}] Context: web project. Discussion: tests of the parser` }];
+  // (an archive of a realistic size: the topics above among other, unrelated ones)
+  const other = ['On renomme le module utils en helpers.', 'Le logo doit être plus contrasté.', 'Ajoute un bouton pour exporter en CSV.', 'Les images sont trop lourdes, compresse-les.'].map((t, i) => ({ role: i % 2 ? 'assistant' : 'user', content: t }));
+  const hit = (q) => autoRecall([[...old, ...other]], current, q).map((p) => p.n);
+  assert.deepEqual(hit('pourquoi on a écarté MySQL ?'), [1]);
+  assert.deepEqual(hit('quel jour on déploie déjà ?'), [3, 4]);
+  assert.deepEqual(hit('merci beaucoup'), []);
+  assert.deepEqual(hit('and the parser tests?'), []); // in view (the summary)
+  // Already attached and still in view: not attached again.
+  const again = [...current, { role: 'user', content: '(From earlier…\n[message 1, user] On part sur PostgreSQL pour la base, pas MySQL.)' }];
+  assert.deepEqual(autoRecall([old], again, 'MySQL ?'), []);
+});
+
+test('chapter lines: taken out of the summary, dated from the stamps, capped', () => {
+  assert.deepEqual(splitChapter('Context: x\nOpen: y\n**Chapter:** db choice — PostgreSQL, MySQL'), { summary: 'Context: x\nOpen: y', chapter: 'db choice — PostgreSQL, MySQL' });
+  assert.equal(chapterDates(old), 'Oct 19 10:00–10:05');
+  const capped = capChapters(Array.from({ length: 17 }, (_, i) => `c${i}`), 15);
+  assert.equal(capped.length, 15);
+  assert.equal(capped[0], 'c0 / c1 / c2');
+});
+
+test('compaction adds a chapter to the index; a later message about it gets the passage attached', async () => {
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (d) => (body += d));
+    req.on('end', () => {
+      const d = JSON.parse(body);
+      requests.push(d);
+      const summary = d.messages.at(-1).content.includes('PAUSE THE TASK') || d.messages[0].content.startsWith('You summarize');
+      res.end(`${JSON.stringify({ message: { content: summary ? 'Context: a web app\nDiscussion: the database was chosen\nWork done: None\nOpen: deployment\nChapter: database choice' : 'ok' }, done: true, done_reason: 'stop' })}\n`);
+    });
+  });
+  await new Promise((r) => server.listen(0, r));
+  const agent = new Agent({ cwd: await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-chap-')), config: { baseUrl: `http://localhost:${server.address().port}`, model: 'm', numCtx: 4096 } });
+  agent.messages = [...old, ...Array.from({ length: 8 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: `filler ${i} `.repeat(300) }))];
+  const recalled = [];
+  agent.on('event', (e) => e.type === 'recalled' && recalled.push(e.passages));
+  try {
+    await agent.compact();
+    const head = agent.messages[0].content;
+    assert.match(head, /EARLIER CHAPTERS \(out of view, search them with <recall>\):\n1\. Oct 19 10:00–10:05 — database choice — [^\n]*postgresql/);
+    assert.doesNotMatch(head, /Chapter:/);
+    await agent.send('tu te souviens pourquoi pas MySQL ?');
+  } finally {
+    server.close();
+  }
+  assert.deepEqual(recalled[0].map((p) => p.n), [1]);
+  assert.match(requests.at(-1).messages.at(-1).content, /\(From earlier in this conversation, maybe relevant:\n\[message 1, user\] [^\n]*pas MySQL/);
+});

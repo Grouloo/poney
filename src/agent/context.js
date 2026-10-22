@@ -155,6 +155,7 @@ Context: who the user is and what this conversation is about (their goals, prefe
 Discussion: the main points in order: what the user said and asked, what was answered, explained or decided, and why. Keep the specifics: names, numbers, dates, versions, the user's exact wording when it matters.
 Work done: files changed, commands run and their results, what works, what fails (exact errors). "None" if there was no work.
 Open: questions not settled, what the user expects next.
+Then a last line: "Chapter: " followed by the topics of this part in a few words, " — ", and 5 to 8 keywords (names, tools, files).
 Write facts, not commentary. Never invent anything. An earlier summary in the conversation must be carried over, not dropped.`;
 
 /**
@@ -168,7 +169,7 @@ export function buildSummaryRequest(messages, maxChars, { retry = false, words =
     {
       role: 'user',
       content: `<conversation>\n${renderTranscript(messages, maxChars)}\n</conversation>\n\n` +
-        'Now write the summary of the conversation above, with the 4 headings Context:, Discussion:, Work done:, Open:. ' +
+        'Now write the summary of the conversation above, with the 4 headings Context:, Discussion:, Work done:, Open:, then the Chapter: line. ' +
         'Do not copy the conversation and do not write any tool tag.' +
         (retry ? ' Write the summary directly, without long reasoning.' : ''),
     },
@@ -245,8 +246,38 @@ export function mechanicalSummary(messages) {
   return parts.join('\n\n');
 }
 
-export function buildSummaryMessage({ summary, facts, task }) {
-  const parts = [`${SUMMARY_MARKER} — older messages were replaced by this summary]`, summary.trim() || '(no summary)'];
+/** The "Chapter:" line of a summary, taken out of it: { summary, chapter }. */
+export function splitChapter(summary) {
+  let chapter = '';
+  const rest = String(summary || '').replace(/^\W{0,4}(?:chapter|chapitre)\W{0,4}\s*:\s*(.+)$/gim, (_, c) => { chapter = c.replace(/[*_`]+/g, '').trim(); return ''; });
+  return { summary: rest.trim(), chapter };
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** "Oct 19 10:00–12:30" from the stamps of the user messages of a part ('' without stamps). */
+export function chapterDates(messages) {
+  const stamps = messages
+    .map((m) => m.role === 'user' && m.content.match(/^\[\w{3} (\d{4})-(\d\d)-(\d\d) (\d\d:\d\d)\]/))
+    .filter(Boolean)
+    .map(([, y, mo, d, t]) => ({ day: `${MONTHS[+mo - 1]} ${+d}`, t, key: `${y}${mo}${d}` }));
+  if (!stamps.length) return '';
+  const a = stamps[0];
+  const b = stamps[stamps.length - 1];
+  return a.key === b.key ? `${a.day} ${a.t}–${b.t}` : `${a.day} ${a.t}–${b.day} ${b.t}`;
+}
+
+/** Index lines, at most `max` (the oldest ones merged). */
+export function capChapters(chapters, max = 15) {
+  const out = [...chapters];
+  while (out.length > max) out.splice(0, 2, `${out[0]} / ${out[1]}`.slice(0, 240));
+  return out;
+}
+
+export function buildSummaryMessage({ summary, facts, task, chapters = [] }) {
+  const parts = [`${SUMMARY_MARKER} — older messages were replaced by this summary]`];
+  if (chapters.length) parts.push(`EARLIER CHAPTERS (out of view, search them with <recall>):\n${chapters.map((c, i) => `${i + 1}. ${c}`).join('\n')}`);
+  parts.push(summary.trim() || '(no summary)');
   if (facts) parts.push(facts);
   if (task) parts.push(`[CURRENT TASK]\n${task}`);
   parts.push('Continue from here. Re-read files if you need their exact content; find the details of older messages with <recall>.');

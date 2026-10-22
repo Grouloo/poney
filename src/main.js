@@ -153,6 +153,7 @@ function saveConversation() {
   conv.plan = agent.taskPlan;
   conv.memory = agent.memory;
   conv.memoryShownAt = agent.memoryShownAt;
+  conv.chapters = agent.chapters;
   conv.systemPrompt = agent.systemPrompt;
   conv.checkpoints = agent.checkpoints;
   conv.archives = agent.archives;
@@ -300,6 +301,7 @@ ipcMain.handle('conversations:open', (_, id) => {
   a.taskPlan = loaded.plan ?? null;
   a.memory = loaded.memory ?? [];
   a.memoryShownAt = loaded.memoryShownAt ?? 0;
+  a.chapters = loaded.chapters ?? [];
   a.systemPrompt = loaded.systemPrompt ?? null;
   a.checkpoints = loaded.checkpoints ?? [];
   a.archives = loaded.archives ?? [];

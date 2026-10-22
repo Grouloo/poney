@@ -813,6 +813,21 @@ function onEvent(ev) {
     case 'memory':
       renderMemory(ev.notes);
       break;
+    case 'recalled': {
+      // Passages of the older history attached to the last user message.
+      const msg = [...(target || transcript).querySelectorAll('.msg.user')].pop();
+      if (!msg) break;
+      const d = document.createElement('details');
+      d.className = 'recalled';
+      d.innerHTML = `<summary>↩ ${ev.passages.length} passage${ev.passages.length > 1 ? 's' : ''} ancien${ev.passages.length > 1 ? 's' : ''} joint${ev.passages.length > 1 ? 's' : ''} pour l’agent</summary>`;
+      for (const p of ev.passages) {
+        const q = document.createElement('blockquote');
+        q.textContent = `${p.role === 'assistant' ? 'Agent' : 'Vous'} (message ${p.n}) : ${p.excerpt}`;
+        d.appendChild(q);
+      }
+      msg.appendChild(d);
+      break;
+    }
     case 'context':
       if (!replaying) renderGauge(ev);
       break;

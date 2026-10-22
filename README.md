@@ -130,6 +130,13 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   summary is carried over, not dropped. The replaced history is always archived.
 - **`<recall>keywords</recall>`**: searches the part of the conversation no longer in view (the archives) and brings
   back excerpts of the matching messages, in order (accents ignored, quoted phrases kept whole).
+- **Automatic recall**: with each user message, the app searches the out-of-context history with the message's words
+  (rare words weigh more, word roots match, words still in view count for nothing) and, when an earlier passage
+  clearly matches, attaches the 1 or 2 best excerpts to the message (~300 tokens at most), marked "maybe relevant".
+  The message shows "↩ n passages anciens joints", expandable. Nothing is attached when nothing clearly matches.
+- **Chapter index**: each compaction adds a line to the summary (dates from the message stamps, topics written by
+  the model, keywords of that part added when the line is vague), so the model knows what is out of view and what to
+  look for with `<recall>`. 15 lines at most (the oldest merged).
 - **Memory per conversation** (`<remember>` / `<forget>`): the agent notes what must not be lost in a long
   conversation (goals, decisions, preferences, constraints), at most 20 short notes (~600 tokens). The notes go word
   for word into compaction summaries, and come back with a user message when their last full view is more than a

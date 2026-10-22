@@ -6,13 +6,13 @@ import { streamChat, complete, serverContextLength } from './llm.js';
 import { TOOLS, buildSystemPrompt, parseActions, splitThinking, formatResult, isToolEnabled, withReasoning, findRepetition, normalizeToolCalls, stripReasoning, legacyReasoningToNotes, stripChannelMarkers, toolSchemas } from './protocol.js';
 import { executeAction, runShell, truncateMiddle } from './tools.js';
 import { remember, forget, memoryBlock } from './memory.js';
-import { recall } from './history.js';
+import { recall, autoRecall, recalledBlock, keywordsOf } from './history.js';
 import { parsePlan, mergePlan, tasksToDelegate, setStatus, formatPlan, planReminder, subAgentTask } from './plan.js';
 import {
   summaryTokens, summaryWords, mechanicalSummary, DEFAULT_CHARS_PER_TOKEN,
   makeEstimator, contextPlan, answerTokens, isValidSample, historyTokens, splitForCompaction, extractFacts, buildSummaryRequest, cleanSummary,
   buildInlineSummaryRequest,
-  buildSummaryMessage, calibrate, SUMMARY_MARKER, filesInContext,
+  buildSummaryMessage, calibrate, SUMMARY_MARKER, filesInContext, splitChapter, chapterDates, capChapters,
 } from './context.js';
 
 export const DEFAULT_CONFIG = {
@@ -136,6 +136,7 @@ export class Agent extends EventEmitter {
     this.taskPlan = null; // the task list written with <plan> (see plan.js)
     this.memory = []; // notes kept with <remember> for the whole conversation (see memory.js)
     this.memoryShownAt = 0; // index of the last message showing the whole memory
+    this.chapters = []; // index of the compacted parts (see maybeCompact)
     this.running = false;
     this.abort = null;
     this.systemPrompt = null; // custom prompt for this conversation; null = generated default
@@ -215,6 +216,7 @@ export class Agent extends EventEmitter {
     this.taskPlan = null;
     this.memory = [];
     this.memoryShownAt = 0;
+    this.chapters = [];
     this.systemPrompt = null;
     this.lastUsage = null;
     this.currentTask = null;
@@ -241,6 +243,7 @@ export class Agent extends EventEmitter {
       this.untested = false;
       this.taskPlan = null;
       this.memoryShownAt = -1;
+      this.chapters = [];
       this.emit('event', { type: 'plan', tasks: [] });
       // (action resume points cannot be rebuilt: they are dropped)
       this.checkpoints = earlier.filter((c) => c.turnId).map((c) => ({ turnId: c.turnId, rebuild: true }));
@@ -281,6 +284,7 @@ export class Agent extends EventEmitter {
     this.untested = false;
     this.taskPlan = null;
     this.memoryShownAt = -1;
+    this.chapters = [];
     // Message checkpoints up to the request being resumed stay (rebuilt on use); later ones go.
     const t = rebuilt.turnId ? this.checkpoints.findIndex((c) => c.turnId === rebuilt.turnId) : -1;
     this.checkpoints = (t >= 0 ? this.checkpoints.slice(0, t + 1) : []).filter((c) => c.turnId).map((c) => ({ turnId: c.turnId, rebuild: true }));
@@ -297,6 +301,7 @@ export class Agent extends EventEmitter {
     this.messages = base.slice(0, cp.length).map((m) => ({ ...m }));
     this.untested = cp.untested;
     this.taskPlan = cp.plan ? structuredClone(cp.plan) : null;
+    if (cp.chapters) this.chapters = [...cp.chapters];
     if (cp.memory) {
       this.memory = [...cp.memory];
       this.memoryShownAt = Math.min(cp.memoryShownAt ?? 0, this.messages.length);
@@ -459,7 +464,18 @@ export class Agent extends EventEmitter {
     const fallback = !summary;
     summary ??= mechanicalSummary(old);
 
-    let content = buildSummaryMessage({ summary, facts: extractFacts(old), task });
+    // Chapter index: one line per compacted part (dates, topics, keywords), so the model
+    // knows what is out of view and what to look for with <recall>.
+    const split = splitChapter(summary);
+    const own = old.filter((m) => !m.content.startsWith(SUMMARY_MARKER));
+    let topic = split.chapter.replace(/\s+/g, ' ').trim().slice(0, 200);
+    const kw = keywordsOf(own, { count: 6, exclude: topic });
+    const present = kw.filter((w) => topic.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').includes(w)).length;
+    if (!topic) topic = kw.join(', ');
+    else if (present < 2 && kw.length) topic += ` — ${kw.slice(0, 5).join(', ')}`; // vague line: add the part's own words
+    const dates = chapterDates(own);
+    if (topic || dates) this.chapters = capChapters([...this.chapters, [dates, topic].filter(Boolean).join(' — ')]);
+    let content = buildSummaryMessage({ summary: split.summary, facts: extractFacts(old), task, chapters: this.chapters });
     if (this.taskPlan?.tasks.length) content += `\n\nCURRENT PLAN:\n${formatPlan(this.taskPlan)}`;
     if (this.memory.length) content += `\n\n${memoryBlock(this.memory)}`; // the notes survive the compaction, word for word
     // Keep the history being replaced: for <recall>, and for the rewind points that point into it.
@@ -830,7 +846,7 @@ export class Agent extends EventEmitter {
 
   async send(userText, { turnId, resume } = {}) {
     if (this.running) throw new Error('Agent is already running.');
-    if (turnId && !resume) this.checkpoints.push({ turnId, archive: null, length: this.messages.length, untested: this.untested, plan: structuredClone(this.taskPlan), memory: [...this.memory], memoryShownAt: this.memoryShownAt });
+    if (turnId && !resume) this.checkpoints.push({ turnId, archive: null, length: this.messages.length, untested: this.untested, plan: structuredClone(this.taskPlan), memory: [...this.memory], memoryShownAt: this.memoryShownAt, chapters: [...this.chapters] });
     this.running = true;
     this.abort = new AbortController();
     const { signal } = this.abort;
@@ -865,6 +881,14 @@ export class Agent extends EventEmitter {
       if (this.memory.length && (this.memoryShownAt < 0 || historyTokens(this.messages.slice(this.memoryShownAt), this.est) > this.cfg.numCtx / 3)) {
         content += `\n\n(${memoryBlock(this.memory)})`;
         this.memoryShownAt = this.messages.length;
+      }
+      // Passages of the out-of-context history this message clearly refers to.
+      if (this.role === 'main' && this.config.autoRecall !== false && this.archives.length) {
+        const passages = autoRecall(this.archives, this.messages, userText);
+        if (passages.length) {
+          content += `\n\n${recalledBlock(passages)}`;
+          this.emit('event', { type: 'recalled', turnId, passages });
+        }
       }
       this.messages.push({ role: 'user', content });
     }
@@ -1044,6 +1068,7 @@ export class Agent extends EventEmitter {
           plan: structuredClone(this.taskPlan),
           memory: [...this.memory],
           memoryShownAt: this.memoryShownAt,
+          chapters: [...this.chapters],
           remaining: toRun.slice(fromIndex).map(({ tool, args, raw, start, end, complete }) => ({ tool, args, raw, start, end, complete })),
           priorResults: [...results],
           turnStartIndex: this.turnStartIndex,
