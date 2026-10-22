@@ -26,6 +26,9 @@ export const TOOLS = {
   agent: { args: ['title'], bodyArg: 'task', needsBody: true, observes: true },
   // The task list (see plan.js). Tasks marked @agent start in sub-agents.
   plan: { args: [], bodyArg: 'body', needsBody: true, observes: false },
+  // The conversation's memory (see memory.js).
+  remember: { args: [], bodyArg: 'note', needsBody: true, observes: false },
+  forget: { args: ['id'], bodyArg: 'id', needsBody: true, observes: false },
 };
 
 // Common aliases small models reach for. Mapped to canonical names.
@@ -39,6 +42,8 @@ const ALIASES = {
   search_web: 'web_search', websearch: 'web_search', google: 'web_search',
   fetch_url: 'fetch', browse: 'fetch', open_url: 'fetch',
   subagent: 'agent', sub_agent: 'agent', delegate: 'agent', spawn_agent: 'agent', task: 'agent',
+  memorize: 'remember', memorise: 'remember', save_memory: 'remember', add_memory: 'remember',
+  delete_memory: 'forget', remove_memory: 'forget', unremember: 'forget',
   todo: 'plan', todos: 'plan', todo_list: 'plan', todowrite: 'plan', todo_write: 'plan', update_plan: 'plan', task_list: 'plan',
 };
 
@@ -71,6 +76,8 @@ export function toolSchemas(config = {}) {
     fn('run', 'Run a shell command (scripts, tests, installs)', { command: 'shell command' }, ['command']),
     fn('web_search', 'Search the internet', { query: 'search query' }, ['query']),
     fn('fetch', 'Read a web page', { url: 'full URL' }, ['url']),
+    fn('remember', 'Keep a short note in the memory of this conversation (goals, decisions, preferences, constraints)', { note: 'one short sentence' }, ['note']),
+    fn('forget', 'Remove a note from the memory', { id: 'number of the note' }, ['id']),
     {
       type: 'function',
       function: {
@@ -126,7 +133,7 @@ export function isToolEnabled(tool, config) {
   return !flag || config[flag] !== false;
 }
 
-export function buildSystemPrompt({ cwd, offProject = false, platform, projectNotes, testCommand, shell = true, web = true, subagents = false, subagentRole = false }) {
+export function buildSystemPrompt({ cwd, offProject = false, memory = true, platform, projectNotes, testCommand, shell = true, web = true, subagents = false, subagentRole = false }) {
   const notes = projectNotes ? `\nPROJECT NOTES (from the repo):\n${projectNotes}\n` : '';
   const testLine = testCommand && shell
     ? `\nThe project test command is: ${testCommand}\nIt is run automatically when you finish; make it pass.`
@@ -143,6 +150,10 @@ export function buildSystemPrompt({ cwd, offProject = false, platform, projectNo
   if (web) {
     tools.push('<web_search>query</web_search>          search the internet');
     tools.push('<fetch>https://url</fetch>              read a web page');
+  }
+  if (memory && !subagentRole) {
+    tools.push('<remember>one short fact to keep</remember>    note it in your memory of this conversation');
+    tools.push('<forget>2</forget>                       remove note 2 from your memory');
   }
   tools.push(subagents
     ? '<plan>\n- [x] done task\n- [ ] next task\n- [ ] @agent independent task (files: …)\n</plan>                                 your task list'
@@ -164,6 +175,9 @@ export function buildSystemPrompt({ cwd, offProject = false, platform, projectNo
     rules.push('Your knowledge stops at your training. When the user mentions something you do not know or that may have changed (recent news, a new version, a product, a person, prices), search with <web_search> (then <fetch> a page) before answering. Do not guess, and do not just say you do not know.');
   } else {
     rules.push('You have no internet access: say so when the user asks about something you do not know or that may be recent.');
+  }
+  if (memory && !subagentRole) {
+    rules.push('Long conversations get compacted and details are lost. Keep what must not be lost with <remember>: the user\'s goals, decisions, preferences and constraints (not what is in files). One short sentence per note; <forget> notes that are no longer true.');
   }
   rules.push('Several steps: write a <plan> for this request and stick to it; rewrite the whole list when a task is done or changes; finish every task before your final answer. Do not restate it in your reasoning: its state is shown after each result.');
   if (subagents) {
@@ -380,6 +394,8 @@ function jsonToTag(name, a = {}) {
       return list.map((t) => (typeof t === 'string' ? { task: t } : t))
         .map((t) => `<agent${quoteAttr('title', t.title ?? t.name)}>\n${t.task ?? t.prompt ?? t.description ?? ''}\n</agent>`).join('\n');
     }
+    case 'remember': return `<remember>${a.note ?? a.text ?? a.content ?? a.fact ?? ''}</remember>`;
+    case 'forget': return `<forget>${a.id ?? a.number ?? a.index ?? a.note ?? ''}</forget>`;
     case 'plan': {
       const list = Array.isArray(a.tasks) ? a.tasks : Array.isArray(a.todos) ? a.todos : null;
       if (!list) return `<plan>\n${a.plan ?? a.body ?? ''}\n</plan>`;

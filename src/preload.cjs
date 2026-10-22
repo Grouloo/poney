@@ -25,6 +25,8 @@ contextBridge.exposeInMainWorld('api', {
   deleteConversation: (id) => ipcRenderer.invoke('conversations:delete', id),
   onConversationsChanged: (fn) => ipcRenderer.on('conversations:changed', (_, id) => fn(id)),
 
+  getMemory: () => ipcRenderer.invoke('memory:get'),
+  setMemory: (notes) => ipcRenderer.invoke('memory:set', notes),
   getSystemPrompt: () => ipcRenderer.invoke('prompt:get'),
   setSystemPrompt: (text) => ipcRenderer.invoke('prompt:set', text),
 

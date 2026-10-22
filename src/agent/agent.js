@@ -5,6 +5,7 @@ import os from 'node:os';
 import { streamChat, complete, serverContextLength } from './llm.js';
 import { TOOLS, buildSystemPrompt, parseActions, splitThinking, formatResult, isToolEnabled, withReasoning, findRepetition, normalizeToolCalls, stripReasoning, legacyReasoningToNotes, stripChannelMarkers, toolSchemas } from './protocol.js';
 import { executeAction, runShell, truncateMiddle } from './tools.js';
+import { remember, forget, memoryBlock } from './memory.js';
 import { parsePlan, mergePlan, tasksToDelegate, setStatus, formatPlan, planReminder, subAgentTask } from './plan.js';
 import {
   summaryTokens, mechanicalSummary, DEFAULT_CHARS_PER_TOKEN,
@@ -132,6 +133,8 @@ export class Agent extends EventEmitter {
     this.messages = [];
     this.untested = false; // files changed since the last successful command
     this.taskPlan = null; // the task list written with <plan> (see plan.js)
+    this.memory = []; // notes kept with <remember> for the whole conversation (see memory.js)
+    this.memoryShownAt = 0; // index of the last message showing the whole memory
     this.running = false;
     this.abort = null;
     this.systemPrompt = null; // custom prompt for this conversation; null = generated default
@@ -189,6 +192,7 @@ export class Agent extends EventEmitter {
     return buildSystemPrompt({
       cwd: this.cwd,
       offProject: this.offProject,
+      memory: this.config.memoryEnabled !== false,
       platform: os.platform() === 'win32' ? `Windows ${os.arch()}, commands run in cmd.exe` : `${os.platform()} ${os.arch()}`,
       projectNotes: await this.loadProjectNotes(),
       testCommand: this.config.testCommand,
@@ -208,6 +212,8 @@ export class Agent extends EventEmitter {
     this.messages = [];
     this.untested = false;
     this.taskPlan = null;
+    this.memory = [];
+    this.memoryShownAt = 0;
     this.systemPrompt = null;
     this.lastUsage = null;
     this.currentTask = null;
@@ -233,6 +239,7 @@ export class Agent extends EventEmitter {
       this.messages = rebuilt;
       this.untested = false;
       this.taskPlan = null;
+      this.memoryShownAt = -1;
       this.emit('event', { type: 'plan', tasks: [] });
       // (action resume points cannot be rebuilt: they are dropped)
       this.checkpoints = earlier.filter((c) => c.turnId).map((c) => ({ turnId: c.turnId, rebuild: true }));
@@ -272,6 +279,7 @@ export class Agent extends EventEmitter {
     this.messages = rebuilt.messages;
     this.untested = false;
     this.taskPlan = null;
+    this.memoryShownAt = -1;
     // Message checkpoints up to the request being resumed stay (rebuilt on use); later ones go.
     const t = rebuilt.turnId ? this.checkpoints.findIndex((c) => c.turnId === rebuilt.turnId) : -1;
     this.checkpoints = (t >= 0 ? this.checkpoints.slice(0, t + 1) : []).filter((c) => c.turnId).map((c) => ({ turnId: c.turnId, rebuild: true }));
@@ -288,6 +296,11 @@ export class Agent extends EventEmitter {
     this.messages = base.slice(0, cp.length).map((m) => ({ ...m }));
     this.untested = cp.untested;
     this.taskPlan = cp.plan ? structuredClone(cp.plan) : null;
+    if (cp.memory) {
+      this.memory = [...cp.memory];
+      this.memoryShownAt = Math.min(cp.memoryShownAt ?? 0, this.messages.length);
+      this.emit('event', { type: 'memory', notes: this.memory });
+    }
     this.emit('event', { type: 'plan', tasks: this.taskPlan?.tasks ?? [] });
     this.checkpoints = this.checkpoints.slice(0, i);
     // Earlier checkpoints still pointing at the restored archive now match the
@@ -446,12 +459,14 @@ export class Agent extends EventEmitter {
 
     let content = buildSummaryMessage({ summary, facts: extractFacts(old), task });
     if (this.taskPlan?.tasks.length) content += `\n\nCURRENT PLAN:\n${formatPlan(this.taskPlan)}`;
+    if (this.memory.length) content += `\n\n${memoryBlock(this.memory)}`; // the notes survive the compaction, word for word
     // Keep the history being replaced for the rewind points that need it.
     if (this.checkpoints.some((c) => c.archive == null)) {
       const k = this.archives.push(this.messages) - 1;
       for (const c of this.checkpoints) if (c.archive == null) c.archive = k;
     }
     this.messages = [{ role: 'user', content }, ...recent];
+    this.memoryShownAt = 0;
     this.turnStartIndex = task ? 0 : turnStart - old.length + 1;
     const after = historyTokens(this.messages, est);
     this.emit('event', { type: 'compaction', before, after, removed: old.length, summary: content, fallback, failure: fallback ? failure : null });
@@ -536,6 +551,15 @@ export class Agent extends EventEmitter {
     const text = report || (error ? `Error: ${error}` : endReason === 'max_steps' ? 'Stopped: step limit reached before the end.' : '(no report)');
     this.emit('event', { type: 'action_end', id, ok, output: text, meta: { title, steps: stats?.steps, tokens: stats?.tokens, ms: stats?.totalMs } });
     return formatResult('agent', { title, status: ok ? 'done' : endReason || 'failed' }, truncateMiddle(text, Math.max(1000, maxReportChars)));
+  }
+
+  // ----- memory -----
+
+  /** Changes made by the user in the memory panel: shown to the model with its next message. */
+  setMemory(notes) {
+    this.memory = notes.map((n) => String(n).replace(/\s+/g, ' ').trim()).filter(Boolean);
+    this.memoryShownAt = -1;
+    this.emit('event', { type: 'memory', notes: this.memory });
   }
 
   // ----- plan -----
@@ -806,7 +830,7 @@ export class Agent extends EventEmitter {
 
   async send(userText, { turnId, resume } = {}) {
     if (this.running) throw new Error('Agent is already running.');
-    if (turnId && !resume) this.checkpoints.push({ turnId, archive: null, length: this.messages.length, untested: this.untested, plan: structuredClone(this.taskPlan) });
+    if (turnId && !resume) this.checkpoints.push({ turnId, archive: null, length: this.messages.length, untested: this.untested, plan: structuredClone(this.taskPlan), memory: [...this.memory], memoryShownAt: this.memoryShownAt });
     this.running = true;
     this.abort = new AbortController();
     const { signal } = this.abort;
@@ -833,7 +857,17 @@ export class Agent extends EventEmitter {
     };
     // Each message carries its date and time: the model cannot know them, and here
     // (unlike in the system prompt) they never change the cached start of the prompt.
-    if (!resume) this.messages.push({ role: 'user', content: `${messageStamp(this.now?.() ?? new Date())} ${userText}` });
+    if (!resume) {
+      let content = `${messageStamp(this.now?.() ?? new Date())} ${userText}`;
+      // The memory is recalled with the message when its last full view is far back
+      // (a third of the window): it stays in view without costing room at every message.
+      // (-1: changed by the user since, to be shown again)
+      if (this.memory.length && (this.memoryShownAt < 0 || historyTokens(this.messages.slice(this.memoryShownAt), this.est) > this.cfg.numCtx / 3)) {
+        content += `\n\n(${memoryBlock(this.memory)})`;
+        this.memoryShownAt = this.messages.length;
+      }
+      this.messages.push({ role: 'user', content });
+    }
     this.emit('event', { type: 'turn_start' });
 
     const system = this.systemPrompt ?? await this.defaultSystemPrompt();
@@ -1008,6 +1042,8 @@ export class Agent extends EventEmitter {
           length: this.messages.length,
           untested: this.untested,
           plan: structuredClone(this.taskPlan),
+          memory: [...this.memory],
+          memoryShownAt: this.memoryShownAt,
           remaining: toRun.slice(fromIndex).map(({ tool, args, raw, start, end, complete }) => ({ tool, args, raw, start, end, complete })),
           priorResults: [...results],
           turnStartIndex: this.turnStartIndex,
@@ -1052,6 +1088,17 @@ export class Agent extends EventEmitter {
               stopBatch = true;
               continue;
             }
+          }
+          if (action.tool === 'remember' || action.tool === 'forget') {
+            const r = (action.tool === 'remember' ? remember : forget)(this.memory, action.tool === 'remember' ? action.args.note : action.args.id);
+            if (r.notes !== this.memory) {
+              this.memory = r.notes;
+              this.emit('event', { type: 'memory', notes: this.memory });
+            }
+            if (/\nMEMORY:\n/.test(r.text)) this.memoryShownAt = this.messages.length; // this result shows it all
+            this.emit('event', { type: 'action_end', id: actId, ok: r.ok, output: r.text, meta: {} });
+            results.push(formatResult(action.tool, {}, r.text));
+            continue;
           }
           if (action.tool === 'plan') {
             const out = await this.runPlan(action, signal, actId);

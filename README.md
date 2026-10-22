@@ -125,6 +125,12 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   read is refused (it must be read again), and writes to the same file are serialized. One card per sub-agent in the
   transcript (task, live log, report); "Sous-agents" switch.
   One GPU: speed is shared; measured with gemma-4 on two modules + tests: 6 min 56 instead of 10 min 41.
+- **Memory per conversation** (`<remember>` / `<forget>`): the agent notes what must not be lost in a long
+  conversation (goals, decisions, preferences, constraints), at most 20 short notes (~600 tokens). The notes go word
+  for word into compaction summaries, and come back with a user message when their last full view is more than a
+  third of the window behind, so they stay in view without costing room at every message. The 🧠 button under the
+  input shows them; you can add or remove notes (shown to the agent with your next message). Saved with the
+  conversation, restored by rewinds.
 - **Plan** (`<plan>`, like Claude Code's task list): for one request, the agent writes its task list (`- [ ]` /
   `- [x]`) and rewrites it as it goes; it stays pinned above the input. A new message starts without a plan. The
   agent cannot finish while tasks are left unchecked (it is sent back to them twice at most; it may also rewrite

@@ -50,6 +50,11 @@
   </main>
 
   <footer class="composer">
+    <div id="memoryPanel" class="memory-panel hidden">
+      <div class="memory-head"><b>Mémoire de la conversation</b><span class="muted">ce que l’agent garde malgré le compactage</span><button id="memoryClose" class="ghost icon" type="button">✕</button></div>
+      <ol id="memoryList"></ol>
+      <form id="memoryForm" class="memory-add"><input id="memoryInput" maxlength="200" placeholder="Ajouter une note pour l’agent…"><button class="ghost" type="submit">Ajouter</button></form>
+    </div>
     <div id="planPanel" class="plan-panel hidden">
       <button class="plan-head" type="button" title="Afficher / masquer le plan de l’agent">
         <span class="plan-title">Plan</span><span class="plan-count"></span><span class="plan-chev">▾</span>
@@ -66,6 +71,7 @@
           <span class="gauge-bar"><span class="gauge-fill"></span><span class="gauge-mark"></span></span>
           <span class="gauge-text">contexte</span>
         </button>
+        <button id="memoryBtn" class="gauge" type="button" title="Mémoire de la conversation : ce que l’agent garde malgré le compactage">🧠 <span id="memoryCount">0</span></button>
         <span id="status"></span>
       </div>
       <div class="toggles">

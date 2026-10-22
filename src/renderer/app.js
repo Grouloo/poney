@@ -229,7 +229,41 @@ function renderPlan(tasks = []) {
 }
 $('planPanel').querySelector('.plan-head').onclick = () => $('planPanel').classList.toggle('collapsed');
 
+// ---------- the conversation's memory (notes kept with <remember>) ----------
+let memoryNotes = [];
+function renderMemory(notes = memoryNotes) {
+  memoryNotes = notes;
+  $('memoryCount').textContent = String(notes.length);
+  $('memoryBtn').classList.toggle('has-notes', notes.length > 0);
+  const list = $('memoryList');
+  list.innerHTML = notes.length ? '' : '<li class="empty-note">Aucune note pour l’instant.</li>';
+  notes.forEach((n, i) => {
+    const li = document.createElement('li');
+    li.innerHTML = '<span class="memory-text"></span><button class="ghost icon" type="button" title="Retirer cette note">✕</button>';
+    li.querySelector('.memory-text').textContent = n;
+    li.querySelector('button').onclick = () => saveMemory(memoryNotes.filter((_, k) => k !== i));
+    list.appendChild(li);
+  });
+}
+async function saveMemory(notes) {
+  try {
+    renderMemory(await window.api.setMemory(notes));
+  } catch (e) {
+    $('status').textContent = errorText(e);
+  }
+}
+$('memoryBtn').onclick = () => $('memoryPanel').classList.toggle('hidden');
+$('memoryClose').onclick = () => $('memoryPanel').classList.add('hidden');
+$('memoryForm').onsubmit = (e) => {
+  e.preventDefault();
+  const v = $('memoryInput').value.trim();
+  if (!v) return;
+  $('memoryInput').value = '';
+  saveMemory([...memoryNotes, v]);
+};
+
 function clearTranscript() {
+  renderMemory([]);
   renderPlan([]);
   transcript.innerHTML = '';
   bubbles.clear();
@@ -342,6 +376,7 @@ async function resumeFromAction(id) {
 
 function replayTranscript(events) {
   renderPlan([]); // the last plan event of the conversation shows it again
+  renderMemory([]); // (same for the memory)
   transcript.innerHTML = '';
   bubbles.clear();
   cards.clear();
@@ -544,6 +579,8 @@ function summarize(tool, args) {
     case 'fetch': return args.url || '';
     case 'search': return `${args.pattern || ''}  ${args.path ? `in ${args.path}` : ''}`;
     case 'read': return `${args.path || ''}${args.start ? `:${args.start}-${args.end || ''}` : ''}`;
+    case 'remember': return args.note || '';
+    case 'forget': return `note ${args.id || ''}`;
     case 'plan': {
       const n = (args.body || '').split('\n').filter((l) => l.trim()).length;
       return `${n} tâche${n > 1 ? 's' : ''}`;
@@ -552,7 +589,7 @@ function summarize(tool, args) {
   }
 }
 
-const TOOL_LABEL = { list: 'Lister', read: 'Lire', search: 'Chercher', write: 'Écrire', edit: 'Modifier', run: 'Exécuter', web_search: 'Web', fetch: 'Page web', agent: 'Sous-agent', plan: 'Plan' };
+const TOOL_LABEL = { list: 'Lister', read: 'Lire', search: 'Chercher', write: 'Écrire', edit: 'Modifier', run: 'Exécuter', web_search: 'Web', fetch: 'Page web', agent: 'Sous-agent', plan: 'Plan', remember: 'Mémoriser', forget: 'Oublier' };
 
 function renderDiff(diff) {
   return `<pre class="diff">${diff.split('\n').map((l) => {
@@ -609,7 +646,7 @@ function onEvent(ev) {
   if (ev.agentId) {
     const card = cards.get(ev.agentId);
     const log = card?.querySelector('.sub-log');
-    if (!log || ev.type === 'final' || ev.type === 'plan') return; // (a sub-agent's own plan is not pinned)
+    if (!log || ev.type === 'final' || ev.type === 'plan' || ev.type === 'memory') return; // (a sub-agent's own plan/memory are not shown)
     if (ev.type === 'delta') {
       card.dataset.tokens = Number(card.dataset.tokens || 0) + 1;
       card.querySelector('.sub-tokens').textContent = `${card.dataset.tokens} tokens`;
@@ -771,6 +808,9 @@ function onEvent(ev) {
       break;
     case 'plan':
       renderPlan(ev.tasks);
+      break;
+    case 'memory':
+      renderMemory(ev.notes);
       break;
     case 'context':
       if (!replaying) renderGauge(ev);

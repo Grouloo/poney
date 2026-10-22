@@ -151,6 +151,8 @@ function saveConversation() {
   conv.messages = agent.messages;
   conv.untested = agent.untested;
   conv.plan = agent.taskPlan;
+  conv.memory = agent.memory;
+  conv.memoryShownAt = agent.memoryShownAt;
   conv.systemPrompt = agent.systemPrompt;
   conv.checkpoints = agent.checkpoints;
   conv.archives = agent.archives;
@@ -296,6 +298,8 @@ ipcMain.handle('conversations:open', (_, id) => {
   a.messages = loaded.messages;
   a.untested = loaded.untested;
   a.taskPlan = loaded.plan ?? null;
+  a.memory = loaded.memory ?? [];
+  a.memoryShownAt = loaded.memoryShownAt ?? 0;
   a.systemPrompt = loaded.systemPrompt ?? null;
   a.checkpoints = loaded.checkpoints ?? [];
   a.archives = loaded.archives ?? [];
@@ -333,6 +337,16 @@ ipcMain.handle('conversations:delete', (_, id) => {
     fs.rmSync(removed.workspace, { recursive: true, force: true });
     if (offProject?.id === id) startOffProject(); // the window stays outside projects, on a new conversation
   }
+});
+
+// The conversation's memory, seen and edited by the user.
+ipcMain.handle('memory:get', () => (activeCwd() ? getAgent().memory : []));
+ipcMain.handle('memory:set', (_, notes) => {
+  const a = getAgent();
+  if (a.running) throw new Error('L’agent est en cours d’exécution.');
+  a.setMemory(notes); // (its 'memory' event is recorded with the conversation)
+  saveConversation();
+  return a.memory;
 });
 
 ipcMain.handle('prompt:get', async () => {
