@@ -107,6 +107,15 @@
     </div>
     <div id="viewerBody" class="viewer-body"></div>
   </section>
+  <section id="agentPanel" class="viewer agent-panel hidden">
+    <div class="viewer-head">
+      <span class="agent-chip">Sous-agent</span>
+      <span id="agentPanelTitle" class="agent-title"></span>
+      <span id="agentPanelInfo" class="tag"></span>
+      <button id="agentPanelClose" class="ghost icon" title="Fermer">✕</button>
+    </div>
+    <div id="agentPanelBody" class="viewer-body agent-panel-body"></div>
+  </section>
   </div>
 
   <dialog id="promptDialog" class="prompt-dialog">
@@ -164,6 +173,9 @@
           <small>Lancée automatiquement quand l’agent pense avoir fini ; il doit la faire passer.</small>
         </label>
         <label>Timeout des commandes (s) <input name="commandTimeout" type="number" min="5"></label>
+        <label class="check"><input name="parallelAgents" type="checkbox" checked> Lancer les sous-agents en parallèle
+          <small>Décoché : un à la fois (les tâches restent déléguées). Sur une machine modeste, deux générations en même temps peuvent être bien plus lentes qu’une seule.</small>
+        </label>
         <label>Sous-agents en même temps
           <input name="maxParallelAgents" type="number" min="1" max="8">
           <small>Un seul GPU : la vitesse est partagée entre eux. Utile surtout quand ils attendent des commandes ou le web. LM Studio : au plus son nombre de requêtes parallèles.</small>

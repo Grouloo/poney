@@ -137,6 +137,11 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   read is refused (it must be read again), and writes to the same file are serialized. One card per sub-agent in the
   transcript (task, live log, report); "Sous-agents" switch.
   One GPU: speed is shared; measured with gemma-4 on two modules + tests: 6 min 56 instead of 10 min 41.
+  "Lancer les sous-agents en parallèle" (settings, on by default): off, sub-agents run one at a time (`<agent>` groups
+  and `@parallel` plan tasks alike), and the prompt no longer offers parallel runs; on a modest machine, two
+  generations at once can be much slower than one. A sub-agent's card stays compact (its latest action, then the
+  start of its report); a click opens its whole work (task, live log, report) in a panel on the right. A command
+  waiting for approval opens that panel.
 - **Compaction summaries for conversations too**: about 4% of the window (~490 words for 16k), under the headings
   Context / Discussion / Work done / Open, with the specifics kept (names, numbers, the user's wording); an earlier
   summary is carried over, not dropped. The replaced history is always archived.

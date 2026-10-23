@@ -122,3 +122,45 @@ test('a failed task stops the plan; a new plan runs only what is left', async ()
   assert.deepEqual(runs, { 'Step one': 1, 'Step two': 2, 'Step three': 1 });
   assert.deepEqual(agent.taskPlan.tasks.map((t) => t.status), ['done', 'done', 'done']);
 });
+
+test('with parallel sub-agents switched off, @parallel tasks run one at a time, and the prompt does not offer them', async () => {
+  const { buildSystemPrompt } = await import('../src/agent/protocol.js');
+  assert.match(buildSystemPrompt({ cwd: '/p', platform: 'x', subagents: true }), /@parallel/);
+  const seq = buildSystemPrompt({ cwd: '/p', platform: 'x', subagents: true, parallel: false });
+  assert.doesNotMatch(seq, /@parallel/);
+  assert.match(seq, /one at a time/);
+
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-plan-'));
+  let live = 0;
+  let most = 0;
+  let main = 0;
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (d) => (body += d));
+    req.on('end', async () => {
+      const r = JSON.parse(body);
+      requests.push(r);
+      let content;
+      if (isSub(r)) {
+        live++;
+        most = Math.max(most, live);
+        await new Promise((ok) => setTimeout(ok, 150));
+        live--;
+        content = `Did ${taskOf(r)}.`;
+      } else content = ++main === 1 ? '<plan>\n- @parallel A\n- @parallel B\n- @parallel C\n</plan>' : 'Done.';
+      res.end(`${JSON.stringify({ message: { content }, done: true, done_reason: 'stop' })}\n`);
+    });
+  });
+  await new Promise((ok) => server.listen(0, ok));
+  const agent = new Agent({ cwd, config: { baseUrl: `http://localhost:${server.address().port}`, model: 'm', parallelAgents: false, shellEnabled: false } });
+  const plans = [];
+  agent.on('event', (e) => e.type === 'plan' && !e.agentId && plans.push(e.tasks.map((t) => t.status).join(',')));
+  try {
+    await agent.send('do A, B and C');
+  } finally {
+    server.close();
+  }
+  assert.equal(most, 1);
+  assert.ok(plans.includes('done,running,pending'));
+});

@@ -138,7 +138,7 @@ export function isToolEnabled(tool, config) {
   return !flag || config[flag] !== false;
 }
 
-export function buildSystemPrompt({ cwd, offProject = false, memory = true, platform, projectNotes, testCommand, shell = true, web = true, subagents = false, subagentRole = false }) {
+export function buildSystemPrompt({ cwd, offProject = false, memory = true, parallel = true, platform, projectNotes, testCommand, shell = true, web = true, subagents = false, subagentRole = false }) {
   const notes = projectNotes ? `\nPROJECT NOTES (from the repo):\n${projectNotes}\n` : '';
   const testLine = testCommand && shell
     ? `\nThe project test command is: ${testCommand}\nIt is run automatically when you finish; make it pass.`
@@ -161,8 +161,10 @@ export function buildSystemPrompt({ cwd, offProject = false, memory = true, plat
     tools.push('<forget>2</forget>                       remove note 2 from your memory');
   }
   if (!subagentRole) tools.push('<recall>keywords</recall>               search the earlier part of this conversation (no longer in view)');
-  tools.push(subagents
+  tools.push(subagents && parallel
     ? '<plan>\n- first task (goal, files)\n- @parallel a task independent of the next one\n- @parallel the next one\n- last task\n</plan>                                 a plan: each task is done by a sub-agent'
+    : subagents
+      ? '<plan>\n- first task (goal, files)\n- next task\n</plan>                                 a plan: each task is done by a sub-agent, in order'
     : '<plan>\n- first task\n- next task\n</plan>                                 your task list');
   if (subagents) {
     tools.push('<agent title="short name">\ncomplete task, with all the context it needs\n</agent>                                delegate an independent task to a sub-agent');
@@ -189,10 +191,12 @@ export function buildSystemPrompt({ cwd, offProject = false, memory = true, plat
     rules.push('Long conversations get compacted and details are lost. As soon as the user states a preference (how to answer, tone, language), a constraint or a decision, keep it with <remember> before answering (not what is in files). One short sentence per note; <forget> notes that are no longer true.');
   }
   rules.push(subagents
-    ? 'For a request with several steps, write a <plan>: each task is carried out by a sub-agent, in order (consecutive @parallel tasks, touching different files, at the same time); you get their reports. Write each task so that it can be done alone (goal, files). Do not do the tasks yourself: answer from the reports, or write a new <plan> for what is missing.'
+    ? `For a request with several steps, write a <plan>: each task is carried out by a sub-agent, in order${parallel ? ' (consecutive @parallel tasks, touching different files, at the same time)' : ', one at a time'}; you get their reports. Write each task so that it can be done alone (goal, files). Do not do the tasks yourself: answer from the reports, or write a new <plan> for what is missing.`
     : 'Several steps: write a <plan> first, then do the tasks in order.');
   if (subagents) {
-    rules.push('Sub-agents: put ALL the independent tasks in ONE message (one <agent> tag each, one after the other): they run at the same time, then you get all the reports. Do not launch them one by one. Use them only for tasks that touch different files. A sub-agent cannot see this conversation: write in the task everything it needs (files, goal, constraints).');
+    rules.push(parallel
+      ? 'Sub-agents: put ALL the independent tasks in ONE message (one <agent> tag each, one after the other): they run at the same time, then you get all the reports. Do not launch them one by one. Use them only for tasks that touch different files. A sub-agent cannot see this conversation: write in the task everything it needs (files, goal, constraints).'
+      : 'Sub-agents run one at a time. A sub-agent cannot see this conversation: write in the task everything it needs (files, goal, constraints).');
   }
   rules.push(subagentRole
     ? `When your task is finished${shell ? ' and tested' : ''}, answer WITHOUT any tool tag: a short report for the main agent (what you did, files changed, test results, problems left).`

@@ -28,7 +28,15 @@ let target = null;
 
 function add(el) {
   $('empty')?.remove();
-  (target || transcript).appendChild(el);
+  if (target) {
+    // Inside a sub-agent's view: the side panel follows it when it shows it and is at the end.
+    const panel = $('agentPanelBody');
+    const follow = panel.contains(target) && panel.scrollHeight - panel.scrollTop - panel.clientHeight < 80;
+    target.appendChild(el);
+    if (follow) panel.scrollTop = panel.scrollHeight;
+    return el;
+  }
+  transcript.appendChild(el);
   scrollDown(true);
   return el;
 }
@@ -78,6 +86,7 @@ function renderSettings() {
   }
   $('torEnabled').checked = Boolean(settings.config.torEnabled);
   $('subagentsEnabled').checked = settings.config.subagentsEnabled !== false;
+  form.elements.maxParallelAgents.disabled = settings.config.parallelAgents === false; // (one at a time)
   if (Boolean(torTimer) !== Boolean(settings.config.torEnabled)) scheduleTorStatus();
   const recent = $('recent');
   if (recent) {
@@ -230,6 +239,38 @@ function renderPlan(tasks = []) {
 }
 $('planPanel').querySelector('.plan-head').onclick = () => $('planPanel').classList.toggle('collapsed');
 
+// ---------- a sub-agent's work, in the side panel ----------
+const agentViews = new Map(); // sub-agent action id -> its view (task, log, report)
+let panelAgent = null;
+
+function renderAgentPanelHead() {
+  const card = cards.get(panelAgent);
+  $('agentPanelTitle').textContent = card?.querySelector('.summary').textContent || '';
+  $('agentPanelInfo').textContent = card ? (card.classList.contains('running') ? 'en cours' : card.classList.contains('ok') ? 'terminé' : 'échec') : '';
+  document.querySelectorAll('.card.subagent.shown').forEach((c) => c.classList.remove('shown'));
+  card?.classList.add('shown');
+}
+
+function openAgentPanel(id) {
+  const view = agentViews.get(id);
+  if (!view) return;
+  closeViewer(); // (one side panel at a time)
+  panelAgent = id;
+  const body = $('agentPanelBody');
+  body.replaceChildren(view);
+  $('agentPanel').classList.remove('hidden');
+  renderAgentPanelHead();
+  body.scrollTop = body.scrollHeight; // at the end: what it is doing now
+}
+
+function closeAgentPanel() {
+  panelAgent = null;
+  $('agentPanel').classList.add('hidden');
+  $('agentPanelBody').replaceChildren();
+  document.querySelectorAll('.card.subagent.shown').forEach((c) => c.classList.remove('shown'));
+}
+$('agentPanelClose').onclick = closeAgentPanel;
+
 // ---------- the conversation's memory (notes kept with <remember>) ----------
 let memoryNotes = [];
 function renderMemory(notes = memoryNotes) {
@@ -264,6 +305,8 @@ $('memoryForm').onsubmit = (e) => {
 };
 
 function clearTranscript() {
+  closeAgentPanel();
+  agentViews.clear();
   renderMemory([]);
   renderPlan([]);
   transcript.innerHTML = '';
@@ -376,6 +419,8 @@ async function resumeFromAction(id) {
 }
 
 function replayTranscript(events) {
+  const shownAgent = panelAgent;
+  agentViews.clear();
   renderPlan([]); // the last plan event of the conversation shows it again
   renderMemory([]); // (same for the memory)
   transcript.innerHTML = '';
@@ -388,6 +433,9 @@ function replayTranscript(events) {
     replaying = false;
   }
   transcript.scrollTop = transcript.scrollHeight;
+  // The side panel showed a sub-agent: shown again from the redrawn conversation, or closed.
+  if (shownAgent && agentViews.has(shownAgent)) openAgentPanel(shownAgent);
+  else closeAgentPanel();
 }
 
 // ---------- sending ----------
@@ -644,15 +692,17 @@ function drawStreaming() {
 }
 
 function onEvent(ev) {
-  // A sub-agent's events are drawn inside its card, with the same rendering.
+  // A sub-agent's events are drawn in its view (shown in the side panel), with the same rendering;
+  // its card in the conversation shows its latest activity.
   if (ev.agentId) {
     const card = cards.get(ev.agentId);
-    const log = card?.querySelector('.sub-log');
-    if (!log || ev.type === 'final' || ev.type === 'plan' || ev.type === 'memory') return; // (a sub-agent's own plan/memory are not shown)
+    const log = agentViews.get(ev.agentId)?.querySelector('.sub-log');
+    if (!card || !log || ev.type === 'final' || ev.type === 'plan' || ev.type === 'memory') return; // (a sub-agent's own plan/memory are not shown)
     if (ev.type === 'delta') {
       card.dataset.tokens = Number(card.dataset.tokens || 0) + 1;
       card.querySelector('.sub-tokens').textContent = `${card.dataset.tokens} tokens`;
     }
+    if (ev.type === 'action_start') card.querySelector('.sub-line').textContent = `${TOOL_LABEL[ev.tool] || ev.tool} · ${summarize(ev.tool, ev.args)}`;
     const saved = target;
     target = log;
     try {
@@ -726,14 +776,17 @@ function onEvent(ev) {
     }
     case 'action_start': {
       if (ev.tool === 'agent') {
-        // Sub-agent card: its task, a live log of its work, then its report.
-        const card = div('card subagent running open');
-        card.innerHTML = `<div class="card-head"><span class="status"><span class="spin">◌</span></span><span class="tool">Sous-agent</span><span class="summary"></span><span class="tag sub-tokens"></span></div>
-          <div class="card-body"><details class="sub-task"><summary>Tâche</summary><pre></pre></details>
-          <details class="sub-journal" open><summary>Journal</summary><div class="sub-log"></div></details><div class="sub-report"></div></div>`;
+        // Sub-agent card: compact (its latest activity, then the start of its report); a click shows
+        // its whole work in the side panel (its task, a live log, its report).
+        const card = div('card subagent running');
+        card.innerHTML = `<div class="card-head"><span class="status"><span class="spin">◌</span></span><span class="tool">Sous-agent</span><span class="summary"></span><span class="tag sub-tokens"></span><span class="sub-open">›</span></div><div class="sub-line">démarre…</div>`;
         card.querySelector('.summary').textContent = ev.args.title || 'sous-agent';
-        card.querySelector('.sub-task pre').textContent = ev.args.task || '';
-        card.querySelector('.card-head').onclick = () => card.classList.toggle('open');
+        card.title = 'Voir son travail dans le panneau de droite';
+        const view = div('agent-view');
+        view.innerHTML = '<details class="sub-task"><summary>Tâche</summary><pre></pre></details><div class="sub-log"></div><div class="sub-report"></div>';
+        view.querySelector('.sub-task pre').textContent = ev.args.task || '';
+        agentViews.set(ev.id, view);
+        card.onclick = () => openAgentPanel(ev.id);
         card.dataset.tool = 'agent';
         addResumeButton(card, ev);
         cards.set(ev.id, card);
@@ -776,12 +829,16 @@ function onEvent(ev) {
       card.querySelector('.status').textContent = ev.ok ? '✓' : '✗';
       card.querySelector('.approval')?.remove();
       if (card.dataset.tool === 'agent') {
-        // Keep the log (folded), show the report and the figures.
-        card.querySelector('.sub-journal').open = false;
-        card.querySelector('.sub-report').innerHTML = markdown(ev.output || '');
+        // The report in its view; its first line on the card; the figures.
+        const view = agentViews.get(ev.id);
+        // (the report is usually its last message, already in the log: not shown twice)
+        const last = view && [...view.querySelectorAll('.sub-log > .msg.assistant .bubble')].pop()?.textContent.trim();
+        if (view && (ev.output || '').trim() && last !== (ev.output || '').trim()) view.querySelector('.sub-report').innerHTML = markdown(ev.output || '');
+        card.querySelector('.sub-line').textContent = (ev.output || '').replace(/\s+/g, ' ').trim().slice(0, 160) || (ev.ok ? 'terminé' : 'échec');
         const m = ev.meta || {};
         const parts = [m.ms ? fmtDuration(m.ms) : '', m.steps ? `${m.steps} étapes` : ''].filter(Boolean);
         if (parts.length) card.querySelector('.sub-tokens').textContent = parts.join(' · ');
+        if (panelAgent === ev.id) renderAgentPanelHead();
         break;
       }
       const body = card.querySelector('.card-body');
@@ -885,6 +942,8 @@ function onEvent(ev) {
 function onApproval(req) {
   const card = cards.get(req.id);
   if (!card) return;
+  // A sub-agent's command: its view is shown, or the question would go unseen.
+  for (const [id, view] of agentViews) if (view.contains(card) && panelAgent !== id) openAgentPanel(id);
   card.classList.add('open');
   const bar = div('approval');
   bar.innerHTML = '<span></span><button class="no">Refuser</button><button class="always">Toujours autoriser</button><button class="yes">Exécuter</button>';
@@ -1248,6 +1307,7 @@ async function openFile(rel, { keepScroll = false } = {}) {
     f = { path: rel, kind: 'error', message: e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '') };
   }
   openPath = f.path;
+  if (panelAgent) closeAgentPanel(); // (one side panel at a time)
   $('viewer').classList.remove('hidden');
   $('viewerPath').textContent = f.path;
   $('viewerPath').title = f.path;

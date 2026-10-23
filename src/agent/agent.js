@@ -33,6 +33,7 @@ export const DEFAULT_CONFIG = {
   torShell: false, // also give terminal commands the proxy variables
   subagentsEnabled: true, // the agent may delegate tasks to sub-agents (<agent>)
   maxParallelAgents: 2, // sub-agents running at the same time (one GPU: speed is shared)
+  parallelAgents: true, // false: sub-agents one at a time (on weak machines, parallel generations slow down a lot)
   testCommand: '',
   searxngUrl: '',
 };
@@ -201,6 +202,7 @@ export class Agent extends EventEmitter {
       shell: this.config.shellEnabled !== false,
       web: this.config.webEnabled !== false,
       subagents: this.config.subagentsEnabled !== false,
+      parallel: this.config.parallelAgents !== false,
       subagentRole: this.role === 'sub',
     });
   }
@@ -511,7 +513,7 @@ export class Agent extends EventEmitter {
    * returns their reports as results (in the order of the tags).
    */
   async runSubAgents(group, signal, ids = group.map(() => nextId++)) {
-    const limit = Math.max(1, Math.min(Number(this.config.maxParallelAgents) || 2, 8));
+    const limit = this.config.parallelAgents === false ? 1 : Math.max(1, Math.min(Number(this.config.maxParallelAgents) || 2, 8));
     const results = new Array(group.length);
     let next = 0;
     const share = Math.floor(this.maxResultChars / group.length);
@@ -602,7 +604,9 @@ export class Agent extends EventEmitter {
     }
     const reports = [];
     let failed = false;
-    for (let group = nextGroup(plan); group.length && !failed; group = nextGroup(plan)) {
+    // (sub-agents one at a time: @parallel tasks too, so that only the one running shows as such)
+    const next = () => (this.config.parallelAgents === false ? nextGroup(plan).slice(0, 1) : nextGroup(plan));
+    for (let group = next(); group.length && !failed; group = next()) {
       for (const t of group) setStatus(plan, t, 'running');
       this.emit('event', { type: 'plan', tasks: plan.tasks });
       const ids = group.map(() => nextId++);
