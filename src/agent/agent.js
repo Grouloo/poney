@@ -7,6 +7,7 @@ import { TOOLS, buildSystemPrompt, parseActions, splitThinking, formatResult, is
 import { executeAction, runShell, truncateMiddle } from './tools.js';
 import { remember, forget, memoryBlock, standingInstructions, instructionNote, replacedAutoNote } from './memory.js';
 import { recall, autoRecall, recalledBlock, keywordsOf } from './history.js';
+import { linksToRead, readLinks } from './autofetch.js';
 import { parsePlan, mergePlan, nextGroup, setStatus, formatPlan, subAgentTask } from './plan.js';
 import {
   summaryTokens, summaryWords, mechanicalSummary, DEFAULT_CHARS_PER_TOKEN,
@@ -28,6 +29,7 @@ export const DEFAULT_CONFIG = {
   approval: 'ask', // 'ask' | 'auto'
   shellEnabled: true, // the agent may run terminal commands
   webEnabled: true, // the agent may search the web and fetch pages
+  autoFetch: true, // the links of the user's messages are read before the model answers
   torEnabled: false, // web requests go through Tor (refused if Tor is unreachable)
   torProxy: '', // empty: auto (127.0.0.1:9050 tor daemon, then 9150 Tor Browser)
   torShell: false, // also give terminal commands the proxy variables
@@ -920,6 +922,17 @@ export class Agent extends EventEmitter {
         if (passages.length) {
           content += `\n\n${recalledBlock(passages)}`;
           this.emit('event', { type: 'recalled', turnId, passages });
+        }
+      }
+      // Links of the message read by the app (marked as page content), so that the model
+      // does not answer from memory about a page it never opened.
+      if (this.role === 'main' && config.webEnabled !== false && config.autoFetch !== false) {
+        const urls = linksToRead(userText);
+        if (urls.length) {
+          this.emit('event', { type: 'fetching', urls }); // (shown while it lasts, not kept)
+          const { pages, block } = await readLinks(urls, { cwd: this.cwd, config, signal, maxChars: Math.min(4800, Math.floor(this.maxResultChars / urls.length)) });
+          content += `\n\n${block}`;
+          this.emit('event', { type: 'fetched', turnId, pages });
         }
       }
       this.messages.push({ role: 'user', content });

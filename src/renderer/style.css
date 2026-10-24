@@ -452,3 +452,4 @@ body.running .resume-btn { display: none; }
 .list li.busy .state { border: 2px solid var(--accent); border-right-color: transparent; animation: spin 0.9s linear infinite; width: 6px; height: 6px; }
 .list li.waiting .state { background: #e3a008; }
 .list li.unread .state { background: var(--accent); }
+.msg.user .fetched { margin: 4px 0 0 15%; font-size: 12px; color: var(--muted); white-space: pre-line; }

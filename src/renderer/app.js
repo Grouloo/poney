@@ -871,6 +871,21 @@ function onEvent(ev) {
     case 'memory':
       renderMemory(ev.notes);
       break;
+    case 'fetching':
+      if (!replaying) $('status').textContent = `Lecture de ${ev.urls.length > 1 ? 'des liens' : 'la page'} du message…`;
+      break;
+    case 'fetched': {
+      // Links of the user message, read by the app before the model answers.
+      const msg = [...(target || transcript).querySelectorAll('.msg.user')].pop();
+      if (!msg) break;
+      const d = div('fetched');
+      const host = (u) => { try { const x = new URL(u); return `${x.hostname}${x.pathname === '/' ? '' : x.pathname}`.slice(0, 70); } catch { return u; } };
+      d.textContent = ev.pages.map((p) => (p.ok
+        ? `🌐 page lue pour l’agent : ${host(p.url)} (${fmtNum(p.chars)} caractères)`
+        : `⚠ page non lue : ${host(p.url)} (${p.error})`)).join('\n');
+      msg.appendChild(d);
+      break;
+    }
     case 'noted': {
       // Lasting instructions of the user message, noted in the memory by the app.
       const msg = [...(target || transcript).querySelectorAll('.msg.user')].pop();

@@ -147,6 +147,11 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   summary is carried over, not dropped. The replaced history is always archived.
 - **`<recall>keywords</recall>`**: searches the part of the conversation no longer in view (the archives) and brings
   back excerpts of the matching messages, in order (accents ignored, quoted phrases kept whole).
+- **Links read automatically**: public web pages linked in a user message (2 at most, not localhost nor the local
+  network, not files to download, not in code or quotes) are read by the app before the model answers, within 15 s,
+  through Tor when it is on, only when Web is on. Given at the end of the message as page content, marked as not
+  being the user's instructions, the beginning of each page only (~1,500 tokens). A line under the message says
+  what was read. Can be switched off in the settings.
 - **Automatic recall**: with each user message, the app searches the out-of-context history with the message's words
   (rare words weigh more, word roots match, words still in view count for nothing) and, when an earlier passage
   clearly matches, attaches the 1 or 2 best excerpts to the message (~300 tokens at most), marked "maybe relevant".
