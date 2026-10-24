@@ -110,8 +110,10 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
 - **Conversations outside any project** (the "Hors projet" group): same tools, but the agent works in a folder of
   the conversation's own (`~/Library/Application Support/poney/off-project/<id>/`), shown in the file browser.
   Deleting one deletes its folder; a new one abandoned before its first message leaves nothing behind.
-- **Markdown answers**: tables (GitHub style, with alignment) and LaTeX formulas rendered by KaTeX
-  (`$…$`, `\(…\)` inline; `$$…$$`, `\[…\]` as blocks). Prices like "$5 and $10" stay text.
+- **Markdown answers**: full GitHub Markdown (the same engine as the document viewer): italics, bold, quotes (`>`),
+  numbered and nested lists, headings, links (opened in the browser), tables (GitHub style, with alignment), code;
+  a single line break is kept. LaTeX formulas rendered by KaTeX (`$…$`, `\(…\)` inline; `$$…$$`, `\[…\]` as
+  blocks); prices like "$5 and $10" stay text. Raw HTML in an answer is shown as text.
 - **File browser** that updates when the agent writes, and reveals the modified file.
 - **Web / Terminal switches** under the input box (`--no-web` / `--no-shell` in the CLI): a disabled tool
   disappears from the system prompt (shorter prompt) and is refused if the model uses it anyway.

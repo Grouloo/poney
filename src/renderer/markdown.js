@@ -1,6 +1,9 @@
-// Small Markdown renderer for the agent's answers: code, inline code, bold,
-// headings, lists, tables (GitHub style) and LaTeX math (KaTeX).
+// Markdown of the agent's answers and of documents: GitHub Markdown (marked:
+// emphasis, quotes, numbered and nested lists, tables, links…) plus LaTeX
+// formulas (KaTeX). In answers, raw HTML is shown as text (the model's words,
+// not a page); documents keep theirs, sanitized by the viewer (DOMPurify).
 import katex from '../../node_modules/katex/dist/katex.mjs';
+import { Marked } from '../../node_modules/marked/lib/marked.esm.js';
 
 export const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -12,56 +15,36 @@ export function tex(src, displayMode) {
   }
 }
 
-const splitRow = (line) => {
-  let t = line.trim();
-  if (t.startsWith('|')) t = t.slice(1);
-  if (t.endsWith('|') && !t.endsWith('\\|')) t = t.slice(0, -1);
-  return t.split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, '|'));
-};
-const isSeparator = (line) => /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/.test(line) && line.includes('|');
-const isRow = (line) => /\|/.test(line);
+// Answers: a single line break is a line break (models write that way).
+const answers = new Marked({ gfm: true, breaks: true });
+const documents = new Marked({ gfm: true, breaks: false });
 
-/** GitHub tables: a header row, a separator row (`|---|:--:|`), then rows. */
-function tables(s) {
-  const lines = s.split('\n');
-  const out = [];
-  for (let i = 0; i < lines.length; i++) {
-    if (isRow(lines[i]) && i + 1 < lines.length && isSeparator(lines[i + 1])) {
-      const head = splitRow(lines[i]);
-      const align = splitRow(lines[i + 1]).map((c) => (/^:-+:$/.test(c) ? 'center' : /-:$/.test(c) ? 'right' : /^:-/.test(c) ? 'left' : ''));
-      const style = (k) => (align[k] ? ` style="text-align:${align[k]}"` : '');
-      const body = [];
-      i += 2;
-      while (i < lines.length && isRow(lines[i]) && lines[i].trim()) body.push(splitRow(lines[i++]));
-      i--;
-      const tr = (cells, tag) => `<tr>${head.map((_, k) => `<${tag}${style(k)}>${cells[k] ?? ''}</${tag}>`).join('')}</tr>`;
-      out.push('', `<div class="table-wrap"><table><thead>${tr(head, 'th')}</thead><tbody>${body.map((r) => tr(r, 'td')).join('')}</tbody></table></div>`, '');
-    } else out.push(lines[i]);
-  }
-  return out.join('\n');
+/** Markdown with formulas: code is kept out of the math (a "$" in code is not math). */
+export function renderMarkdown(src, { forAnswer = true } = {}) {
+  const code = [];
+  const math = [];
+  const keepCode = (m) => `\u0000C${code.push(m) - 1}\u0000`;
+  const keepMath = (html) => `MATHPH${math.push(html) - 1}X`;
+  const s = String(src ?? '')
+    .replace(/^(```|~~~)[^\n]*\n[\s\S]*?(?:^\1[^\n]*$|(?![\s\S]))/gm, keepCode)
+    .replace(/`[^`\n]+`/g, keepCode)
+    // (a span shown as a block: a formula may sit inside a quote or a list item)
+    .replace(/\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]/g, (_, a, b) => keepMath(`<span class="math">${tex(a ?? b, true)}</span>`))
+    .replace(/\\\(([\s\S]+?)\\\)/g, (_, m) => keepMath(tex(m, false)))
+    // Inline $…$: no space just inside the dollars, no digit right after (so "$5 and $10" stays text).
+    .replace(/(^|[^\\$\w])\$(?=\S)([^$\n]*?\S)\$(?![\d$])/g, (_, pre, m) => pre + keepMath(tex(m, false)))
+    // In an answer, no raw HTML at all (outside code): "<div>" is text, and never opens an HTML block.
+    .replace(/</g, (lt) => (forAnswer ? '&lt;' : lt))
+    .replace(/\u0000C(\d+)\u0000/g, (_, i) => code[+i]);
+  const html = (forAnswer ? answers : documents).parse(s);
+  return html
+    .replace(/<p>MATHPH(\d+)X<\/p>/g, (_, i) => math[+i]) // a formula alone (block)
+    .replace(/MATHPH(\d+)X/g, (_, i) => math[+i]);
 }
 
+/** An answer of the agent: tables in a scrolling frame (wide tables do not stretch the column). */
 export function markdown(src) {
-  const blocks = [];
-  const keep = (html) => `\u0000${blocks.push(html) - 1}\u0000`;
-  // Kept out of the Markdown pass: code first (its `$` and `|` are literal), then math.
-  let s = String(src)
-    .replace(/```[\w.+-]*\n?([\s\S]*?)(```|$)/g, (_, code) => keep(`<pre><code>${esc(code.replace(/\n$/, ''))}</code></pre>`))
-    .replace(/`([^`\n]+)`/g, (_, code) => keep(`<code>${esc(code)}</code>`))
-    .replace(/\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]/g, (_, a, b) => `\n\n${keep(`<div class="math">${tex(a ?? b, true)}</div>`)}\n\n`)
-    .replace(/\\\(([\s\S]+?)\\\)/g, (_, m) => keep(tex(m, false)))
-    // Inline $…$: no space just inside the dollars, no digit right after (so "$5 and $10" stays text).
-    .replace(/(^|[^\\$\w])\$(?=\S)([^$\n]*?\S)\$(?![\d$])/g, (_, pre, m) => pre + keep(tex(m, false)));
-  s = tables(esc(s))
-    .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/^#{1,6} (.*)$/gm, '<h3>$1</h3>')
-    .replace(/(?:^|\n)((?:[-*] .*(?:\n|$))+)/g, (_, list) =>
-      `\n<ul>${list.trim().split('\n').map((l) => `<li>${l.replace(/^[-*] /, '')}</li>`).join('')}</ul>\n`);
-  const html = s.split(/\n{2,}/).map((p) => {
-    const t = p.trim();
-    if (!t) return '';
-    if (/^(<ul>|<h3>|<div class="table-wrap">|\u0000\d+\u0000$)/.test(t)) return t;
-    return `<p>${t.replace(/\n/g, '<br>')}</p>`;
-  }).join('');
-  return html.replace(/\u0000(\d+)\u0000/g, (_, i) => blocks[+i]);
+  return renderMarkdown(src, { forAnswer: true })
+    .replace(/<table>/g, '<div class="table-wrap"><table>')
+    .replace(/<\/table>/g, '</table></div>');
 }

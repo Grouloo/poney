@@ -2,22 +2,29 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { markdown } from '../src/renderer/markdown.js';
 
-test('markdown: GitHub tables with alignment and inline formatting', () => {
-  const html = markdown('Résultats :\n\n| Nom | Score |\n|:-|---:|\n| **a** | `1|2` |\n| b | 3 |\n\nFin.');
-  assert.match(html, /<table><thead><tr><th style="text-align:left">Nom<\/th><th style="text-align:right">Score<\/th><\/tr><\/thead>/);
-  assert.match(html, /<td style="text-align:left"><strong>a<\/strong><\/td><td style="text-align:right"><code>1\|2<\/code><\/td>/);
-  assert.match(html, /<td style="text-align:left">b<\/td>/);
-  assert.match(html, /<p>Fin\.<\/p>$/);
+test('markdown: GitHub tables with alignment and inline formatting, in a scrolling frame', () => {
+  const html = markdown('Résultats :\n\n| Nom | Score |\n|:-|---:|\n| **a** | `1\\|2` |\n| b | 3 |\n\nFin.');
+  assert.match(html, /<div class="table-wrap"><table>\n<thead>\n<tr>\n<th align="left">Nom<\/th>\n<th align="right">Score<\/th>/);
+  assert.match(html, /<td align="left"><strong>a<\/strong><\/td>\n<td align="right"><code>1\|2<\/code><\/td>/);
+  assert.match(html, /<\/table><\/div>\n<p>Fin\.<\/p>/);
 });
 
 test('markdown: a pipe without separator row is not a table', () => {
   assert.doesNotMatch(markdown('a | b\nc | d'), /<table>/);
 });
 
+test('markdown: italics, quotes, numbered and nested lists, line breaks, links', () => {
+  const html = markdown('Un *italique* et _aussi_, du **gras**.\n\n> une citation\n> sur deux lignes\n\n1. premier\n2. second\n   - imbriqué\n3. troisième\n\nLigne une\nligne deux, [lien](https://ex.org)');
+  assert.match(html, /<em>italique<\/em> et <em>aussi<\/em>, du <strong>gras<\/strong>/);
+  assert.match(html, /<blockquote>\n<p>une citation<br>sur deux lignes<\/p>\n<\/blockquote>/);
+  assert.match(html, /<ol>\n<li>premier<\/li>\n<li>second<ul>\n<li>imbriqué<\/li>\n<\/ul>\n<\/li>\n<li>troisième<\/li>\n<\/ol>/);
+  assert.match(html, /<p>Ligne une<br>ligne deux, <a href="https:\/\/ex\.org">lien<\/a><\/p>/);
+});
+
 test('markdown: inline and display LaTeX', () => {
   const html = markdown('Soit $E = mc^2$ et \\(x_1\\).\n\n$$\\int_0^1 x\\,dx = \\frac12$$');
   assert.equal((html.match(/class="katex"/g) || []).length, 3);
-  assert.match(html, /<div class="math"><span class="katex-display">/);
+  assert.match(html, /<span class="math"><span class="katex-display">/);
   assert.doesNotMatch(html, /\$/);
 });
 
@@ -27,10 +34,12 @@ test('markdown: prices and code are not math', () => {
   assert.match(html, /<code>echo \$HOME \$PATH<\/code>/);
 });
 
-test('markdown: an unclosed formula while streaming stays text, bad LaTeX does not throw', () => {
+test('markdown: no raw HTML in an answer; an unclosed formula stays text; bad LaTeX does not throw', () => {
   assert.doesNotMatch(markdown('On a $$x^2'), /katex/);
   assert.match(markdown('$\\frac{$'), /./);
-  assert.match(markdown('<script>alert(1)</script>'), /&lt;script&gt;/);
+  const html = markdown('<script>alert(1)</script> puis `<b>x</b>` et **gras**');
+  assert.match(html, /^<p>&lt;script&gt;alert\(1\)&lt;\/script&gt; puis <code>&lt;b&gt;x&lt;\/b&gt;<\/code> et <strong>gras<\/strong><\/p>/);
+  assert.doesNotMatch(html, /<script|<b>/);
 });
 
 test('documents: full Markdown with formulas; "$" in code stays code', async () => {

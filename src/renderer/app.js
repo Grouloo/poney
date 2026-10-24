@@ -497,6 +497,16 @@ function autosize() {
 }
 input.addEventListener('input', autosize);
 
+// Links in the answers: web pages in the browser, never in this window.
+for (const area of [transcript, $('agentPanelBody')]) {
+  area.addEventListener('click', (e) => {
+    const a = e.target.closest('.bubble a[href]');
+    if (!a) return;
+    e.preventDefault();
+    if (/^(https?:|mailto:)/i.test(a.getAttribute('href'))) window.open(a.getAttribute('href'));
+  });
+}
+
 // ---------- quote a passage of the conversation (select it, then "Citer") ----------
 const quoteBtn = document.createElement('button');
 quoteBtn.className = 'quote-btn hidden';
