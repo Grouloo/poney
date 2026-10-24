@@ -35,6 +35,12 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
 - **Lenient editing**: `<old>` may have the wrong indentation (re-indented automatically),
   and on failure the agent gets the closest lines of the file.
 - **Syntax check** after every write (.py, .js, .json).
+- **`<old>` checked while it is written**: as soon as an edit's `<old>` block is closed, it is looked for in the file
+  (as the edit would); not found or found several times, the generation stops there and the model gets the error
+  at once, instead of writing its whole `<new>` first. Tags and Gemma's native calls alike.
+- **Follow a write or an edit live**: while the model writes a file, a card in its answer opens a panel on the right
+  with the content growing; for an edit, the file with the block to replace struck out once found, and the new text
+  under it as it is written.
 - **Guard against rewrites from memory**: `<write>` on an existing file is refused if its content is not
   visible in the history (read with `<read>` or written by the model, and not removed by a compaction).
   A large shrink of a file (more than half of its lines) triggers a warning.

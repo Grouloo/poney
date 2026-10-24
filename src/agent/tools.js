@@ -245,6 +245,38 @@ function locate(content, oldText) {
   return { error: 'notfound' };
 }
 
+/**
+ * Checks an <old> block while the model is still writing its edit: found once
+ * (exactly, or with another indentation), it gives the lines it covers; otherwise
+ * the same error the edit would give, so the generation can stop right there.
+ */
+export async function checkOldBlock(cwd, filePath, oldText) {
+  let abs;
+  let rel;
+  try { ({ abs, rel } = resolveInside(cwd, filePath)); } catch (e) { return { ok: false, message: e.message }; }
+  let content;
+  try { content = await fs.readFile(abs, 'utf8'); } catch {
+    return { ok: false, message: `File "${rel}" does not exist. Use <write> to create it.` };
+  }
+  content = content.replace(/\r\n/g, '\n');
+  const pair = parseEditBody(`<old>${oldText}</old><new></new>`)[0];
+  if (!pair || !pair.old.trim()) return { ok: false, message: 'Empty <old>. To add code, put the existing neighbouring lines in <old> and repeat them in <new> with your additions.' };
+  const loc = locate(content, pair.old);
+  if (loc.error === 'multiple') return { ok: false, message: `The <old> text appears several times in ${rel}. Include more surrounding lines so it is unique.` };
+  if (loc.error) {
+    const snip = closestSnippet(content, pair.old);
+    return {
+      ok: false,
+      message: `The <old> text was not found in ${rel}. It must match the file exactly.` +
+        (snip ? `\nClosest lines in the file:\n${snip}` : `\nRead the file first with <read path="${rel}" />.`) +
+        '\nTip: for a small file, rewrite it entirely with <write>.',
+    };
+  }
+  const startLine = content.slice(0, loc.start).split('\n').length;
+  const endLine = startLine + content.slice(loc.start, loc.end).replace(/\n$/, '').split('\n').length - 1;
+  return { ok: true, rel, startLine, endLine };
+}
+
 function closestSnippet(content, oldText) {
   const lines = content.split('\n');
   const want = new Set(oldText.split('\n').map((l) => l.trim()).filter((l) => l.length > 3));

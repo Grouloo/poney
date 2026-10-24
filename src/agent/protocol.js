@@ -720,3 +720,54 @@ export function formatResult(tool, attrs, output) {
     .join('');
   return `<result tool="${tool}"${a}>\n${output}\n</result>`;
 }
+
+// ---------- the action being written (while the answer streams) ----------
+
+/**
+ * The <old>/<new> pairs of an edit body still being written: each old with
+ * whether it is closed yet, and its new text so far.
+ */
+export function partialEditPairs(body) {
+  const pairs = [];
+  const re = /<old>([\s\S]*?)(<\/old>|$)(?:\s*<new>([\s\S]*?)(<\/new>|$))?/g;
+  for (const m of String(body ?? '').matchAll(re)) {
+    if (!m[0]) break;
+    pairs.push({ old: m[1], oldClosed: Boolean(m[2]), new: m[3] ?? '', newOpen: m[3] !== undefined, newClosed: Boolean(m[4]) });
+  }
+  return pairs;
+}
+
+const NATIVE_KEYS = { path: ['path', 'file', 'filename'], content: ['content', 'text', 'code'], old: ['old', 'old_text', 'search'], new: ['new', 'new_text', 'replace'] };
+
+/**
+ * The write or edit being written at the end of a streamed answer, ours or a
+ * Gemma native call still open: { tool, path, content | body, start, complete }
+ * (start: its position in the answer). Null when the answer ends otherwise.
+ */
+export function liveAction(text) {
+  const t = String(text ?? '');
+  const open = t.lastIndexOf('<|tool_call>');
+  if (open >= 0 && !t.slice(open).includes('<tool_call|>')) {
+    const m = t.slice(open).match(/^<\|tool_call>\s*call:\s*([a-z_]+)\s*\{?([\s\S]*)$/i);
+    if (!m) return null;
+    const tool = ALIASES[m[1]] || m[1];
+    if (tool !== 'write' && tool !== 'edit') return null;
+    const get = (names) => {
+      for (const k of names) {
+        const v = m[2].match(new RegExp(`(?:^|[,{\\s])${k}\\s*:\\s*(?:<\\|"\\|>([\\s\\S]*?)(<\\|"\\|>|$)|"((?:[^"\\\\]|\\\\.)*)("|$))`));
+        if (v) return { value: (v[1] ?? v[3] ?? '').replace(/\\n/g, v[3] !== undefined ? '\n' : '\\n'), closed: Boolean(v[2] || v[4]) };
+      }
+      return null;
+    };
+    const path = get(NATIVE_KEYS.path)?.value ?? '';
+    if (tool === 'write') return { tool, path, content: get(NATIVE_KEYS.content)?.value ?? '', start: open, complete: false };
+    const o = get(NATIVE_KEYS.old);
+    const n = get(NATIVE_KEYS.new);
+    const body = o ? `<old>${o.value}${o.closed ? '</old>' : ''}${n ? `<new>${n.value}${n.closed ? '</new>' : ''}` : ''}` : '';
+    return { tool, path, body, start: open, complete: false };
+  }
+  const { actions } = parseActions(normalizeToolCalls(t), { final: false });
+  const last = actions[actions.length - 1];
+  if (!last || (last.tool !== 'write' && last.tool !== 'edit')) return null;
+  return { tool: last.tool, path: last.args.path || '', content: last.args.content, body: last.args.body, start: last.start, complete: last.complete };
+}

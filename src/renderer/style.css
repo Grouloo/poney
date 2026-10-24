@@ -453,3 +453,19 @@ body.running .resume-btn { display: none; }
 .list li.waiting .state { background: #e3a008; }
 .list li.unread .state { background: var(--accent); }
 .msg.user .fetched { margin: 4px 0 0 15%; font-size: 12px; color: var(--muted); white-space: pre-line; }
+
+/* a file being written or edited: card in the answer, followed in the side panel */
+.live-action { display: flex; align-items: center; gap: 6px; margin: 8px 0 2px; padding: 6px 10px; border: 1px solid var(--border); border-left: 3px solid var(--accent-2); border-radius: 8px; background: var(--panel); cursor: pointer; font-size: 13px; }
+.live-action:hover, .live-action.shown { border-color: var(--accent); }
+.live-action code { font-family: var(--mono); font-size: 12.5px; }
+.live-action .sub-open { margin-left: auto; color: var(--muted); }
+.live-panel-body { padding: 0; }
+.live-code { font: 12.5px/1.55 var(--mono); padding: 8px 0 24px; min-width: max-content; }
+.live-code .ln { display: flex; white-space: pre; }
+.live-code .no { width: 44px; flex: none; text-align: right; padding-right: 10px; color: var(--muted); user-select: none; }
+.live-code .tx { padding-right: 16px; }
+.live-code .old-block { background: rgba(248, 81, 73, 0.16); }
+.live-code .old-block .tx { text-decoration: line-through; text-decoration-color: rgba(248, 81, 73, 0.6); }
+.live-code .new-block .ln { background: rgba(63, 185, 80, 0.16); }
+.live-code .seeking { margin: 12px; padding: 8px 10px; border: 1px dashed var(--border); border-radius: 8px; }
+.live-code .seeking pre { margin: 4px 0 0; white-space: pre-wrap; }

@@ -1,4 +1,4 @@
-import { parseActions, splitThinking, normalizeToolCalls } from '../agent/protocol.js';
+import { parseActions, splitThinking, normalizeToolCalls, liveAction, partialEditPairs } from '../agent/protocol.js';
 import hljs from '../../node_modules/@highlightjs/cdn-assets/es/highlight.min.js';
 import { fmtNum, fmtDuration } from './format.js';
 import { markdown, esc } from './markdown.js';
@@ -255,6 +255,7 @@ function openAgentPanel(id) {
   const view = agentViews.get(id);
   if (!view) return;
   closeViewer(); // (one side panel at a time)
+  if (liveBubble) closeLivePanel();
   panelAgent = id;
   const body = $('agentPanelBody');
   body.replaceChildren(view);
@@ -305,6 +306,7 @@ $('memoryForm').onsubmit = (e) => {
 };
 
 function clearTranscript() {
+  closeLivePanel();
   closeAgentPanel();
   agentViews.clear();
   renderMemory([]);
@@ -419,6 +421,7 @@ async function resumeFromAction(id) {
 }
 
 function replayTranscript(events) {
+  closeLivePanel(); // (the answers are drawn again)
   const shownAgent = panelAgent;
   agentViews.clear();
   renderPlan([]); // the last plan event of the conversation shows it again
@@ -684,11 +687,100 @@ function drawStreaming() {
     }
     const { text, pending } = streamingDisplay(b.raw);
     const tool = b.toolPending && b.toolName ? ` (${esc(b.toolName)})` : '';
-    b.bubble.innerHTML = markdown(text) + (pending || b.toolPending ? `<p class="muted"><span class="spin">◌</span> prépare une action${tool}…</p>` : '');
+    // A file being written or edited: a card to follow it in the side panel.
+    b.live = liveAction(normalizeToolCalls(splitThinking(b.raw).text));
+    const live = b.live ? liveCard(b) : '';
+    b.bubble.innerHTML = markdown(text) + (live || (pending || b.toolPending ? `<p class="muted"><span class="spin">◌</span> prépare une action${tool}…</p>` : ''));
+    if (liveBubble === b) renderLivePanel();
   }
   dirty.clear();
   drawCost = performance.now() - t0;
   scrollDown();
+}
+
+// ---------- a file being written or edited, followed live in the side panel ----------
+let liveBubble = null;
+
+function liveCard(b) {
+  const a = b.live;
+  const lines = (s) => (s ? s.split('\n').length : 0);
+  let info;
+  if (a.tool === 'write') info = `${lines(a.content)} ligne${lines(a.content) > 1 ? 's' : ''}`;
+  else {
+    const pairs = partialEditPairs(a.body);
+    const found = pairs.map((_, k) => b.located[k]).filter(Boolean);
+    info = !pairs.length ? 'bloc à remplacer…' : found.length ? `bloc trouvé (l. ${found.map((f) => (f.startLine === f.endLine ? f.startLine : `${f.startLine}–${f.endLine}`)).join(', ')})` : 'recherche du bloc…';
+  }
+  const label = a.tool === 'write' ? 'Écriture' : 'Modification';
+  return `<div class="live-action${liveBubble === b ? ' shown' : ''}" title="Suivre dans le panneau de droite">${a.complete ? '✓' : '<span class="spin">◌</span>'} <b>${label}</b> <code>${esc(a.path || '…')}</code> <span class="muted">· ${esc(info)}</span><span class="sub-open">›</span></div>`;
+}
+
+async function openLivePanel(b) {
+  if (!b.live) return;
+  closeViewer();
+  closeAgentPanel();
+  liveBubble = b;
+  $('livePanelBody').dataset.scrolled = '';
+  $('livePanel').classList.remove('hidden');
+  // An edit: the file as it is, to show the block found and its replacement.
+  if (b.live.tool === 'edit' && b.live.path && b.liveFile?.path !== b.live.path) {
+    try {
+      const f = await window.api.readFile(b.live.path);
+      b.liveFile = { path: b.live.path, text: f.kind === 'text' ? f.content.replace(/\r\n/g, '\n') : null };
+    } catch { b.liveFile = { path: b.live.path, text: null }; }
+  }
+  renderLivePanel(true);
+  scheduleDraw(b);
+}
+
+function closeLivePanel() {
+  liveBubble = null;
+  $('livePanel').classList.add('hidden');
+  $('livePanelBody').replaceChildren();
+}
+$('livePanelClose').onclick = closeLivePanel;
+
+/** Draws the panel: the content being written, or the file with the block found and the new text. */
+function renderLivePanel(first = false) {
+  const b = liveBubble;
+  const a = b?.live;
+  if (!a) return;
+  const body = $('livePanelBody');
+  const atEnd = body.scrollHeight - body.scrollTop - body.clientHeight < 60;
+  $('livePanelTool').textContent = a.tool === 'write' ? 'Écriture' : 'Modification';
+  $('livePanelPath').textContent = a.path || '…';
+  $('livePanelInfo').textContent = b.ended ? 'terminé' : 'en cours';
+  const row = (n, text, cls = '') => `<div class="ln ${cls}"><span class="no">${n}</span><span class="tx">${esc(text) || ' '}</span></div>`;
+  let html;
+  if (a.tool === 'write') {
+    html = (a.content || '').split('\n').map((l, i) => row(i + 1, l)).join('');
+  } else {
+    const pairs = partialEditPairs(a.body);
+    const file = b.liveFile?.text;
+    if (file == null) {
+      html = `<div class="center">${b.liveFile ? 'Fichier illisible ou introuvable.' : 'Lecture du fichier…'}</div>`;
+    } else {
+      const lines = file.split('\n');
+      const marks = new Map(); // last line of a block -> its pair
+      pairs.forEach((p, k) => { const loc = b.located[k]; if (loc) marks.set(loc.endLine, { p, loc }); });
+      const inBlock = (n) => pairs.some((_, k) => b.located[k] && n >= b.located[k].startLine && n <= b.located[k].endLine);
+      html = lines.map((l, i) => {
+        const n = i + 1;
+        let out = row(n, l, inBlock(n) ? 'old-block' : '');
+        const m = marks.get(n);
+        if (m && m.p.newOpen) out += `<div class="new-block">${m.p.new.replace(/^\n/, '').replace(/\n$/, '').split('\n').map((x) => row('+', x, 'new')).join('')}</div>`;
+        return out;
+      }).join('');
+      // A block still being written or not found yet: shown under the file.
+      const waiting = pairs.filter((p, k) => !b.located[k]);
+      if (waiting.length) html += `<div class="seeking"><div class="muted">${b.ended ? 'Bloc non trouvé' : 'Bloc à remplacer, recherché dans le fichier'} :</div>${waiting.map((p) => `<pre>${esc(p.old)}</pre>`).join('')}</div>`;
+    }
+  }
+  body.innerHTML = `<div class="live-code">${html}</div>`;
+  const firstBlock = body.querySelector('.old-block');
+  if (first && firstBlock) firstBlock.scrollIntoView({ block: 'center' });
+  else if (a.tool === 'write' ? (first || atEnd) : false) body.scrollTop = body.scrollHeight;
+  else if (firstBlock && !body.dataset.scrolled) { firstBlock.scrollIntoView({ block: 'center' }); body.dataset.scrolled = '1'; }
 }
 
 function onEvent(ev) {
@@ -718,7 +810,18 @@ function onEvent(ev) {
       const bubble = div('bubble cursor');
       el.appendChild(bubble);
       add(el);
-      bubbles.set(ev.id, { el, bubble, raw: '', thinking: '', thinkingEl: null });
+      const b = { el, bubble, raw: '', thinking: '', thinkingEl: null, located: [] };
+      bubbles.set(ev.id, b);
+      bubble.addEventListener('click', (e) => { if (e.target.closest('.live-action')) openLivePanel(b); });
+      break;
+    }
+    case 'edit_located': {
+      // The <old> block of the edit being written was found: its lines, to show it.
+      const b = bubbles.get(ev.id);
+      if (!b) break;
+      b.located[ev.pair] = ev;
+      if (liveBubble === b) renderLivePanel();
+      scheduleDraw(b);
       break;
     }
     case 'delta': {
@@ -758,6 +861,7 @@ function onEvent(ev) {
       if (liveGen === b) liveGen = null;
       b.ended = true;
       dirty.delete(b);
+      if (liveBubble === b) renderLivePanel();
       b.bubble.classList.remove('cursor');
       const thinking = (b.thinking + (ev.thinking && !b.thinking ? ev.thinking : '')).trim();
       if (thinking && !b.thinkingEl) {
@@ -1323,6 +1427,7 @@ async function openFile(rel, { keepScroll = false } = {}) {
   }
   openPath = f.path;
   if (panelAgent) closeAgentPanel(); // (one side panel at a time)
+  if (liveBubble) closeLivePanel();
   $('viewer').classList.remove('hidden');
   $('viewerPath').textContent = f.path;
   $('viewerPath').title = f.path;

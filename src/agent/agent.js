@@ -3,8 +3,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { streamChat, complete, serverContextLength } from './llm.js';
-import { TOOLS, buildSystemPrompt, parseActions, splitThinking, formatResult, isToolEnabled, withReasoning, findRepetition, normalizeToolCalls, stripReasoning, legacyReasoningToNotes, stripChannelMarkers, toolSchemas } from './protocol.js';
-import { executeAction, runShell, truncateMiddle } from './tools.js';
+import { liveAction, partialEditPairs, TOOLS, buildSystemPrompt, parseActions, splitThinking, formatResult, isToolEnabled, withReasoning, findRepetition, normalizeToolCalls, stripReasoning, legacyReasoningToNotes, stripChannelMarkers, toolSchemas } from './protocol.js';
+import { executeAction, runShell, truncateMiddle, checkOldBlock } from './tools.js';
 import { remember, forget, memoryBlock, standingInstructions, instructionNote, replacedAutoNote } from './memory.js';
 import { recall, autoRecall, recalledBlock, keywordsOf } from './history.js';
 import { linksToRead, readLinks } from './autofetch.js';
@@ -684,6 +684,11 @@ export class Agent extends EventEmitter {
     const disarmStall = () => { clearTimeout(stallTimer); stallTimer = null; stallCall = null; };
     // A model looping on the same passage is stopped (checked every ~200 characters).
     let looped = false;
+    // The edit being written: each <old> is checked as soon as it is closed; a block not
+    // found (or ambiguous) stops the generation there, before the model writes its <new>.
+    const oldChecks = new Set();
+    let seenClosings = 0;
+    let earlyEdit = null;
     let reopens = 0; // reasoning channel reopened while reasoning (Gemma): a restart, often a loop
     let firstReopenAt = -1;
     let checkedThinking = 0;
@@ -775,6 +780,25 @@ export class Agent extends EventEmitter {
         // (<agent> excepted: several in a row form one group, run together.)
         const obs = actions.find((a) => a.complete && TOOLS[a.tool].observes && a.tool !== 'agent');
         if (obs) { cutAt = obs.end; break; }
+        // (a closing may be cut between two pieces: counted on the whole answer so far)
+        const closings = (visible.match(/<\/old>|<\|"\|>/g) || []).length;
+        if (closings !== seenClosings) {
+          seenClosings = closings;
+          const live = liveAction(visible);
+          // (only the first action of the answer: actions before it would not run if it stopped here)
+          if (live?.tool === 'edit' && live.path && !live.complete && !parseActions(visible.slice(0, live.start)).actions.length) {
+            const pairs = partialEditPairs(live.body);
+            for (const [k, pair] of pairs.entries()) {
+              const key = `${live.start}:${k}`;
+              if (!pair.oldClosed || oldChecks.has(key)) continue;
+              oldChecks.add(key);
+              const r = await checkOldBlock(this.cwd, live.path, pair.old);
+              if (r.ok) this.emit('event', { type: 'edit_located', id, pair: k, path: r.rel, startLine: r.startLine, endLine: r.endLine });
+              else { earlyEdit = { path: live.path, old: pair.old, message: r.message }; break; }
+            }
+            if (earlyEdit) { cutAt = live.start; break; }
+          }
+        }
         // After a <write>/<edit>, small models often go on narrating ("the tests
         // pass...") instead of waiting for the result: minutes of invented text
         // on local hardware. Stop once a long text follows the last action
@@ -830,7 +854,7 @@ export class Agent extends EventEmitter {
     // After a stall, the call ending the reasoning; at a normal end, only if the
     // model wrote no real answer (a call left at the end of a plan is not run).
     const noAction = !parseActions(visible).actions.length;
-    const endCall = noAction ? (stallCall || (visible.trim().length < 200 ? trailingCall(thinking) : null)) : null;
+    const endCall = noAction && !earlyEdit ? (stallCall || (visible.trim().length < 200 ? trailingCall(thinking) : null)) : null;
     if (endCall) {
       // The reasoning ended with a call and the answer has none (or nothing
       // came out after it): that call is what the model meant to do.
@@ -841,7 +865,7 @@ export class Agent extends EventEmitter {
         : 'Appel d’outil à la fin de la réflexion du modèle : il est exécuté.' });
     } else if (stalled) {
       this.emit('event', { type: 'notice', text: 'Plus rien ne sortait après l’action : génération arrêtée, l’action est exécutée.' });
-    } else if (!parseActions(visible).actions.length) {
+    } else if (!earlyEdit && !parseActions(visible).actions.length) {
       // Gemma sometimes makes its tool call inside its reasoning: if the answer has
       // no action, use the first complete native call found there.
       const at = thinking.indexOf('<|tool_call>');
@@ -860,7 +884,7 @@ export class Agent extends EventEmitter {
     const stats = generationStats({ t0, tFirst, tEnd: Date.now(), usage, est: this.est, text: text + thinking });
     if (narrationCut) this.emit('event', { type: 'notice', text: 'Le modèle continuait à écrire après son action au lieu d’attendre le résultat : génération arrêtée, l’action est exécutée.' });
     if (looped) this.emit('event', { type: 'notice', text: 'Le modèle répétait le même passage en boucle : génération arrêtée, la répétition est retirée.' });
-    return { id, text: visible, thinking, truncated, looped, contextLimited: truncated && !streamError && maxTokens < this.config.maxTokens, stats, invisible };
+    return { id, text: visible, thinking, truncated, looped, earlyEdit, contextLimited: truncated && !streamError && maxTokens < this.config.maxTokens, stats, invisible };
   }
 
   // ----- main loop -----
@@ -1018,6 +1042,19 @@ export class Agent extends EventEmitter {
         if (gen.truncated && !actions.length) {
           this.messages.push({ role: 'assistant', content: this.assistantContent(gen, gen.text.slice(0, unfinished?.start ?? gen.text.length).trim() || '(cut)') });
           this.messages.push({ role: 'user', content: cutNote });
+          continue;
+        }
+
+        // ---------- an edit whose <old> block failed while it was being written ----------
+        if (gen.earlyEdit) {
+          const { path: p, old, message } = gen.earlyEdit;
+          const attempt = `<edit path="${p}">\n<old>${old}</old>`;
+          this.messages.push({ role: 'assistant', content: this.assistantContent(gen, `${gen.text.trim()}\n${attempt}`.trim()) });
+          const actId = nextId++;
+          this.emit('event', { type: 'action_start', id: actId, tool: 'edit', args: { path: p, body: `<old>${old}</old>` } });
+          this.emit('event', { type: 'action_end', id: actId, ok: false, output: message, meta: { path: p } });
+          notice('Bloc <old> introuvable ou ambigu : génération arrêtée avant la fin de la modification.');
+          this.messages.push({ role: 'user', content: `${formatResult('edit', { path: p }, message)}\n(You were stopped as soon as this <old> block was written: the edit was not applied. Fix the <old> block, it must match the file exactly.)` });
           continue;
         }
 
