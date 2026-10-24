@@ -1,7 +1,7 @@
 // <recall>: search the part of the conversation that is no longer in the
 // context (replaced by compaction summaries, kept in the archives) and bring
 // back excerpts of the matching messages.
-import { stripReasoning } from './protocol.js';
+import { stripReasoning, parseActions } from './protocol.js';
 import { SUMMARY_MARKER } from './context.js';
 
 const fold = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
@@ -91,36 +91,58 @@ export function recall(archives, current, query, { maxChars = 3000, maxMessages 
 // ---------- automatic recall ----------
 
 /**
- * Passages of the out-of-context history that the user's new message clearly
- * refers to, attached to it so the model does not have to think of searching.
- * Words count by rarity (a word found in few archived messages weighs more), a
- * word still visible in the context counts for nothing (the information is in
- * view), and a passage already attached and still in view is not attached again.
- * Returns [{ n, role, excerpt }] (at most `max`), [] when nothing clearly matches.
+ * Passages of the out-of-context history that the user's new message refers to,
+ * attached to it so the model does not have to think of searching (small models
+ * rarely do, and make the rest up). The message's most distinctive words (the
+ * rarest in the whole conversation) are looked for; a passage counts when it has
+ * several of them, or one very rare one. A passage is skipped when the same words
+ * are together in a message still in view (the information is there), or when it
+ * was already attached. Returns [{ n, role, excerpt }] (at most `max`).
  */
-export function autoRecall(archives, current, userText, { max = 2, maxChars = 1000 } = {}) {
-  const pool = outOfContext(archives, current);
+const MIN_SHARE = 0.45;
+
+export function autoRecall(archives, current, userText, { max = 2, maxChars = 1000, distinctive = 8 } = {}) {
+  // What was said (the user's messages, the assistant's prose), not tool outputs: they
+  // are most of the archive and match almost anything. (<recall> searches everything.)
+  const pool = outOfContext(archives, current)
+    .filter((m) => !m.text.includes('<result'))
+    .map((m) => ({ ...m, text: m.role === 'assistant' ? parseActions(m.text).text : m.text.replace(/^\[[^\]]*\d{4}-\d\d-\d\d[^\]]*\]\s*/, '') }))
+    .filter((m) => m.text.trim().length >= 20);
   const terms = [...new Set(searchTerms(userText).map(stem))];
   if (!pool.length || !terms.length) return [];
-  const inView = fold(current.map((m) => m.content).join('\n'));
   const folded = pool.map((m) => fold(m.text));
-  const weight = new Map();
-  for (const t of terms) {
-    if (inView.includes(t)) continue;
-    const df = folded.filter((f) => f.includes(t)).length;
-    if (df) weight.set(t, Math.log((pool.length + 1) / df));
-  }
-  if (!weight.size) return [];
-  // One word found in very few archived messages, or several less rare ones.
-  const threshold = Math.max(1.5, 0.6 * Math.log(pool.length + 1));
-  const scored = pool
-    .map((m, i) => ({ m, score: [...weight].reduce((s, [t, w]) => s + (folded[i].includes(t) ? w : 0), 0) }))
-    .filter((x) => x.score >= threshold)
-    .sort((a, b) => b.score - a.score);
+  const view = current.map((m) => fold(m.content));
+  const N = pool.length + view.length;
+  // Rarity over the whole conversation (in view and out of it).
+  const rare = terms
+    .map((t) => {
+      const dfPool = folded.filter((f) => f.includes(t)).length;
+      const df = dfPool + view.filter((f) => f.includes(t)).length;
+      return { t, dfPool, df, idf: Math.log((N + 1) / (df + 1)) };
+    })
+    .filter((x) => x.dfPool > 0 && x.t.length >= 4)
+    .sort((a, b) => b.idf - a.idf)
+    .slice(0, distinctive);
+  if (!rare.length) return [];
+  const veryRare = (x) => x.df <= 2 && x.t.length >= 5;
+  const total = rare.reduce((s, x) => s + x.idf, 0);
+  const scored = [];
+  pool.forEach((m, i) => {
+    const hit = rare.filter((x) => folded[i].includes(x.t));
+    if (!(hit.length >= 2 || hit.some(veryRare))) return;
+    // Already in view: a visible message has these words together.
+    if (hit.length >= 2 && view.some((v) => hit.every((x) => v.includes(x.t)))) return;
+    const score = hit.reduce((s, x) => s + x.idf, 0);
+    // (a good share of the message's distinctive words, or a very rare one)
+    if (score < MIN_SHARE * total && !hit.some(veryRare)) return;
+    scored.push({ m, hit, score });
+  });
+  scored.sort((a, b) => b.score - a.score);
   const out = [];
   const radius = Math.floor(maxChars / max / 2) - 10;
-  for (const { m } of scored) {
-    const excerpt = excerpts(m.text, [...weight.keys()], radius);
+  const inView = view.join('\n');
+  for (const { m, hit } of scored) {
+    const excerpt = excerpts(m.text, hit.map((x) => x.t), radius);
     if (!excerpt || inView.includes(fold(excerpt.replace(/^…|…$/g, '').slice(0, 80)))) continue; // already attached
     out.push({ n: m.n, role: m.role, excerpt });
     if (out.length >= max) break;

@@ -190,6 +190,9 @@ export function buildSystemPrompt({ cwd, offProject = false, memory = true, para
   if (memory && !subagentRole) {
     rules.push('Long conversations get compacted and details are lost. As soon as the user states a preference (how to answer, tone, language), a constraint or a decision, keep it with <remember> before answering (not what is in files). One short sentence per note; <forget> notes that are no longer true.');
   }
+  if (!subagentRole) {
+    rules.push(`Older parts of a long conversation get compacted: they are no longer in view. When the user refers to something you do not see here (a decision, a name, a file, an earlier message), use <recall> before answering. Never make up what was said, decided or written: check it (<recall>, <search>, <read>${web ? ', <web_search>' : ''}) or say you do not remember.`);
+  }
   rules.push(subagents
     ? `For a request with several steps, write a <plan>: each task is carried out by a sub-agent, in order${parallel ? ' (consecutive @parallel tasks, touching different files, at the same time)' : ', one at a time'}; you get their reports. Write each task so that it can be done alone (goal, files). Do not do the tasks yourself: answer from the reports, or write a new <plan> for what is missing.`
     : 'Several steps: write a <plan> first, then do the tasks in order.');
@@ -248,7 +251,10 @@ User: list or set, to check if a name was already seen?
 Assistant: A set: a lookup is O(1), O(n) in a list. Keep the list only if you need the order.
 
 User: great, it crashes again. very helpful
-Assistant: Sorry. Which command crashes, and what does it print?${memory ? `
+Assistant: Sorry. Which command crashes, and what does it print?
+
+User: which port did we choose for the API again?
+Assistant: <recall>API port</recall>${memory ? `
 
 User: the server runs Python 3.9, we can't upgrade it
 Assistant: <remember>The server runs Python 3.9 and cannot be upgraded.</remember>

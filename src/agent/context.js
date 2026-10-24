@@ -280,7 +280,7 @@ export function buildSummaryMessage({ summary, facts, task, chapters = [] }) {
   parts.push(summary.trim() || '(no summary)');
   if (facts) parts.push(facts);
   if (task) parts.push(`[CURRENT TASK]\n${task}`);
-  parts.push('Continue from here. Re-read files if you need their exact content; find the details of older messages with <recall>.');
+  parts.push('Continue from here. The older messages are NOT in view anymore, only this summary: when the user refers to something not written here, use <recall> before answering, never guess. Re-read files if you need their exact content.');
   return parts.join('\n\n');
 }
 

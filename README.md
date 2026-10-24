@@ -158,10 +158,14 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   through Tor when it is on, only when Web is on. Given at the end of the message as page content, marked as not
   being the user's instructions, the beginning of each page only (~1,500 tokens). A line under the message says
   what was read. Can be switched off in the settings.
-- **Automatic recall**: with each user message, the app searches the out-of-context history with the message's words
-  (rare words weigh more, word roots match, words still in view count for nothing) and, when an earlier passage
-  clearly matches, attaches the 1 or 2 best excerpts to the message (~300 tokens at most), marked "maybe relevant".
-  The message shows "↩ n passages anciens joints", expandable. Nothing is attached when nothing clearly matches.
+- **Automatic recall**: with each user message, the app searches what was said earlier and is no longer in view (the
+  user's messages and the agent's prose of the archived parts, not tool outputs) for the message's most distinctive
+  words (the rarest in the whole conversation); a passage with several of them (a good share), or a very rare one,
+  is attached to the message (2 at most, ~300 tokens), marked "maybe relevant", unless the same words are together
+  in a message still in view. Shown under the message. (An earlier version ignored every word still present
+  anywhere in view: with a long summary in view, it almost never fired.) The prompt also asks the model to
+  `<recall>` what it does not see, never to make up what was said or decided, with an example; the compaction
+  summary says the older details are not in view.
 - **Chapter index**: each compaction adds a line to the summary (dates from the message stamps, topics written by
   the model, keywords of that part added when the line is vague), so the model knows what is out of view and what to
   look for with `<recall>`. 15 lines at most (the oldest merged).

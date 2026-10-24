@@ -92,3 +92,18 @@ test('compaction adds a chapter to the index; a later message about it gets the 
   assert.deepEqual(recalled[0].map((p) => p.n), [1]);
   assert.match(requests.at(-1).messages.at(-1).content, /\(From earlier in this conversation, maybe relevant:\n\[message 1, user\] [^\n]*pas MySQL/);
 });
+
+test('automatic recall: words also in the summary do not block it; what was said is recalled, not tool outputs', () => {
+  const archive = [
+    { role: 'user', content: '[Mon 2026-10-19 10:00] We keep PostgreSQL 16 for the database, on port 5433 because 5432 is taken.' },
+    { role: 'assistant', content: 'Noted: PostgreSQL 16 on port 5433.' },
+    { role: 'user', content: '<result tool="read" path="docker-compose.yml">\nports: ["5433:5432"] postgres image\n</result>' },
+    ...['Rename utils to helpers.', 'The logo needs more contrast.', 'Add a CSV export button.', 'Compress the images.'].map((t, i) => ({ role: i % 2 ? 'assistant' : 'user', content: t })),
+  ];
+  const current = [{ role: 'user', content: `${SUMMARY_MARKER}] Context: a web app on PostgreSQL. Discussion: the database and the deployment were set up.` }];
+  const got = autoRecall([archive], current, 'remind me, which port does PostgreSQL use here?');
+  assert.ok(got.length >= 1);
+  assert.ok(got.every((p) => !/<result/.test(p.excerpt)));
+  assert.match(got.map((p) => p.excerpt).join(' '), /port 5433/);
+  assert.doesNotMatch(got[0].excerpt, /^\[Mon/); // (the stamp is not content)
+});
