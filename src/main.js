@@ -154,6 +154,7 @@ class Session {
     conv.memory = agent.memory;
     conv.memoryShownAt = agent.memoryShownAt;
     conv.chapters = agent.chapters;
+    conv.steps = agent.steps;
     conv.systemPrompt = agent.systemPrompt;
     conv.checkpoints = agent.checkpoints;
     conv.archives = agent.archives;
@@ -366,6 +367,7 @@ ipcMain.handle('conversations:open', (_, id) => {
   a.memory = loaded.memory ?? [];
   a.memoryShownAt = loaded.memoryShownAt ?? 0;
   a.chapters = loaded.chapters ?? [];
+  a.steps = loaded.steps ?? null;
   a.systemPrompt = loaded.systemPrompt ?? null;
   a.checkpoints = loaded.checkpoints ?? [];
   a.archives = loaded.archives ?? [];
@@ -426,6 +428,21 @@ ipcMain.handle('memory:set', (_, notes) => {
   a.setMemory(notes); // (its 'memory' event is recorded with the conversation)
   s.save();
   return a.memory;
+});
+
+// Steps the agent does before and after answering, set per conversation.
+ipcMain.handle('steps:get', () => (activeCwd() ? current().getAgent().steps : null));
+ipcMain.handle('steps:set', (_, steps) => {
+  const s = current();
+  const a = s.getAgent();
+  const clean = {
+    before: String(steps?.before ?? '').trim().slice(0, 2000),
+    after: String(steps?.after ?? '').trim().slice(0, 2000),
+    afterOnlyIfChanged: Boolean(steps?.afterOnlyIfChanged),
+  };
+  a.steps = clean.before || clean.after ? clean : null;
+  s.save();
+  return a.steps;
 });
 
 ipcMain.handle('prompt:get', async () => {

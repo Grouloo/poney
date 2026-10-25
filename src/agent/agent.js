@@ -140,6 +140,9 @@ export class Agent extends EventEmitter {
     this.memory = []; // notes kept with <remember> for the whole conversation (see memory.js)
     this.memoryShownAt = 0; // index of the last message showing the whole memory
     this.chapters = []; // index of the compacted parts (see maybeCompact)
+    // Steps set by the user for this conversation: { before, after, afterOnlyIfChanged }
+    // (before: done first at each message; after: once, before the final answer).
+    this.steps = null;
     this.running = false;
     this.abort = null;
     this.systemPrompt = null; // custom prompt for this conversation; null = generated default
@@ -221,6 +224,7 @@ export class Agent extends EventEmitter {
     this.memory = [];
     this.memoryShownAt = 0;
     this.chapters = [];
+    this.steps = null;
     this.systemPrompt = null;
     this.lastUsage = null;
     this.currentTask = null;
@@ -959,6 +963,12 @@ export class Agent extends EventEmitter {
           this.emit('event', { type: 'fetched', turnId, pages });
         }
       }
+      // The step the user set to be done first, at each message of this conversation.
+      const before = this.role === 'main' ? this.steps?.before?.trim() : '';
+      if (before) {
+        content += `\n\n(Step to do first, set by the user for this conversation: ${before})`;
+        this.emit('event', { type: 'step', phase: 'before', turnId, text: before });
+      }
       this.messages.push({ role: 'user', content });
     }
     this.emit('event', { type: 'turn_start' });
@@ -974,6 +984,7 @@ export class Agent extends EventEmitter {
     let testFailures = 0;
     let emptyReplies = 0;
     let codeDumpNudged = false;
+    let afterStepDone = false;
     let invisibleRetried = false;
     const recent = [];
     let reason = 'done';
@@ -1106,6 +1117,15 @@ export class Agent extends EventEmitter {
             gateNudges++;
             notice('Code modifié mais pas testé : le modèle est relancé pour tester.');
             this.messages.push({ role: 'user', content: 'You changed files but did not successfully run them since. Test your work now with <run> (run the program, a quick check, or the tests). If testing is really impossible, say why in your final summary.' });
+            continue;
+          }
+          // The step the user set to be done before finishing (once per turn; optionally only
+          // when files were changed): asked now, the answer after it is the final one.
+          const after = this.role === 'main' ? this.steps?.after?.trim() : '';
+          if (after && !afterStepDone && (!this.steps.afterOnlyIfChanged || changedThisTurn)) {
+            afterStepDone = true;
+            this.emit('event', { type: 'step', phase: 'after', text: after });
+            this.messages.push({ role: 'user', content: `(Step to do before finishing, set by the user for this conversation: ${after})\nDo it now, then give your final answer.` });
             continue;
           }
           this.emit('event', { type: 'final', text: prose });

@@ -119,6 +119,10 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   disappears from the system prompt (shorter prompt) and is refused if the model uses it anyway.
 - **System prompt editable per conversation** ("Prompt système" button): see the generated prompt, edit it, and it is
   saved with the conversation. A "modifié" badge marks a custom prompt.
+- **Steps before and after each answer, per conversation** ("Étapes" button): a step to do first (e.g. "check what
+  changed in the project since your last answer") goes with every message; a step to do before finishing (e.g.
+  "document what you did in CHANGELOG.md") is asked once per turn, before the final answer, optionally only when
+  files were changed during the turn. Both show as a line in the conversation; saved with it.
 - **Context gauge** under the input (the tick marks the compaction threshold); a click compacts on demand.
   Summaries appear in the transcript, expandable.
 - **Prompt reading progress** (LM Studio): percentage and estimated time left in the status bar before the first

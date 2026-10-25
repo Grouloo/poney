@@ -18,6 +18,7 @@
     </button>
     <select id="modelSelect" class="chip" title="Modèle"></select>
     <div class="spacer"></div>
+    <button id="stepsBtn" class="ghost" title="Étapes que l’agent fait avant et après avoir répondu, dans cette conversation">Étapes<span id="stepsBadge" class="badge hidden">actives</span></button>
     <button id="promptBtn" class="ghost" title="Voir et modifier le prompt système de cette conversation">Prompt système<span id="promptBadge" class="badge hidden">modifié</span></button>
     <button id="settingsBtn" class="ghost icon" title="Réglages">⚙︎</button>
   </header>
@@ -126,6 +127,31 @@
     <div id="livePanelBody" class="viewer-body live-panel-body"></div>
   </section>
   </div>
+
+  <dialog id="stepsDialog" class="prompt-dialog steps-dialog">
+    <form method="dialog" class="prompt-form">
+      <div class="prompt-head">
+        <h2>Étapes de cette conversation</h2>
+        <div class="spacer"></div>
+        <button type="button" id="stepsCloseX" class="ghost icon" title="Fermer">✕</button>
+      </div>
+      <div class="steps-body">
+        <label>Avant de répondre, à chacun de vos messages
+          <textarea id="stepsBefore" rows="3" placeholder="Ex. : vérifie si le projet a été modifié depuis ta dernière réponse (git status)."></textarea>
+        </label>
+        <label>Avant de conclure, une fois par réponse
+          <textarea id="stepsAfter" rows="3" placeholder="Ex. : documente ce que tu as fait dans CHANGELOG.md."></textarea>
+        </label>
+        <label class="check"><input id="stepsAfterOnlyIfChanged" type="checkbox"> Seulement si des fichiers ont été modifiés</label>
+        <p class="muted">Vides : pas d’étape. Ces consignes s’ajoutent à vos messages ; elles ne changent pas le prompt système.</p>
+      </div>
+      <div class="prompt-foot">
+        <div class="spacer"></div>
+        <button type="button" id="stepsCancel" class="ghost">Annuler</button>
+        <button type="button" id="stepsSave" class="primary">Enregistrer pour cette conversation</button>
+      </div>
+    </form>
+  </dialog>
 
   <dialog id="promptDialog" class="prompt-dialog">
     <form method="dialog" class="prompt-form">

@@ -478,3 +478,10 @@ body.running .resume-btn { display: none; }
 .live-code .new-block .ln { background: rgba(63, 185, 80, 0.16); }
 .live-code .seeking { margin: 12px; padding: 8px 10px; border: 1px dashed var(--border); border-radius: 8px; }
 .live-code .seeking pre { margin: 4px 0 0; white-space: pre-wrap; }
+
+/* steps before and after answering */
+.steps-dialog { height: auto; max-height: 88vh; }
+.steps-body { display: flex; flex-direction: column; gap: 12px; padding: 8px 18px 12px; }
+.steps-body label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.steps-body label.check { flex-direction: row; align-items: center; gap: 8px; }
+.steps-body textarea { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px; font: inherit; resize: vertical; }

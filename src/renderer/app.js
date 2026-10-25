@@ -985,6 +985,14 @@ function onEvent(ev) {
     case 'memory':
       renderMemory(ev.notes);
       break;
+    case 'step': {
+      if (ev.phase === 'before') {
+        // The step asked first, shown under the user message.
+        const msg = [...(target || transcript).querySelectorAll('.msg.user')].pop();
+        if (msg) msg.appendChild(div('fetched', `⤷ étape avant de répondre : ${esc(ev.text)}`));
+      } else add(div('notice', `Étape avant de conclure : ${esc(ev.text)}`));
+      break;
+    }
     case 'fetching':
       if (!replaying) $('status').textContent = `Lecture de ${ev.urls.length > 1 ? 'des liens' : 'la page'} du message…`;
       break;
@@ -1548,7 +1556,34 @@ let promptInfo = null;
 
 const errorText = (e) => e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
 
+// ---------- steps before and after answering, per conversation ----------
+async function refreshStepsBadge() {
+  let steps = null;
+  try { steps = await window.api.getSteps(); } catch {}
+  $('stepsBadge').classList.toggle('hidden', !steps);
+  return steps;
+}
+$('stepsBtn').onclick = async () => {
+  const steps = await refreshStepsBadge();
+  $('stepsBefore').value = steps?.before || '';
+  $('stepsAfter').value = steps?.after || '';
+  $('stepsAfterOnlyIfChanged').checked = Boolean(steps?.afterOnlyIfChanged);
+  $('stepsDialog').showModal();
+  $('stepsBefore').focus();
+};
+for (const id of ['stepsCancel', 'stepsCloseX']) $(id).onclick = () => $('stepsDialog').close();
+$('stepsSave').onclick = async () => {
+  try {
+    await window.api.setSteps({ before: $('stepsBefore').value, after: $('stepsAfter').value, afterOnlyIfChanged: $('stepsAfterOnlyIfChanged').checked });
+  } catch (e) {
+    $('status').textContent = errorText(e);
+  }
+  $('stepsDialog').close();
+  refreshStepsBadge();
+};
+
 async function refreshPromptBadge() {
+  refreshStepsBadge(); // (shown next to it, follows the same conversation changes)
   try {
     promptInfo = await window.api.getSystemPrompt();
   } catch {

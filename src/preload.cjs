@@ -28,6 +28,8 @@ contextBridge.exposeInMainWorld('api', {
 
   getMemory: () => ipcRenderer.invoke('memory:get'),
   setMemory: (notes) => ipcRenderer.invoke('memory:set', notes),
+  getSteps: () => ipcRenderer.invoke('steps:get'),
+  setSteps: (steps) => ipcRenderer.invoke('steps:set', steps),
   getSystemPrompt: () => ipcRenderer.invoke('prompt:get'),
   setSystemPrompt: (text) => ipcRenderer.invoke('prompt:set', text),
 
