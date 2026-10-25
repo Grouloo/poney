@@ -916,8 +916,12 @@ function onEvent(ev) {
         summaryEl.title = 'Ouvrir dans le visualiseur';
         summaryEl.onclick = (e) => { e.stopPropagation(); openFile(ev.args.path.trim()); };
       }
-      card.querySelector('.card-head').onclick = () => card.classList.toggle('open');
-      if (ev.tool === 'run') card.classList.add('open');
+      // (selecting text in the head, e.g. a long command, does not close the card)
+      card.querySelector('.card-head').onclick = () => !getSelection().toString() && card.classList.toggle('open');
+      if (ev.tool === 'run') {
+        card.classList.add('open');
+        summaryEl.title = ev.args.command || '';
+      }
       card.dataset.tool = ev.tool;
       card.dataset.path = ev.args.path || '';
       addResumeButton(card, ev);
