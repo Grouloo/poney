@@ -228,6 +228,8 @@ function sessionView(s) {
     running: s.running,
     partial: s.partial,
     approvals: [...s.approvals.values()].map(({ req }) => ({ ...req, session: s.key })),
+    // (from the agent, not the transcript: notes added before the first message left no event there)
+    memory: s.agent?.memory ?? s.conv?.memory ?? [],
     session: s.key,
     settings: publicSettings(),
   };

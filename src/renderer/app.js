@@ -1290,6 +1290,7 @@ function rememberScroll() {
 /** Draws a session as it is now: transcript, answer being written, pending approvals, reading position. */
 function showSession(view) {
   replayTranscript(view.events);
+  if (view.memory) renderMemory(view.memory);
   const p = view.partial;
   if (p) {
     if (!bubbles.has(p.id)) onEvent({ type: 'assistant_start', id: p.id }); // (the replay may have started it)
