@@ -102,7 +102,7 @@ test('a failed task stops the plan; a new plan runs only what is left', async ()
   const f = await fake((r) => {
     if (isSub(r)) {
       const task = taskOf(r);
-      if (!/<result/.test(r.messages.at(-1).content) && r.messages.filter((m) => m.role === 'assistant').length === 0) runs[task] = (runs[task] || 0) + 1;
+      if (r.messages.length === 2) runs[task] = (runs[task] || 0) + 1;
       if (task === 'Step two' && broken) return ''; // nothing comes out: the sub-agent gives up
       return `Did ${task}.`;
     }
@@ -193,4 +193,33 @@ test('a sub-agent has no <plan>; one written anyway is not taken, and it is sent
   }
   assert.equal(subPlans, 2); // once per sub-agent, then back to work
   assert.deepEqual(agent.taskPlan.tasks.map((t) => t.status), ['done', 'done']);
+});
+
+test('sub-agents see what the main agent did in this turn before its plan', async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-plan-'));
+  await fs.writeFile(path.join(cwd, 'notes.txt'), 'The parser lives in src/parse.js\n');
+  let main = 0;
+  const f = await fake((r) => {
+    if (isSub(r)) return `Did ${taskOf(r)}.`;
+    main++;
+    if (main === 1) return '<read path="notes.txt" />';
+    if (main === 2) return 'The parser is in src/parse.js.\n<plan>\n- Fix the parser\n</plan>';
+    return 'Done.';
+  });
+  const agent = new Agent({ cwd, config: { baseUrl: f.url, model: 'm', shellEnabled: false } });
+  try {
+    await agent.send('fix the parser');
+  } finally {
+    f.server.close();
+  }
+  const task = f.requests.find(isSub).messages.at(-1).content;
+  assert.match(task, /What the main agent did in this turn before the plan[^\n]*\nMAIN AGENT:\n<read path="notes.txt" \/>\n\n<result tool="read"[\s\S]*The parser lives in src\/parse\.js[\s\S]*\[end of the main agent's steps\]/);
+  assert.doesNotMatch(task.split('[end of the main agent')[0], /<plan>/); // not the message with the plan itself
+});
+
+test('the digest of the turn keeps its latest steps when too long', async () => {
+  const { turnDigest } = await import('../src/agent/plan.js');
+  const d = turnDigest([1, 2, 3, 4].map((i) => ({ role: i % 2 ? 'assistant' : 'user', content: `step ${i} ${'x'.repeat(400)}` })), 900);
+  assert.match(d, /^\[… earlier steps left out\]\n\nMAIN AGENT:\nstep 3[\s\S]*step 4/);
+  assert.doesNotMatch(d, /step [12]/);
 });

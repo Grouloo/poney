@@ -74,15 +74,41 @@ export function formatPlan(plan, mark = null) {
 }
 
 /**
- * What a sub-agent gets: the request, the whole plan (its task marked), the
- * reports of the tasks already done (it may build on them), its task.
+ * What the main agent did in this turn before its plan (its messages and the
+ * results it got), for the sub-agents: they would otherwise read again what it
+ * has already read, or miss what it found. Each step cut short; when too long,
+ * the latest steps (closest to the plan).
  */
-export function subAgentTask(plan, task, request) {
+export function turnDigest(messages, maxChars = 6000) {
+  const cut = (s, n) => (s.length > n ? `${s.slice(0, n)}\n[… cut]` : s);
+  const steps = messages
+    .filter((m) => m.content?.trim())
+    .map((m) => (m.role === 'assistant' ? `MAIN AGENT:\n${cut(m.content.trim(), 1000)}` : cut(m.content.trim(), 1500)));
+  const kept = [];
+  let size = 0;
+  for (let i = steps.length - 1; i >= 0; i--) {
+    if (size + steps[i].length > maxChars) {
+      kept.unshift('[… earlier steps left out]');
+      break;
+    }
+    size += steps[i].length;
+    kept.unshift(steps[i]);
+  }
+  return kept.join('\n\n');
+}
+
+/**
+ * What a sub-agent gets: the request, what the main agent did in this turn
+ * before the plan, the whole plan (its task marked), the reports of the tasks
+ * already done (it may build on them), its task.
+ */
+export function subAgentTask(plan, task, request, digest = '') {
   const req = String(request || '').trim();
   const before = plan.tasks.filter((t) => t.status === 'done' && t.report);
   return [
     'You are one of several agents carrying out a plan, one task each. Do ONLY your task; the others are done by other agents.',
     req ? `\nThe user's request:\n${req.length > 3000 ? `${req.slice(0, 3000)}…` : req}` : '',
+    digest ? `\nWhat the main agent did in this turn before the plan (what it read and found: do not redo it):\n${digest}\n[end of the main agent's steps]` : '',
     // (numbered, without "- [ ]" or @parallel: not a <plan> to write again)
     `\nThe plan, already written (do not write it again):\n${plan.tasks.map((t, i) => `${i + 1}. ${t.text}${t === task ? '   <- YOUR TASK' : t.status === 'done' ? '   (done)' : ''}`).join('\n')}`,
     before.length ? `\nReports of the tasks already done:\n${before.map((t) => `- ${t.text}: ${t.report.length > 800 ? `${t.report.slice(0, 800)}…` : t.report}`).join('\n')}` : '',

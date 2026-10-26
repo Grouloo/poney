@@ -8,7 +8,7 @@ import { executeAction, runShell, truncateMiddle, checkOldBlock } from './tools.
 import { remember, forget, memoryBlock, standingInstructions, instructionNote, replacedAutoNote } from './memory.js';
 import { recall, autoRecall, recalledBlock, keywordsOf } from './history.js';
 import { linksToRead, readLinks } from './autofetch.js';
-import { parsePlan, mergePlan, nextGroup, setStatus, formatPlan, subAgentTask } from './plan.js';
+import { parsePlan, mergePlan, nextGroup, setStatus, formatPlan, subAgentTask, turnDigest } from './plan.js';
 import {
   summaryTokens, summaryWords, mechanicalSummary, DEFAULT_CHARS_PER_TOKEN,
   makeEstimator, contextPlan, answerTokens, isValidSample, historyTokens, splitForCompaction, extractFacts, buildSummaryRequest, cleanSummary,
@@ -626,7 +626,9 @@ export class Agent extends EventEmitter {
       // Resuming from one of these sub-agents re-runs the plan step (done tasks are kept).
       const cp = this.checkpoints.findLast((c) => c.kind === 'action' && c.actIds.includes(actId));
       if (cp) cp.actIds.push(...ids);
-      const agents = group.map((t) => ({ tool: 'agent', args: { title: t.text.slice(0, 60), task: subAgentTask(plan, t, this.currentTask) } }));
+      // (the turn after the request, without the message with the plan)
+      const digest = turnDigest(this.messages.slice((this.turnStartIndex ?? this.messages.length) + 1, -1));
+      const agents = group.map((t) => ({ tool: 'agent', args: { title: t.text.slice(0, 60), task: subAgentTask(plan, t, this.currentTask, digest) } }));
       let results;
       try {
         results = await this.runSubAgents(agents, signal, ids);

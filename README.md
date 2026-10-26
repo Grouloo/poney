@@ -188,8 +188,9 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   example of noting a constraint before answering.
 - **Plan** (`<plan>`): for a request with several steps, the model only writes the list of tasks; each task is
   carried out by a sub-agent, in order (consecutive `@parallel` tasks at the same time), and is done when its
-  sub-agent stops. The model never keeps its list up to date. Each sub-agent gets the request, the plan with its task
-  marked, and the reports of the tasks already done. A failed task stops the plan there; the model gets the reports
+  sub-agent stops. The model never keeps its list up to date. Each sub-agent gets the request, what the main agent did
+  in the turn before its plan (its steps and their results, cut short), the plan with its task marked, and the
+  reports of the tasks already done. A failed task stops the plan there; the model gets the reports
   and may write a new plan, which runs only what is left. The plan is pinned above the input; a new message starts
   without one. Without sub-agents, the plan is a list the model follows itself.
 - **Viewer** with syntax highlighting and image preview; paths in the agent's actions are clickable. Markdown
