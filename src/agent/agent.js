@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { streamChat, complete, serverContextLength } from './llm.js';
-import { liveAction, partialEditPairs, TOOLS, buildSystemPrompt, parseActions, splitThinking, formatResult, isToolEnabled, withReasoning, findRepetition, normalizeToolCalls, stripReasoning, legacyReasoningToNotes, stripChannelMarkers, toolSchemas } from './protocol.js';
+import { liveAction, partialEditPairs, TOOLS, buildSystemPrompt, parseActions, splitThinking, formatResult, isToolEnabled, withReasoning, findRepetition, normalizeToolCalls, stripReasoning, legacyReasoningToNotes, stripChannelMarkers, toolSchemas, answerInReasoning } from './protocol.js';
 import { executeAction, runShell, truncateMiddle, checkOldBlock } from './tools.js';
 import { remember, forget, memoryBlock, standingInstructions, instructionNote, replacedAutoNote } from './memory.js';
 import { recall, autoRecall, recalledBlock, keywordsOf } from './history.js';
@@ -862,6 +862,18 @@ export class Agent extends EventEmitter {
     let visible = normalizeToolCalls(split.text);
     if (cutAt >= 0) visible = visible.slice(0, cutAt);
     thinking += split.thinking;
+    const leaked = earlyEdit ? null : answerInReasoning(thinking);
+    if (leaked) {
+      // Its calls written after a made-up end of reasoning: run them, before those
+      // of the answer (minus the ones written again there).
+      const same = (a) => a.raw.replace(/\s+/g, ' ').trim();
+      const done = new Set(parseActions(leaked.text).actions.map(same));
+      const rest = parseActions(visible).actions.filter((a) => done.has(same(a)));
+      for (const a of rest.reverse()) visible = visible.slice(0, a.start) + visible.slice(a.end);
+      thinking = leaked.thinking;
+      visible = `${leaked.text}\n${visible.trim()}`.trim();
+      this.emit('event', { type: 'notice', text: 'Le modèle a écrit ses appels dans sa réflexion (après une fausse fin de réflexion) : ils sont exécutés.' });
+    }
     // After a stall, the call ending the reasoning; at a normal end, only if the
     // model wrote no real answer (a call left at the end of a plan is not run).
     const noAction = !parseActions(visible).actions.length;

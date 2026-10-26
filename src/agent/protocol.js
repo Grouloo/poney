@@ -638,6 +638,26 @@ export function splitThinking(text) {
  */
 export const NOTES_MAX_CHARS = 600;
 
+// The end of a reasoning as a model may write it, inside its real reasoning.
+const FAKE_CLOSE = /<\/(?:thought|thinking|think|reasoning)>/gi;
+
+/**
+ * Seen with Gemma: it "closes" its reasoning with a tag it makes up
+ * ("</thought>"), writes its calls, and only then really ends it. What follows
+ * that tag, when it holds complete calls, is its answer. Returns
+ * { thinking, text } (the reasoning before the tag, the answer), or null.
+ */
+export function answerInReasoning(thinking) {
+  for (const m of String(thinking || '').matchAll(FAKE_CLOSE)) {
+    const after = thinking.slice(m.index + m[0].length);
+    const normalized = normalizeToolCalls(after);
+    if (parseActions(normalized).actions.some((a) => a.complete)) {
+      return { thinking: thinking.slice(0, m.index), text: normalized.replace(FAKE_CLOSE, '').trim() };
+    }
+  }
+  return null;
+}
+
 export function withReasoning(content, thinking, maxChars = NOTES_MAX_CHARS) {
   const t = reasoningNote(thinking, maxChars);
   return t ? `<reasoning>\n${t}\n</reasoning>\n${content}` : content;
@@ -649,7 +669,9 @@ export function withReasoning(content, thinking, maxChars = NOTES_MAX_CHARS) {
  * by the model at each step, until it looped on them.
  */
 export function reasoningNote(thinking, maxChars = NOTES_MAX_CHARS) {
-  const t = (thinking || '').replace(/\s+/g, ' ').trim();
+  // Without tool calls (never run from there: shown in the history, they looked
+  // done, and the model went on as if) nor closing tags it made up.
+  const t = parseActions(normalizeToolCalls(thinking || '')).text.replace(FAKE_CLOSE, ' ').replace(/\s+/g, ' ').trim();
   const sentences = t.match(/[^.!?…]+(?:[.!?…]+|$)\s*/g) || [];
   const seen = new Set();
   let note = '';
