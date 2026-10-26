@@ -135,6 +135,8 @@ details.thinking div { white-space: pre-wrap; border-left: 2px solid var(--borde
 .approval { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--border); background: color-mix(in srgb, var(--warn) 10%, var(--panel)); }
 .approval span { flex: 1; color: var(--warn); font-size: 13px; }
 .approval button { border-radius: 7px; padding: 4px 12px; border: 1px solid var(--border); background: var(--panel-2); }
+.approval.refuse input { flex: 1; min-width: 0; padding: 5px 9px; border-radius: 7px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font: inherit; font-size: 13px; }
+.approval.refuse button.no { background: color-mix(in srgb, var(--err) 75%, var(--panel)); color: #fff; border: none; }
 .approval button.yes { background: var(--accent-2); color: #fff; border: none; }
 
 .notice { color: var(--warn); font-size: 12.5px; margin: 6px auto; }

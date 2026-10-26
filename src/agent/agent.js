@@ -1195,11 +1195,15 @@ export class Agent extends EventEmitter {
             continue;
           }
           if (action.tool === 'run' && config.approval !== 'auto') {
-            const ok = await this.approve({ id: actId, tool: action.tool, command: action.args.command });
+            // (true / false, or { ok: false, reason } when the user said why)
+            const answer = await this.approve({ id: actId, tool: action.tool, command: action.args.command });
             if (signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
-            if (!ok) {
-              const out = 'The user refused to run this command. Try another way, or ask the user.';
-              this.emit('event', { type: 'action_end', id: actId, ok: false, output: 'Refusé par l’utilisateur.', meta: {} });
+            if (answer !== true && !answer?.ok) {
+              const reason = String(answer?.reason ?? '').trim().slice(0, 2000);
+              const out = reason
+                ? `The user refused to run this command, and said why: "${reason}"\nTake this into account: change your approach accordingly, or ask the user.`
+                : 'The user refused to run this command. Try another way, or ask the user.';
+              this.emit('event', { type: 'action_end', id: actId, ok: false, output: reason ? `Refusé par l’utilisateur : ${reason}` : 'Refusé par l’utilisateur.', meta: {} });
               results.push(formatResult(action.tool, { command: action.args.command }, out));
               stopBatch = true;
               continue;

@@ -491,7 +491,7 @@ ipcMain.handle('files:list', (_, rel) => listDir(activeCwd(), rel));
 ipcMain.handle('files:read', (_, rel) => readFileForViewer(activeCwd(), rel));
 ipcMain.handle('files:openExternal', (_, rel) => shell.openPath(path.join(activeCwd(), rel)));
 ipcMain.handle('files:reveal', (_, rel) => shell.showItemInFolder(path.join(activeCwd(), rel)));
-ipcMain.handle('agent:approve', (_, { id, ok, always }) => {
+ipcMain.handle('agent:approve', (_, { id, ok, always, reason }) => {
   if (always) {
     settings.config.approval = 'auto';
     saveSettings();
@@ -501,7 +501,7 @@ ipcMain.handle('agent:approve', (_, { id, ok, always }) => {
   for (const s of sessions.values()) {
     const p = s.approvals.get(id);
     if (!p) continue;
-    p.resolve(ok);
+    p.resolve(!ok && reason?.trim() ? { ok: false, reason: String(reason).slice(0, 2000) } : ok);
     s.approvals.delete(id);
     send('sessions:changed');
   }

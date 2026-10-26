@@ -14,7 +14,7 @@ contextBridge.exposeInMainWorld('api', {
   stop: () => ipcRenderer.invoke('agent:stop'),
   reset: () => ipcRenderer.invoke('agent:reset'),
   newOffProject: () => ipcRenderer.invoke('conversations:newOffProject'),
-  approve: (id, ok, always) => ipcRenderer.invoke('agent:approve', { id, ok, always }),
+  approve: (id, ok, always, reason) => ipcRenderer.invoke('agent:approve', { id, ok, always, reason }),
   onEvent: (fn) => ipcRenderer.on('agent:event', (_, ev) => fn(ev)),
   onApproval: (fn) => ipcRenderer.on('agent:approval', (_, req) => fn(req)),
 

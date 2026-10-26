@@ -123,6 +123,8 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   changed in the project since your last answer") goes with every message; a step to do before finishing (e.g.
   "document what you did in CHANGELOG.md") is asked once per turn, before the final answer, optionally only when
   files were changed during the turn. Both show as a line in the conversation; saved with it.
+- **Command approval** (unless "sans confirmation" is checked): Exécuter, Toujours autoriser, or Refuser, with an
+  optional reason that is passed on to the model, so it can change its approach.
 - **Context gauge** under the input (the tick marks the compaction threshold); a click compacts on demand.
   Summaries appear in the transcript, expandable.
 - **Prompt reading progress** (LM Studio): percentage and estimated time left in the status bar before the first

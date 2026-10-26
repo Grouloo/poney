@@ -1090,7 +1090,21 @@ function onApproval(req) {
   bar.innerHTML = '<span></span><button class="no">Refuser</button><button class="always">Toujours autoriser</button><button class="yes">Exécuter</button>';
   bar.querySelector('span').textContent = req.agentTitle ? `Sous-agent « ${req.agentTitle} » : exécuter cette commande ?` : 'Exécuter cette commande ?';
   bar.querySelector('.yes').onclick = () => { bar.remove(); window.api.approve(req.id, true, false); };
-  bar.querySelector('.no').onclick = () => { bar.remove(); window.api.approve(req.id, false, false); };
+  // Refusing asks why (optional): the model is told, and can change its approach.
+  bar.querySelector('.no').onclick = () => {
+    const why = div('approval refuse');
+    why.innerHTML = '<input type="text" placeholder="Pourquoi ? (facultatif, transmis au modèle)"><button class="back">Annuler</button><button class="no">Refuser</button>';
+    const input = why.querySelector('input');
+    const refuse = () => { why.remove(); window.api.approve(req.id, false, false, input.value.trim()); };
+    why.querySelector('.no').onclick = refuse;
+    why.querySelector('.back').onclick = () => { why.replaceWith(bar); bar.querySelector('.no').focus(); };
+    input.onkeydown = (e) => {
+      if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); refuse(); }
+      if (e.key === 'Escape') why.querySelector('.back').click();
+    };
+    bar.replaceWith(why);
+    input.focus();
+  };
   bar.querySelector('.always').onclick = async () => {
     bar.remove();
     settings = await window.api.approve(req.id, true, true);
