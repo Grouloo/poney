@@ -33,7 +33,7 @@ test('a sub-agent gets the request, the plan with its task marked, and the repor
   setStatus(plan, plan.tasks[0], 'done', 'The parser is in parser.py');
   const t = subAgentTask(plan, plan.tasks[1], 'Document and fix the parser');
   assert.match(t, /The user's request:\nDocument and fix the parser/);
-  assert.match(t, /- \[ \] Docs {3}<- YOUR TASK/);
+  assert.match(t, /The plan, already written \(do not write it again\):\n1\. Read {3}\(done\)\n2\. Docs {3}<- YOUR TASK\n3\. Fix$/m);
   assert.match(t, /Reports of the tasks already done:\n- Read: The parser is in parser\.py/);
   assert.match(t, /YOUR TASK: Docs$/);
 });
@@ -163,4 +163,34 @@ test('with parallel sub-agents switched off, @parallel tasks run one at a time, 
   }
   assert.equal(most, 1);
   assert.ok(plans.includes('done,running,pending'));
+});
+
+test('a sub-agent has no <plan>; one written anyway is not taken, and it is sent back to its task', async () => {
+  const { buildSystemPrompt, toolSchemas } = await import('../src/agent/protocol.js');
+  assert.doesNotMatch(buildSystemPrompt({ cwd: '/p', platform: 'x', subagentRole: true }), /<plan>/);
+  assert.ok(!toolSchemas({}, { subagentRole: true }).some((t) => t.function.name === 'plan'));
+
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-plan-'));
+  let main = 0;
+  let subPlans = 0;
+  const f = await fake((r) => {
+    if (isSub(r)) {
+      const last = r.messages.at(-1).content;
+      // The loop seen with Gemma: the sub-agent copies the plan of its task message.
+      if (!/<result/.test(last)) { subPlans++; return '<plan>\n- Write a\n- Write b\n</plan>'; }
+      const mine = last.match(/No <plan> here[\s\S]*ONE task: (Write [ab])/);
+      if (mine) return `Did ${mine[1]}.`;
+      subPlans++;
+      return '<plan>\n- Write a\n- Write b\n</plan>';
+    }
+    return ++main === 1 ? '<plan>\n- Write a\n- Write b\n</plan>' : 'Done.';
+  });
+  const agent = new Agent({ cwd, config: { baseUrl: f.url, model: 'm', parallelAgents: false, shellEnabled: false } });
+  try {
+    await agent.send('write a and b');
+  } finally {
+    f.server.close();
+  }
+  assert.equal(subPlans, 2); // once per sub-agent, then back to work
+  assert.deepEqual(agent.taskPlan.tasks.map((t) => t.status), ['done', 'done']);
 });

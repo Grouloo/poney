@@ -448,7 +448,7 @@ export class Agent extends EventEmitter {
       try {
         const r = await complete({
           ...cfg,
-          ...(attempt.inline ? { toolSchemas: toolSchemas(this.config) } : {}),
+          ...(attempt.inline ? { toolSchemas: toolSchemas(this.config, { subagentRole: this.role === 'sub' }) } : {}),
           maxTokens: attempt.maxTokens ?? maxTokens,
           temperature: attempt.retry ? 0.4 : 0.1,
           signal,
@@ -600,10 +600,17 @@ export class Agent extends EventEmitter {
       const text = 'Empty plan: write one task per line, like "- task".';
       return { ok: false, text, result: formatResult('plan', {}, text) };
     }
+    if (this.role === 'sub') {
+      // Seen with Gemma: a sub-agent copies the plan of its task message, gets it
+      // back as a list, and writes it again, in a loop. Its task is one task.
+      const mine = (this.currentTask || '').match(/YOUR TASK: (.+)$/)?.[1];
+      const text = `No <plan> here: the plan is already written, and run by the main agent. You are a sub-agent with ONE task${mine ? `: ${mine}` : ''}.\nDo it now with the tools (<search>, <read>, <edit>…), then answer with your report.`;
+      return { ok: false, text, result: formatResult('plan', {}, text) };
+    }
     this.taskPlan = mergePlan(this.taskPlan, written);
     const plan = this.taskPlan;
     this.emit('event', { type: 'plan', tasks: plan.tasks });
-    if (this.role === 'sub' || !isToolEnabled('agent', this.config)) {
+    if (!isToolEnabled('agent', this.config)) {
       // No sub-agents: a list for the model, which does the tasks itself.
       const text = `${formatPlan(plan)}\n(Sub-agents are not available: do these tasks yourself, in order.)`;
       return { ok: true, text, result: formatResult('plan', {}, text) };
@@ -711,7 +718,7 @@ export class Agent extends EventEmitter {
     try {
       for await (const chunk of (this.streamChat ?? streamChat)({ // (replaceable in tests)
         ...this.cfg,
-        toolSchemas: toolSchemas(this.config),
+        toolSchemas: toolSchemas(this.config, { subagentRole: this.role === 'sub' }),
         maxTokens,
         messages: prompt,
         signal: ctrl.signal,

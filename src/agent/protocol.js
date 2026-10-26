@@ -62,7 +62,7 @@ const OPEN_RE = new RegExp(`<(${NAME_RE})(\\s[^<>]*?)?\\s*(/?)>`, 'g');
  * its native format anyway, and without the declaration LM Studio holds those
  * calls back until they end, and drops them if cut (nothing visible for minutes).
  */
-export function toolSchemas(config = {}) {
+export function toolSchemas(config = {}, { subagentRole = false } = {}) {
   const fn = (name, description, props, required) => ({
     type: 'function',
     function: {
@@ -127,7 +127,7 @@ export function toolSchemas(config = {}) {
       },
     },
   ];
-  return all.filter((t) => isToolEnabled(t.function.name, config));
+  return all.filter((t) => isToolEnabled(t.function.name, config) && !(subagentRole && t.function.name === 'plan'));
 }
 
 /** Tools that can be switched off in the settings, and the config flag for each. */
@@ -161,7 +161,7 @@ export function buildSystemPrompt({ cwd, offProject = false, memory = true, para
     tools.push('<forget>2</forget>                       remove note 2 from your memory');
   }
   if (!subagentRole) tools.push('<recall>keywords</recall>               search the earlier part of this conversation (no longer in view)');
-  tools.push(subagents && parallel
+  if (!subagentRole) tools.push(subagents && parallel
     ? '<plan>\n- first task (goal, files)\n- @parallel a task independent of the next one\n- @parallel the next one\n- last task\n</plan>                                 a plan: each task is done by a sub-agent'
     : subagents
       ? '<plan>\n- first task (goal, files)\n- next task\n</plan>                                 a plan: each task is done by a sub-agent, in order'
@@ -193,7 +193,7 @@ export function buildSystemPrompt({ cwd, offProject = false, memory = true, para
   if (!subagentRole) {
     rules.push(`Older parts of a long conversation get compacted: they are no longer in view. When the user refers to something you do not see here (a decision, a name, a file, an earlier message), use <recall> before answering. Never make up what was said, decided or written: check it (<recall>, <search>, <read>${web ? ', <web_search>' : ''}) or say you do not remember.`);
   }
-  rules.push(subagents
+  if (!subagentRole) rules.push(subagents
     ? `For a request with several steps, write a <plan>: each task is carried out by a sub-agent, in order${parallel ? ' (consecutive @parallel tasks, touching different files, at the same time)' : ', one at a time'}; you get their reports. Write each task so that it can be done alone (goal, files). Do not do the tasks yourself: answer from the reports, or write a new <plan> for what is missing.`
     : 'Several steps: write a <plan> first, then do the tasks in order.');
   if (subagents) {

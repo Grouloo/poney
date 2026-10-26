@@ -83,7 +83,8 @@ export function subAgentTask(plan, task, request) {
   return [
     'You are one of several agents carrying out a plan, one task each. Do ONLY your task; the others are done by other agents.',
     req ? `\nThe user's request:\n${req.length > 3000 ? `${req.slice(0, 3000)}…` : req}` : '',
-    `\nThe plan:\n${formatPlan(plan, task)}`,
+    // (numbered, without "- [ ]" or @parallel: not a <plan> to write again)
+    `\nThe plan, already written (do not write it again):\n${plan.tasks.map((t, i) => `${i + 1}. ${t.text}${t === task ? '   <- YOUR TASK' : t.status === 'done' ? '   (done)' : ''}`).join('\n')}`,
     before.length ? `\nReports of the tasks already done:\n${before.map((t) => `- ${t.text}: ${t.report.length > 800 ? `${t.report.slice(0, 800)}…` : t.report}`).join('\n')}` : '',
     `\nYOUR TASK: ${task.text}`,
   ].join('\n');
