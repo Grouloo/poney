@@ -223,3 +223,27 @@ test('the digest of the turn keeps its latest steps when too long', async () => 
   assert.match(d, /^\[… earlier steps left out\]\n\nMAIN AGENT:\nstep 3[\s\S]*step 4/);
   assert.doesNotMatch(d, /step [12]/);
 });
+
+test('a sub-agent sees what the earlier ones changed, even beyond their task, and is told not to redo it', async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-plan-'));
+  let main = 0;
+  const f = await fake((r) => {
+    if (isSub(r)) {
+      const last = r.messages.at(-1).content;
+      if (taskOf(r) === 'Write a' && !/<result/.test(last)) return '<write path="a.md">\nA\n</write>\n<write path="b.md">\nB\n</write>';
+      return `Did ${taskOf(r)}.`;
+    }
+    return ++main === 1 ? '<plan>\n- Write a\n- Write b\n</plan>' : 'Done.';
+  });
+  const agent = new Agent({ cwd, config: { baseUrl: f.url, model: 'm', approval: 'auto', shellEnabled: false } });
+  try {
+    await agent.send('write a and b');
+  } finally {
+    f.server.close();
+  }
+  const second = f.requests.find((r) => isSub(r) && taskOf(r) === 'Write b').messages.at(-1).content;
+  assert.match(second, /What the earlier agents changed \(files, commands\):\n- Write a: wrote a\.md; wrote b\.md/);
+  assert.match(second, /if your task is already done, check that it works and report that, without redoing it/);
+  const first = f.requests.find((r) => isSub(r) && taskOf(r) === 'Write a').messages.at(-1).content;
+  assert.doesNotMatch(first, /earlier agents/);
+});

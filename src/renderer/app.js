@@ -691,9 +691,19 @@ function drawStreaming() {
   const t0 = performance.now();
   for (const b of dirty) {
     if (b.ended) continue;
+    // Reasoning written in the answer itself (<think>, or <reasoning> as in the
+    // notes of the history, which the model imitates after a tool result): shown
+    // live too, not only once the generation is over.
+    const inline = splitThinking(b.raw).thinking;
+    if (inline.trim() && !b.thinkingEl) {
+      b.thinkingEl = document.createElement('details');
+      b.thinkingEl.className = 'thinking';
+      b.thinkingEl.innerHTML = '<summary>Réflexion…</summary><div></div>';
+      b.el.insertBefore(b.thinkingEl, b.bubble);
+    }
     if (b.thinkingEl) {
-      b.thinkingEl.querySelector('summary').textContent = `Réflexion… ${b.thinkPieces} tokens`;
-      b.thinkingEl.querySelector('div').textContent = b.thinking;
+      b.thinkingEl.querySelector('summary').textContent = b.thinkPieces ? `Réflexion… ${b.thinkPieces} tokens` : 'Réflexion…';
+      b.thinkingEl.querySelector('div').textContent = b.thinking + inline;
     }
     const { text, pending } = streamingDisplay(b.raw);
     const tool = b.toolPending && b.toolName ? ` (${esc(b.toolName)})` : '';
@@ -882,6 +892,7 @@ function onEvent(ev) {
         b.el.insertBefore(b.thinkingEl, b.bubble);
       } else if (b.thinkingEl) {
         b.thinkingEl.querySelector('summary').textContent = b.thinkPieces ? `Réflexion (${b.thinkPieces} tokens)` : 'Réflexion';
+        if (!b.thinking && ev.thinking) b.thinkingEl.querySelector('div').textContent = ev.thinking.trim(); // (written in the answer: as kept)
       }
       if (ev.text) b.bubble.innerHTML = markdown(ev.text);
       else if (!thinking) b.el.remove();

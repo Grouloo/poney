@@ -46,7 +46,7 @@ export function mergePlan(prev, written) {
     if (done[k] !== undefined) return { text: t.text, parallel: t.parallel, status: 'done', report: done[k] };
     return { text: t.text, parallel: t.parallel, status: t.done ? 'done' : 'pending', report: '' };
   });
-  return { tasks, done };
+  return { tasks, done, work: [...(prev?.work || [])] };
 }
 
 /** The next tasks to run: the first pending one, with the @parallel ones right after it if it is one too. */
@@ -105,13 +105,18 @@ export function turnDigest(messages, maxChars = 6000) {
 export function subAgentTask(plan, task, request, digest = '') {
   const req = String(request || '').trim();
   const before = plan.tasks.filter((t) => t.status === 'done' && t.report);
+  const work = (plan.work || []).slice(-12).map((w) => `- ${w.task}: ${w.items.slice(-15).join('; ')}`);
   return [
     'You are one of several agents carrying out a plan, one task each. Do ONLY your task; the others are done by other agents.',
     req ? `\nThe user's request:\n${req.length > 3000 ? `${req.slice(0, 3000)}…` : req}` : '',
     digest ? `\nWhat the main agent did in this turn before the plan (what it read and found: do not redo it):\n${digest}\n[end of the main agent's steps]` : '',
     // (numbered, without "- [ ]" or @parallel: not a <plan> to write again)
     `\nThe plan, already written (do not write it again):\n${plan.tasks.map((t, i) => `${i + 1}. ${t.text}${t === task ? '   <- YOUR TASK' : t.status === 'done' ? '   (done)' : ''}`).join('\n')}`,
-    before.length ? `\nReports of the tasks already done:\n${before.map((t) => `- ${t.text}: ${t.report.length > 800 ? `${t.report.slice(0, 800)}…` : t.report}`).join('\n')}` : '',
+    before.length ? `\nReports of the tasks already done:\n${before.map((t) => `- ${t.text}: ${t.report.length > 1500 ? `${t.report.slice(0, 1500)}…` : t.report}`).join('\n')}` : '',
+    work.length ? `\nWhat the earlier agents changed (files, commands):\n${work.join('\n')}` : '',
+    before.length || work.length
+      ? '\nThe earlier agents may have done more than their own task, even part or all of yours. Before working, check what they changed. Do only what is still missing; if your task is already done, check that it works and report that, without redoing it.'
+      : '',
     `\nYOUR TASK: ${task.text}`,
   ].join('\n');
 }

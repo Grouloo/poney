@@ -133,6 +133,7 @@ export class Agent extends EventEmitter {
     // State shared by an agent and its sub-agents: versions of the files they
     // write (to refuse writing over another agent's changes) and per-file locks.
     this.shared = shared || { versions: new Map(), locks: new Map() };
+    this.subWork = new Map(); // sub-agent id -> what it changed (see runSubAgent)
     this.readVersions = new Map(); // file -> version this agent last read or wrote
     this.messages = [];
     this.untested = false; // files changed since the last successful command
@@ -557,7 +558,18 @@ export class Agent extends EventEmitter {
     let error = null;
     let stats = null;
     let endReason = null;
+    // What it changed (files, commands), whatever its report says: for the
+    // next agents of a plan, which may find their task already done.
+    const started = new Map();
+    const work = [];
+    this.subWork.set(id, work);
     child.on('event', (ev) => {
+      if (ev.type === 'action_start') started.set(ev.id, ev);
+      if (ev.type === 'action_end' && ev.ok) {
+        const a = started.get(ev.id);
+        if (a?.tool === 'write' || a?.tool === 'edit') work.push(`${a.tool === 'write' ? 'wrote' : 'edited'} ${String(a.args.path || '').trim()}`);
+        if (a?.tool === 'run') work.push(`ran \`${String(a.args.command || '').replace(/\s+/g, ' ').slice(0, 160)}\`${ev.meta?.exit !== undefined ? ` (exit ${ev.meta.exit})` : ''}`);
+      }
       if (ev.type === 'final') report = ev.text;
       if (ev.type === 'error') error = ev.message;
       if (ev.type === 'turn_end') { stats = ev.stats; endReason = ev.reason; return; }
@@ -640,6 +652,9 @@ export class Agent extends EventEmitter {
       group.forEach((t, k) => {
         const ok = /\bstatus="done"/.test(results[k]);
         const report = results[k].replace(/^<result[^>]*>\n?|\n?<\/result>$/g, '').trim();
+        const work = [...new Set(this.subWork.get(ids[k]) || [])];
+        this.subWork.delete(ids[k]);
+        if (work.length) plan.work.push({ task: t.text, items: work });
         setStatus(plan, t, ok ? 'done' : 'failed', report);
         if (!ok) failed = true;
         reports.push(`${ok ? '' : '[FAILED] '}${t.text}:\n${report}`);
