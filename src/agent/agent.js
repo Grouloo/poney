@@ -553,6 +553,7 @@ export class Agent extends EventEmitter {
       config: this.config,
       role: 'sub',
       shared: this.shared,
+      triage: this.steps?.triage ?? this.triageByDefault, // its own assessment, as its parent's conversation says
       approve: (req) => this.approve({ ...req, agentTitle: title }),
     });
     child.serverCtx = this.serverCtx;
@@ -1089,7 +1090,7 @@ export class Agent extends EventEmitter {
       const stopped = () => Object.assign(new Error('aborted'), { name: 'AbortError' });
       // The assessment before acting: what the model knows, doubts and does not know.
       // The route (act directly, check, read several sources) is the app's decision.
-      if (!resume && this.role === 'main' && (this.steps?.triage ?? this.triageByDefault)) {
+      if (!resume && (this.steps?.triage ?? this.triageByDefault)) {
         await this.maybeCompact(system, signal);
         this.emit('event', { type: 'triage_start', turnId });
         triage = await this.assess(system, signal);

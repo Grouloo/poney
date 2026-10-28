@@ -137,6 +137,8 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   something interesting but not needed for the task is left out, not chased). The update replaces the previous
   assessment and its route counts the sources read from then on. Against detours: at most 3 updates and 3 refused
   answers per turn, 3 items per list. Shown where it was made ("🧭 Bilan mis à jour").
+  Sub-agents (`<agent>` and plan tasks) do the same on their own task, when their conversation has it on; in a
+  plan, the update names the sub-agent's own task, not the context it was given. Shown in the sub-agent's panel.
 - **Command approval** (unless "sans confirmation" is checked): Exécuter, Toujours autoriser, or Refuser, with an
   optional reason that is passed on to the model, so it can change its approach.
 - **Context gauge** under the input (the tick marks the compaction threshold); a click compacts on demand.

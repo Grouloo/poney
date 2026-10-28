@@ -57,7 +57,9 @@ export function needsUpdate(results, updatesSoFar) {
 }
 
 export function triageUpdateInstruction(task) {
-  const t = String(task ?? '').replace(/\s+/g, ' ').trim();
+  // (a sub-agent of a plan: its own task, not the context it was given with it)
+  const own = String(task ?? '').match(/\nYOUR TASK: ([\s\S]+)$/);
+  const t = (own ? own[1] : String(task ?? '')).replace(/\s+/g, ' ').trim();
   return [
     '(Before you go on, the app asks you to update your assessment from the results above. Do NOT go on with the task and do NOT use any tool now.',
     t ? `Your current task: ${t.length > 400 ? `${t.slice(0, 400)}…` : t}` : '',

@@ -1025,19 +1025,20 @@ function onEvent(ev) {
     }
     case 'triage_start': {
       if (replaying) break;
-      if (ev.update) { add(div('triage pending', '<span class="spin">◌</span> Mise à jour du bilan…')); break; }
-      const msg = [...(target || transcript).querySelectorAll('.msg.user')].pop();
-      if (msg) msg.appendChild(div('triage pending', '<span class="spin">◌</span> Bilan avant d’agir…'));
+      const text = ev.update ? 'Mise à jour du bilan…' : 'Bilan avant d’agir…';
+      // (a sub-agent's view has no user message: its assessment goes in its log)
+      const msg = ev.update ? null : [...(target || transcript).querySelectorAll('.msg.user')].pop();
+      if (msg) msg.appendChild(div('triage pending', `<span class="spin">◌</span> ${text}`));
+      else add(div('triage pending', `<span class="spin">◌</span> ${text}`));
       break;
     }
     case 'triage': {
       // The assessment before acting, under the user message (its updates after outside
       // results, where they were made): what the model knows, doubts and does not know,
       // and the route the app chose.
-      const where = ev.update ? (target || transcript) : [...(target || transcript).querySelectorAll('.msg.user')].pop();
-      if (!where) break;
-      where.querySelectorAll('.triage.pending').forEach((p) => p.remove());
-      const place = (el) => (ev.update ? add(el) : where.appendChild(el));
+      const msg = ev.update || target ? null : [...transcript.querySelectorAll('.msg.user')].pop();
+      (target || transcript).querySelectorAll('.triage.pending').forEach((p) => p.remove());
+      const place = (el) => (msg ? msg.appendChild(el) : add(el));
       if (ev.failed) { place(div('triage', `🧭 ${ev.update ? 'Mise à jour du bilan illisible' : 'Bilan illisible'} : l’agent continue sans.`)); break; }
       const route = { direct: 'agir directement', check: 'vérifier d’abord', investigate: 'lire plusieurs sources' }[ev.route];
       const count = (n, one, many) => (n ? `${n} ${n > 1 ? many : one}` : '');

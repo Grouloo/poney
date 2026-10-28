@@ -166,3 +166,42 @@ test('updates are capped per answer, and short outputs do not call for one', asy
   assert.equal(f.requests.filter(isUpdate).length, 3); // 5 long outputs, 3 updates at most
   assert.ok(!f.requests.some((r) => isUpdate(r) && /command="echo ok"/.test(lastUser(r)))); // "ok": nothing to reassess
 });
+
+test('sub-agents make their own assessment, with the same route and refusals', async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-triage-'));
+  await fs.writeFile(path.join(cwd, 'a.txt'), 'alpha');
+  await fs.writeFile(path.join(cwd, 'b.txt'), 'beta');
+  const isSubReq = (r) => r.messages.some((m) => m.role === 'user' && /Find what a\.txt and b\.txt hold/.test(m.content) && !/<agent/.test(m.content));
+  let main = 0;
+  let sub = 0;
+  const f = await fake((r) => {
+    if (isSubReq(r)) {
+      if (isTriage(r)) return '{"known": [], "doubts": [], "unknowns": [{"point": "the content of a.txt and b.txt", "why": "never read"}]}';
+      sub++;
+      if (sub === 1) return 'They hold text.';
+      if (sub === 2) return '<read path="a.txt" />';
+      if (sub === 3) return '<read path="b.txt" />';
+      return 'alpha and beta';
+    }
+    if (isTriage(r)) return '{"known": ["a sub-agent can look"], "doubts": [], "unknowns": []}';
+    return ++main === 1 ? '<agent title="look">\nFind what a.txt and b.txt hold\n</agent>' : 'They hold alpha and beta.';
+  });
+  const agent = new Agent({ cwd, triage: true, config: { baseUrl: f.url, model: 'm', shellEnabled: false } });
+  const events = [];
+  agent.on('event', (e) => events.push(e));
+  try {
+    await agent.send('what is in a.txt and b.txt? use a sub-agent');
+  } finally {
+    f.server.close();
+  }
+  const subTriage = events.find((e) => e.type === 'triage' && e.agentId);
+  assert.equal(subTriage?.route, 'investigate');
+  assert.ok(events.some((e) => e.type === 'notice' && e.agentId && /refusée/.test(e.text)));
+  assert.match(events.find((e) => e.type === 'action_end' && e.meta?.title === 'look').output, /alpha and beta/);
+});
+
+test('in a plan, the update names the sub-agent\'s own task, not the context it was given', async () => {
+  const { triageUpdateInstruction } = await import('../src/agent/triage.js');
+  const text = triageUpdateInstruction('You are one of several agents…\n\nThe plan:\n1. A\n2. B\n\nYOUR TASK: Write the docs');
+  assert.match(text, /Your current task: Write the docs\n/);
+});
