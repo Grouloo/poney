@@ -5,8 +5,8 @@
   --border: #2e2f39;
   --text: #e7e5e1;
   --muted: #8f8e99;
-  --accent: #9aa8ff;
-  --accent-2: #5d6bd8;
+  --accent: #7fb2ff;
+  --accent-2: #3576d9;
   --ok: #4cc38a;
   --err: #f0616d;
   --warn: #e6b450;
@@ -39,7 +39,7 @@
 @media (prefers-color-scheme: light) {
   :root {
     --bg: #f5f3ef; --panel: #fbfaf8; --panel-2: #eeebe6; --border: #dedad3;
-    --text: #22201d; --muted: #75716b; --accent: #4651c9; --accent-2: #3a44b3;
+    --text: #22201d; --muted: #75716b; --accent: #1f6fd1; --accent-2: #1a5fb8;
     --ok: #15803d; --err: #c62828; --warn: #a16207;
     --add-bg: rgba(21, 128, 61, 0.1); --del-bg: rgba(198, 40, 40, 0.1);
     --surface: rgba(255, 254, 251, 0.6); --surface-2: rgba(232, 228, 221, 0.6);
