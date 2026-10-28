@@ -15,7 +15,7 @@
   /* Translucent surfaces (sidebar, cards, composer): the grain and the gradient show through. */
   --surface: rgba(28, 29, 36, 0.62);
   --surface-2: rgba(42, 43, 53, 0.55);
-  --glow-1: rgba(112, 122, 255, 0.17);
+  --glow-1: rgba(70, 140, 255, 0.17);
   --glow-2: rgba(232, 150, 108, 0.11);
   --glow-3: rgba(90, 190, 180, 0.07);
   --grain-opacity: 0.085;
@@ -23,7 +23,7 @@
   --sheet: rgba(26, 27, 34, 0.9);
   --sheet-solid: #1b1c23;
   --float: inset 0 1px 0 rgba(255, 255, 255, 0.07), 0 0 0 1px rgba(0, 0, 0, 0.35), 0 2px 6px rgba(0, 0, 0, 0.25), 0 18px 48px rgba(0, 0, 0, 0.45);
-  --side: linear-gradient(175deg, rgba(112, 122, 255, 0.13), rgba(112, 122, 255, 0.03) 45%, rgba(232, 150, 108, 0.07)), rgba(18, 18, 23, 0.35);
+  --side: linear-gradient(175deg, rgba(70, 140, 255, 0.13), rgba(70, 140, 255, 0.03) 45%, rgba(232, 150, 108, 0.07)), rgba(18, 18, 23, 0.35);
   /* Liquid glass (buttons, dialogs): a blurred, tinted pane with a lit top edge. */
   --glass: rgba(255, 255, 255, 0.055);
   --glass-strong: rgba(30, 31, 40, 0.62);
@@ -43,11 +43,11 @@
     --ok: #15803d; --err: #c62828; --warn: #a16207;
     --add-bg: rgba(21, 128, 61, 0.1); --del-bg: rgba(198, 40, 40, 0.1);
     --surface: rgba(255, 254, 251, 0.6); --surface-2: rgba(232, 228, 221, 0.6);
-    --glow-1: rgba(110, 120, 240, 0.10); --glow-2: rgba(240, 160, 110, 0.12); --glow-3: rgba(90, 180, 170, 0.07);
+    --glow-1: rgba(70, 135, 235, 0.10); --glow-2: rgba(240, 160, 110, 0.12); --glow-3: rgba(90, 180, 170, 0.07);
     --grain-opacity: 0.07;
     --sheet: rgba(253, 252, 249, 0.9); --sheet-solid: #fbfaf7;
     --float: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 0 0 1px rgba(70, 60, 50, 0.08), 0 2px 6px rgba(70, 60, 50, 0.08), 0 18px 44px rgba(70, 60, 50, 0.16);
-    --side: linear-gradient(175deg, rgba(110, 120, 240, 0.12), rgba(110, 120, 240, 0.02) 45%, rgba(240, 160, 110, 0.1)), rgba(255, 253, 249, 0.3);
+    --side: linear-gradient(175deg, rgba(70, 135, 235, 0.12), rgba(70, 135, 235, 0.02) 45%, rgba(240, 160, 110, 0.1)), rgba(255, 253, 249, 0.3);
     --glass: rgba(255, 255, 255, 0.42); --glass-strong: rgba(252, 250, 246, 0.6); --glass-edge: rgba(255, 255, 255, 0.75);
     --glass-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0) 60%);
     --glass-light: inset 0 1px 0 rgba(255, 255, 255, 0.9), inset 0 -1px 0 rgba(0, 0, 0, 0.05);
