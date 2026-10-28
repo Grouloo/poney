@@ -128,6 +128,7 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
 - **Command approval** (unless "sans confirmation" is checked): Exécuter, Toujours autoriser, or Refuser, with an
   optional reason that is passed on to the model, so it can change its approach.
 - **Context gauge** under the input (the tick marks the compaction threshold); a click compacts on demand.
+  Each sub-agent has its own, on its card and in its panel (kept with its result).
   Summaries appear in the transcript, expandable.
 - **Prompt reading progress** (LM Studio): percentage and estimated time left in the status bar before the first
   token. LM Studio is detected automatically behind "OpenAI compatible": the prompt is read through its SDK (which

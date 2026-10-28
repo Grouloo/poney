@@ -14,6 +14,7 @@ const form = $('settingsForm');
 
 let settings = null;
 let running = false;
+const agentContext = new Map(); // sub-agent id -> its latest context figures
 const bubbles = new Map(); // assistant id -> {el, raw, thinking}
 const cards = new Map(); // action id -> card element
 
@@ -249,6 +250,7 @@ function renderAgentPanelHead() {
   $('agentPanelInfo').textContent = card ? (card.classList.contains('running') ? 'en cours' : card.classList.contains('ok') ? 'terminé' : 'échec') : '';
   document.querySelectorAll('.card.subagent.shown').forEach((c) => c.classList.remove('shown'));
   card?.classList.add('shown');
+  renderGauge(agentContext.get(panelAgent), $('agentPanelGauge'), { sub: true });
 }
 
 function openAgentPanel(id) {
@@ -309,6 +311,7 @@ function clearTranscript() {
   closeLivePanel();
   closeAgentPanel();
   agentViews.clear();
+  agentContext.clear();
   renderMemory([]);
   renderPlan([]);
   transcript.innerHTML = '';
@@ -424,6 +427,7 @@ function replayTranscript(events) {
   closeLivePanel(); // (the answers are drawn again)
   const shownAgent = panelAgent;
   agentViews.clear();
+  agentContext.clear();
   renderPlan([]); // the last plan event of the conversation shows it again
   renderMemory([]); // (same for the memory)
   transcript.innerHTML = '';
@@ -810,6 +814,13 @@ function onEvent(ev) {
     const card = cards.get(ev.agentId);
     const log = agentViews.get(ev.agentId)?.querySelector('.sub-log');
     if (!card || !log || ev.type === 'final' || ev.type === 'plan' || ev.type === 'memory') return; // (a sub-agent's own plan/memory are not shown)
+    if (ev.type === 'context') {
+      // Its own context: on its card, and in the panel when it is the one shown.
+      agentContext.set(ev.agentId, ev);
+      renderGauge(ev, card.querySelector('.sub-gauge'), { sub: true });
+      if (panelAgent === ev.agentId) renderGauge(ev, $('agentPanelGauge'), { sub: true });
+      return;
+    }
     if (ev.type === 'delta') {
       card.dataset.tokens = Number(card.dataset.tokens || 0) + 1;
       card.querySelector('.sub-tokens').textContent = `${card.dataset.tokens} tokens`;
@@ -904,7 +915,7 @@ function onEvent(ev) {
         // Sub-agent card: compact (its latest activity, then the start of its report); a click shows
         // its whole work in the side panel (its task, a live log, its report).
         const card = div('card subagent running');
-        card.innerHTML = `<div class="card-head"><span class="status"><span class="spin">◌</span></span><span class="tool">Sous-agent</span><span class="summary"></span><span class="tag sub-tokens"></span><span class="sub-open">›</span></div><div class="sub-line">démarre…</div>`;
+        card.innerHTML = `<div class="card-head"><span class="status"><span class="spin">◌</span></span><span class="tool">Sous-agent</span><span class="summary"></span><span class="tag sub-tokens"></span><span class="gauge sub-gauge hidden"><span class="gauge-bar"><span class="gauge-fill"></span><span class="gauge-mark"></span></span></span><span class="sub-open">›</span></div><div class="sub-line">démarre…</div>`;
         card.querySelector('.summary').textContent = ev.args.title || 'sous-agent';
         card.title = 'Voir son travail dans le panneau de droite';
         const view = div('agent-view');
@@ -967,6 +978,10 @@ function onEvent(ev) {
         const m = ev.meta || {};
         const parts = [m.ms ? fmtDuration(m.ms) : '', m.steps ? `${m.steps} étapes` : ''].filter(Boolean);
         if (parts.length) card.querySelector('.sub-tokens').textContent = parts.join(' · ');
+        if (m.context) {
+          agentContext.set(ev.id, m.context);
+          renderGauge(m.context, card.querySelector('.sub-gauge'), { sub: true });
+        }
         if (panelAgent === ev.id) renderAgentPanelHead();
         break;
       }
@@ -1671,10 +1686,11 @@ $('promptSave').onclick = async () => {
 // ---------- context gauge ----------
 const fmtTokens = (n) => (n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n));
 
-function renderGauge(c) {
-  const g = $('ctxGauge');
+/** A context gauge: the conversation's (under the input), or a sub-agent's (sub: on its card and in its panel). */
+function renderGauge(c, g = $('ctxGauge'), { sub = false } = {}) {
+  g.classList.toggle('hidden', sub && !c);
   if (!c) {
-    g.querySelector('.gauge-text').textContent = 'contexte';
+    if (g.querySelector('.gauge-text')) g.querySelector('.gauge-text').textContent = sub ? '' : 'contexte';
     g.querySelector('.gauge-fill').style.width = '0';
     g.title = '';
     return;
@@ -1682,18 +1698,18 @@ function renderGauge(c) {
   const pct = Math.min(100, (c.used / c.numCtx) * 100);
   g.querySelector('.gauge-fill').style.width = `${pct}%`;
   g.querySelector('.gauge-mark').style.left = `${(c.compactAt / c.numCtx) * 100}%`;
-  g.querySelector('.gauge-text').textContent = `${fmtTokens(c.used)} / ${fmtTokens(c.numCtx)}`;
+  if (g.querySelector('.gauge-text')) g.querySelector('.gauge-text').textContent = `${fmtTokens(c.used)} / ${fmtTokens(c.numCtx)}`;
   g.classList.toggle('warn', c.used >= c.compactAt * 0.85);
   g.classList.toggle('full', c.used >= c.limit);
   g.title = [
-    `Contexte utilisé (estimé) : ${c.used} tokens sur ${c.numCtx}`,
+    `${sub ? 'Contexte du sous-agent' : 'Contexte utilisé'} (estimé) : ${c.used} tokens sur ${c.numCtx}`,
     `Compactage automatique seulement quand l’appel suivant ne tiendrait plus : vers ${c.compactAt} tokens (trait vertical)`,
     c.serverCtx && c.serverCtx < c.settingCtx
       ? `Le serveur a chargé le modèle avec ${c.serverCtx} tokens de contexte : c’est cette limite qui est utilisée (réglage : ${c.settingCtx})`
       : '',
     c.calibrated ? 'Estimation calibrée sur les comptes du serveur (marge 4 %)' : 'Estimation pas encore calibrée (marge 8 %)',
     c.measured ? `Dernière mesure du serveur : ${c.measured} tokens` : '',
-    'Cliquer pour compacter maintenant',
+    sub ? '' : 'Cliquer pour compacter maintenant',
   ].filter(Boolean).join('\n');
 }
 

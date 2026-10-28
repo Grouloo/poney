@@ -564,7 +564,9 @@ export class Agent extends EventEmitter {
     const started = new Map();
     const work = [];
     this.subWork.set(id, work);
+    let context = null; // its latest context figures (kept with its result: shown again on reload)
     child.on('event', (ev) => {
+      if (ev.type === 'context') context = ev;
       if (ev.type === 'action_start') started.set(ev.id, ev);
       if (ev.type === 'action_end' && ev.ok) {
         const a = started.get(ev.id);
@@ -574,7 +576,7 @@ export class Agent extends EventEmitter {
       if (ev.type === 'final') report = ev.text;
       if (ev.type === 'error') error = ev.message;
       if (ev.type === 'turn_end') { stats = ev.stats; endReason = ev.reason; return; }
-      if (ev.type === 'turn_start' || ev.type === 'context') return;
+      if (ev.type === 'turn_start') return;
       this.emit('event', { ...ev, agentId: id }); // shown inside the sub-agent's card
     });
     const onAbort = () => child.stop();
@@ -586,7 +588,7 @@ export class Agent extends EventEmitter {
     }
     const ok = Boolean(report) && endReason === 'done';
     const text = report || (error ? `Error: ${error}` : endReason === 'max_steps' ? 'Stopped: step limit reached before the end.' : '(no report)');
-    this.emit('event', { type: 'action_end', id, ok, output: text, meta: { title, steps: stats?.steps, tokens: stats?.tokens, ms: stats?.totalMs } });
+    this.emit('event', { type: 'action_end', id, ok, output: text, meta: { title, steps: stats?.steps, tokens: stats?.tokens, ms: stats?.totalMs, context } });
     return formatResult('agent', { title, status: ok ? 'done' : endReason || 'failed' }, truncateMiddle(text, Math.max(1000, maxReportChars)));
   }
 
