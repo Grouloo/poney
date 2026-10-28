@@ -203,7 +203,7 @@ export class Agent extends EventEmitter {
       offProject: this.offProject,
       memory: this.config.memoryEnabled !== false,
       platform: os.platform() === 'win32' ? `Windows ${os.arch()}, commands run in cmd.exe` : `${os.platform()} ${os.arch()}`,
-      projectNotes: await this.loadProjectNotes(),
+      ...(await this.loadProjectNotes()),
       testCommand: this.config.testCommand,
       shell: this.config.shellEnabled !== false,
       web: this.config.webEnabled !== false,
@@ -331,14 +331,15 @@ export class Agent extends EventEmitter {
     this.abort?.abort();
   }
 
+  /** The project's notes file, for the system prompt: { projectNotes, notesFile } (its name). */
   async loadProjectNotes() {
     for (const name of PROJECT_NOTE_FILES) {
       try {
         const text = await fs.readFile(path.join(this.cwd, name), 'utf8');
-        return truncateMiddle(text.trim(), 3000);
+        return { projectNotes: truncateMiddle(text.trim(), 3000), notesFile: name };
       } catch {}
     }
-    return '';
+    return { projectNotes: '', notesFile: null };
   }
 
   // ----- context management -----

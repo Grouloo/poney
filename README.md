@@ -81,7 +81,9 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   compaction), so the server only reads the new tokens. The compaction summary is requested as a continuation of
   the conversation already in cache (seconds instead of minutes of re-reading on modest hardware).
 - Nudge when the model pastes code instead of writing it to a file.
-- Project notes read from `AGENTS.md` / `PONEY.md` / `CLAUDE.md`.
+- Project notes read from `AGENTS.md` / `PONEY.md` / `CLAUDE.md`. The prompt asks the agent to add there, one short
+  line at a time, what it learns about working on the project and will need again (how to test, conventions, pitfalls,
+  steps the user wants each time); `AGENTS.md` is created if there is none. Not for sub-agents nor outside a project.
 
 ## Interface
 

@@ -138,8 +138,8 @@ export function isToolEnabled(tool, config) {
   return !flag || config[flag] !== false;
 }
 
-export function buildSystemPrompt({ cwd, offProject = false, memory = true, parallel = true, platform, projectNotes, testCommand, shell = true, web = true, subagents = false, subagentRole = false }) {
-  const notes = projectNotes ? `\nPROJECT NOTES (from the repo):\n${projectNotes}\n` : '';
+export function buildSystemPrompt({ cwd, offProject = false, memory = true, parallel = true, platform, projectNotes, notesFile = null, testCommand, shell = true, web = true, subagents = false, subagentRole = false }) {
+  const notes = projectNotes ? `\nPROJECT NOTES (from ${notesFile || 'the repo'}):\n${projectNotes}\n` : '';
   const testLine = testCommand && shell
     ? `\nThe project test command is: ${testCommand}\nIt is run automatically when you finish; make it pass.`
     : '';
@@ -189,6 +189,11 @@ export function buildSystemPrompt({ cwd, offProject = false, memory = true, para
   }
   if (memory && !subagentRole) {
     rules.push('Long conversations get compacted and details are lost. As soon as the user states a preference (how to answer, tone, language), a constraint or a decision, keep it with <remember> before answering (not what is in files). One short sentence per note; <forget> notes that are no longer true.');
+  }
+  if (!subagentRole && !offProject) {
+    // (memory is for this conversation; the notes file, for all the next ones)
+    const file = notesFile || 'AGENTS.md';
+    rules.push(`${file} at the root of the project is given to you at the start of EVERY conversation in this project${notesFile ? ' (PROJECT NOTES below)' : ''}. When you learn something about how to work on this project that you will need again (how to run or test it, a convention, a pitfall you hit, a step the user wants each time), add it there with <edit>${notesFile ? '' : ' (create it with <write> if missing)'}: one short line, under a fitting heading. Only what lasts beyond this conversation${memory ? ' (for this conversation only, use <remember>)' : ''}.`);
   }
   if (!subagentRole) {
     rules.push(`Older parts of a long conversation get compacted: they are no longer in view. When the user refers to something you do not see here (a decision, a name, a file, an earlier message), use <recall> before answering. Never make up what was said, decided or written: check it (<recall>, <search>, <read>${web ? ', <web_search>' : ''}) or say you do not remember.`);
