@@ -67,9 +67,11 @@ async function listTool(cwd, args) {
 
 // ---------- read ----------
 async function readTool(cwd, args, ctx = {}) {
-  const { abs, rel } = resolveInside(cwd, args.path);
-  let content;
-  try { content = await fs.readFile(abs, 'utf8'); } catch (e) {
+  // Texts given to a sub-agent to read like files (the main agent's steps, see turnDigest).
+  const virtual = ctx.virtualFiles?.get(String(args.path ?? '').trim());
+  const { abs, rel } = virtual !== undefined ? { abs: null, rel: String(args.path).trim() } : resolveInside(cwd, args.path);
+  let content = virtual;
+  if (virtual === undefined) try { content = await fs.readFile(abs, 'utf8'); } catch (e) {
     if (e.code === 'ENOENT') throw new ToolError(`File "${rel}" does not exist. Use <list /> to see files.`);
     if (e.code === 'EISDIR') throw new ToolError(`"${rel}" is a folder. Use <list path="${rel}" />.`);
     throw new ToolError(`Cannot read "${rel}": ${e.message}`);
@@ -83,7 +85,7 @@ async function readTool(cwd, args, ctx = {}) {
   const body = all.slice(start - 1, end).map((l, i) => `${String(start + i).padStart(width)}| ${l}`).join('\n');
   let note = '';
   if (end < all.length) note = `\n[showing lines ${start}-${end} of ${all.length}. Use <read path="${rel}" start="${end + 1}" /> for more]`;
-  ctx.readVersions?.set(rel, ctx.shared?.versions.get(rel) ?? 0); // the version this agent has seen
+  if (virtual === undefined) ctx.readVersions?.set(rel, ctx.shared?.versions.get(rel) ?? 0); // the version this agent has seen
   return { output: (body || '(empty file)') + note, meta: { path: rel, lines: `${start}-${end}` } };
 }
 

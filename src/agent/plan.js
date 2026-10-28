@@ -73,28 +73,97 @@ export function formatPlan(plan, mark = null) {
   return plan.tasks.map((t) => `- ${BOX[t.status]} ${t.parallel ? '@parallel ' : ''}${t.text}${t === mark ? '   <- YOUR TASK' : ''}`).join('\n');
 }
 
+/** The name under which a sub-agent reads step n of the main agent's turn in full (see turnDigest). */
+export const turnStepPath = (n) => `@turn/${n}`;
+
 /**
  * What the main agent did in this turn before its plan (its messages and the
- * results it got), for the sub-agents: they would otherwise read again what it
- * has already read, or miss what it found. Each step cut short; when too long,
- * the latest steps (closest to the plan).
+ * results it got), for a sub-agent: it would otherwise read again what the main
+ * agent has already read, or miss what it found.
+ *
+ * The steps that concern the sub-agent's task (they name its files, or several of
+ * its words) are kept much longer than the others; when everything does not fit,
+ * the oldest steps unrelated to the task go first. A step cut short is cut in the
+ * middle (a command's error is at its end), and says where to read it in full:
+ * each step is put in `outputs` under turnStepPath(n), which the sub-agent reads
+ * with <read> like a file. Without that, a sub-agent whose task needs a cut part
+ * goes round in circles looking for it.
  */
-export function turnDigest(messages, maxChars = 6000) {
-  const cut = (s, n) => (s.length > n ? `${s.slice(0, n)}\n[… cut]` : s);
+export function turnDigest(messages, { maxChars = 6000, task = '', outputs = null } = {}) {
+  if (typeof arguments[1] === 'number') maxChars = arguments[1]; // (older form: the size alone)
+  const terms = digestTerms(task);
   const steps = messages
-    .filter((m) => m.content?.trim())
-    .map((m) => (m.role === 'assistant' ? `MAIN AGENT:\n${cut(m.content.trim(), 1000)}` : cut(m.content.trim(), 1500)));
-  const kept = [];
-  let size = 0;
-  for (let i = steps.length - 1; i >= 0; i--) {
-    if (size + steps[i].length > maxChars) {
-      kept.unshift('[… earlier steps left out]');
-      break;
+    .map((m, i) => ({ m, n: i + 1 }))
+    .filter(({ m }) => m.content?.trim())
+    .map(({ m, n }) => {
+      const full = m.content.trim();
+      outputs?.set(turnStepPath(n), full);
+      const relevant = isRelevant(full, terms);
+      const limit = m.role === 'assistant' ? (relevant ? 3000 : 1000) : relevant ? Math.max(1500, Math.floor(maxChars / 2)) : 1500;
+      const body = cutStep(full, limit, outputs ? turnStepPath(n) : null);
+      return { n, relevant, text: m.role === 'assistant' ? `MAIN AGENT:\n${body}` : body };
+    });
+  // Over budget: the oldest unrelated steps first, then the oldest related ones.
+  let size = steps.reduce((k, s) => k + s.text.length + 2, 0);
+  const dropped = new Set();
+  for (const pass of [false, true]) {
+    for (const s of steps) {
+      if (size <= maxChars) break;
+      if (s.relevant !== pass || s === steps[steps.length - 1]) continue;
+      dropped.add(s);
+      size -= s.text.length + 2;
     }
-    size += steps[i].length;
-    kept.unshift(steps[i]);
   }
-  return kept.join('\n\n');
+  const out = [];
+  let gap = [];
+  const flushGap = () => {
+    if (!gap.length) return;
+    out.push(`[… ${gap.length} step(s) left out${outputs ? `: <read path="${turnStepPath(gap[0])}" />${gap.length > 1 ? ` to <read path="${turnStepPath(gap[gap.length - 1])}" />` : ''} if you need them` : ''}]`);
+    gap = [];
+  };
+  for (const s of steps) {
+    if (dropped.has(s)) { gap.push(s.n); continue; }
+    flushGap();
+    out.push(s.text);
+  }
+  flushGap();
+  return out.join('\n\n');
+}
+
+/** A step cut to `limit` characters in the middle, saying what was cut and where to read it. */
+function cutStep(text, limit, readPath) {
+  if (text.length <= limit) return text;
+  // Cut at line ends when there are some near the limits (so the line numbers are exact).
+  let head = Math.floor(limit * 0.4);
+  const nl = text.lastIndexOf('\n', head);
+  if (nl > head * 0.5) head = nl;
+  let to = text.length - (limit - head);
+  const nl2 = text.indexOf('\n', to);
+  if (nl2 >= 0 && nl2 - to < limit * 0.2) to = nl2 + 1;
+  const from = text.slice(0, head).split('\n').length + (text[head] === '\n' ? 1 : 0); // first line cut
+  const lineTo = text.slice(0, to).split('\n').length - (text[to - 1] === '\n' ? 1 : 0); // last line cut
+  const where = readPath ? ` (lines ${from}-${lineTo}): <read path="${readPath}" start="${from}" end="${lineTo}" /> shows them` : '';
+  return `${text.slice(0, head)}\n[… ${to - head} characters cut${where}]\n${text.slice(to)}`;
+}
+
+const fold = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+const STOP = new Set(['the', 'and', 'for', 'with', 'that', 'this', 'from', 'into', 'your', 'task', 'les', 'des', 'une', 'pour', 'avec', 'dans', 'que', 'qui', 'est', 'sur', 'pas', 'par', 'fichier', 'file', 'files']);
+
+/** What makes a step concern a task: the files it names, and its words (by their root). */
+function digestTerms(task) {
+  const t = String(task || '');
+  const files = [...new Set((t.match(/[\w.-]*[\w-]\.[a-z0-9]{1,6}\b|[\w.-]+\/[\w./-]+/gi) || []).map((f) => fold(f.split('/').pop())).filter((f) => f.length >= 3))];
+  const words = [...new Set(fold(t).split(/[^\p{L}\p{N}_]+/u).filter((w) => w.length >= 4 && !STOP.has(w)).map((w) => (w.length >= 6 ? w.slice(0, Math.max(5, w.length - 2)) : w)))];
+  return { files, words };
+}
+
+function isRelevant(text, { files, words }) {
+  if (!files.length && !words.length) return false;
+  const low = fold(text);
+  if (files.some((f) => low.includes(f))) return true;
+  let hits = 0;
+  for (const w of words) if (low.includes(w) && ++hits >= 2) return true;
+  return false;
 }
 
 /**

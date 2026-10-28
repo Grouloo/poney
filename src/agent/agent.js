@@ -556,6 +556,7 @@ export class Agent extends EventEmitter {
       approve: (req) => this.approve({ ...req, agentTitle: title }),
     });
     child.serverCtx = this.serverCtx;
+    child.virtualFiles = action.outputs ?? null; // the main agent's steps in full (see turnDigest)
     child.serverCtxKey = this.serverCtxKey;
     child.serverCtxAt = this.serverCtxAt;
     let report = null;
@@ -645,8 +646,15 @@ export class Agent extends EventEmitter {
       const cp = this.checkpoints.findLast((c) => c.kind === 'action' && c.actIds.includes(actId));
       if (cp) cp.actIds.push(...ids);
       // (the turn after the request, without the message with the plan)
-      const digest = turnDigest(this.messages.slice((this.turnStartIndex ?? this.messages.length) + 1, -1));
-      const agents = group.map((t) => ({ tool: 'agent', args: { title: t.text.slice(0, 60), task: subAgentTask(plan, t, this.currentTask, digest) } }));
+      // Each sub-agent its own digest: the steps that concern its task are kept longer.
+      // Sized from the window (the same model), and every step readable in full.
+      const turn = this.messages.slice((this.turnStartIndex ?? this.messages.length) + 1, -1);
+      const maxChars = Math.max(6000, Math.min(40000, Math.floor(this.cfg.numCtx * this.charsPerToken * 0.25)));
+      const agents = group.map((t) => {
+        const outputs = new Map();
+        const digest = turnDigest(turn, { maxChars, task: `${t.text}\n${this.currentTask ?? ''}`, outputs });
+        return { tool: 'agent', args: { title: t.text.slice(0, 60), task: subAgentTask(plan, t, this.currentTask, digest) }, outputs };
+      });
       let results;
       try {
         results = await this.runSubAgents(agents, signal, ids);
@@ -1351,6 +1359,7 @@ export class Agent extends EventEmitter {
             seenFiles,
             shared: this.shared,
             readVersions: this.readVersions,
+            virtualFiles: this.virtualFiles,
             onOutput: (t) => this.emit('event', { type: 'action_output', id: actId, text: t }),
           });
           this.emit('event', { type: 'action_end', id: actId, ok: r.ok, output: r.output, diff: r.diff, meta: r.meta });

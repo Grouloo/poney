@@ -220,8 +220,62 @@ test('sub-agents see what the main agent did in this turn before its plan', asyn
 test('the digest of the turn keeps its latest steps when too long', async () => {
   const { turnDigest } = await import('../src/agent/plan.js');
   const d = turnDigest([1, 2, 3, 4].map((i) => ({ role: i % 2 ? 'assistant' : 'user', content: `step ${i} ${'x'.repeat(400)}` })), 900);
-  assert.match(d, /^\[… earlier steps left out\]\n\nMAIN AGENT:\nstep 3[\s\S]*step 4/);
+  assert.match(d, /^\[… 2 step\(s\) left out\]\n\nMAIN AGENT:\nstep 3[\s\S]*step 4/);
   assert.doesNotMatch(d, /step [12]/);
+});
+
+test('the digest keeps the steps of the sub-agent\'s task longer, drops unrelated ones first, and says where to read a cut', async () => {
+  const { turnDigest } = await import('../src/agent/plan.js');
+  const lines = (tag) => Array.from({ length: 120 }, (_, i) => `${tag} line ${i + 1} ${"·".repeat(14)}`).join('\n');
+  const messages = [
+    { role: 'assistant', content: '<read path="other.txt" />' },
+    { role: 'user', content: `<result tool="read" path="other.txt">\n${lines('other')}\n</result>` },
+    { role: 'assistant', content: '<read path="more.txt" />' },
+    { role: 'user', content: `<result tool="read" path="more.txt">\n${lines('more')}\n</result>` },
+    { role: 'assistant', content: '<read path="parser.js" />' },
+    { role: 'user', content: `<result tool="read" path="parser.js">\n${lines('parser')}\n</result>` },
+    { role: 'assistant', content: 'Now the plan.' },
+  ];
+  const outputs = new Map();
+  const d = turnDigest(messages, { maxChars: 4000, task: 'Fix the bug in parser.js', outputs });
+  // The step about parser.js is kept (cut in the middle, end included); the unrelated one goes first.
+  assert.match(d, /^\[… 2 step\(s\) left out: <read path="@turn\/1" \/> to <read path="@turn\/2" \/> if you need them\]/);
+  assert.match(d, /parser line 1 ·+\n[\s\S]*\[… \d+ characters cut \(lines (\d+)-(\d+)\): <read path="@turn\/6" start="\1" end="\2" \/> shows them\]\nparser line \d+[\s\S]*parser line 120 ·+\n<\/result>/);
+  // The line numbers given are those of the full text.
+  const [, before, from, to, after] = d.match(/\n([^\n]*)\n\[… \d+ characters cut \(lines (\d+)-(\d+)\): <read path="@turn\/6"[^\]]*\]\n([^\n]*)/);
+  const full = outputs.get('@turn/6').split('\n');
+  assert.match(d, /more line 1 /); // the later unrelated step is still there
+  assert.equal(full[from - 2], before);
+  assert.equal(full[to], after);
+  assert.equal(outputs.get('@turn/2').length > 2000, true);
+});
+
+test('a sub-agent reads a cut part of the main agent\'s steps in full', async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-plan-'));
+  await fs.writeFile(path.join(cwd, 'big.txt'), Array.from({ length: 150 }, (_, i) => (i === 74 ? 'SECRET-VALUE-42' : `filler line number ${i + 1} with some words`)).join('\n'));
+  let main = 0;
+  let subSaw = '';
+  const f = await fake((r) => {
+    if (isSub(r)) {
+      const last = r.messages.at(-1).content;
+      if (/<result tool="read" path="@turn\/2"/.test(last)) { subSaw = last; return 'Found it.'; }
+      const cut = last.match(/<read path="@turn\/2" start="\d+" end="\d+" \/>/);
+      return cut ? cut[0] : 'No cut seen.';
+    }
+    main++;
+    if (main === 1) return '<read path="big.txt" />';
+    if (main === 2) return '<plan>\n- Do the job\n</plan>';
+    return 'Done.';
+  });
+  const agent = new Agent({ cwd, config: { baseUrl: f.url, model: 'm', shellEnabled: false } });
+  try {
+    await agent.send('do the job'); // (no word in common with the file: its step is cut short)
+  } finally {
+    f.server.close();
+  }
+  const task = f.requests.find(isSub).messages.at(-1).content;
+  assert.doesNotMatch(task, /SECRET-VALUE-42/); // cut from the digest…
+  assert.match(subSaw, /75\| SECRET-VALUE-42/); // …and read back in full by the sub-agent
 });
 
 test('a sub-agent sees what the earlier ones changed, even beyond their task, and is told not to redo it', async () => {

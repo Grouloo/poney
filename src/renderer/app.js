@@ -933,7 +933,7 @@ function onEvent(ev) {
       card.innerHTML = `<div class="card-head"><span class="status"><span class="spin">◌</span></span><span class="tool">${esc(TOOL_LABEL[ev.tool] || ev.tool)}</span><span class="summary"></span>${ev.auto ? '<span class="tag">vérification auto</span>' : ''}</div><div class="card-body"><pre class="out"></pre></div>`;
       const summaryEl = card.querySelector('.summary');
       summaryEl.textContent = summarize(ev.tool, ev.args);
-      if (['read', 'write', 'edit'].includes(ev.tool) && ev.args.path) {
+      if (['read', 'write', 'edit'].includes(ev.tool) && ev.args.path && !/^@turn\//.test(ev.args.path.trim())) { // (@turn/n: a step of the main agent, not a file)
         summaryEl.classList.add('link');
         summaryEl.title = 'Ouvrir dans le visualiseur';
         summaryEl.onclick = (e) => { e.stopPropagation(); openFile(ev.args.path.trim()); };

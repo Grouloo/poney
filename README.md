@@ -199,7 +199,10 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
 - **Plan** (`<plan>`): for a request with several steps, the model only writes the list of tasks; each task is
   carried out by a sub-agent, in order (consecutive `@parallel` tasks at the same time), and is done when its
   sub-agent stops. The model never keeps its list up to date. Each sub-agent gets the request, what the main agent did
-  in the turn before its plan (its steps and their results, cut short), the plan with its task marked, the
+  in the turn before its plan (its steps and their results: those that concern its task kept much longer, the
+  unrelated ones cut or left out first, a cut made in the middle so that a command's error stays; the budget follows
+  the window; every cut step is readable in full with `<read path="@turn/N" start=… end=… />`, as the cut itself
+  says), the plan with its task marked, the
   reports of the tasks already done, and what the earlier sub-agents actually changed (files written or edited,
   commands run), with the instruction to do only what is still missing (one may have gone beyond its task). A failed task stops the plan there; the model gets the reports
   and may write a new plan, which runs only what is left. The plan is pinned above the input; a new message starts
