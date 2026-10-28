@@ -19,6 +19,10 @@
   --glow-2: rgba(232, 150, 108, 0.11);
   --glow-3: rgba(90, 190, 180, 0.07);
   --grain-opacity: 0.085;
+  /* Floating panes (sidebar, side panels): above the conversation, which is the base plane. */
+  --sheet: rgba(26, 27, 34, 0.9);
+  --sheet-solid: #1b1c23;
+  --float: inset 0 1px 0 rgba(255, 255, 255, 0.07), 0 0 0 1px rgba(0, 0, 0, 0.35), 0 2px 6px rgba(0, 0, 0, 0.25), 0 18px 48px rgba(0, 0, 0, 0.45);
   --side: linear-gradient(175deg, rgba(112, 122, 255, 0.13), rgba(112, 122, 255, 0.03) 45%, rgba(232, 150, 108, 0.07)), rgba(18, 18, 23, 0.35);
   /* Liquid glass (buttons, dialogs): a blurred, tinted pane with a lit top edge. */
   --glass: rgba(255, 255, 255, 0.055);
@@ -41,6 +45,8 @@
     --surface: rgba(255, 254, 251, 0.6); --surface-2: rgba(232, 228, 221, 0.6);
     --glow-1: rgba(110, 120, 240, 0.10); --glow-2: rgba(240, 160, 110, 0.12); --glow-3: rgba(90, 180, 170, 0.07);
     --grain-opacity: 0.07;
+    --sheet: rgba(253, 252, 249, 0.9); --sheet-solid: #fbfaf7;
+    --float: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 0 0 1px rgba(70, 60, 50, 0.08), 0 2px 6px rgba(70, 60, 50, 0.08), 0 18px 44px rgba(70, 60, 50, 0.16);
     --side: linear-gradient(175deg, rgba(110, 120, 240, 0.12), rgba(110, 120, 240, 0.02) 45%, rgba(240, 160, 110, 0.1)), rgba(255, 253, 249, 0.3);
     --glass: rgba(255, 255, 255, 0.42); --glass-strong: rgba(252, 250, 246, 0.6); --glass-edge: rgba(255, 255, 255, 0.75);
     --glass-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0) 60%);
@@ -79,7 +85,6 @@ button { cursor: pointer; }
 .topbar {
   display: flex; align-items: center; gap: 8px;
   padding: 10px 14px;
-  border-bottom: 1px solid var(--border);
   -webkit-app-region: drag;
 }
 .topbar > * { -webkit-app-region: no-drag; }
@@ -183,7 +188,7 @@ details.thinking div { white-space: pre-wrap; border-left: 2px solid var(--borde
 .error { color: var(--err); background: var(--del-bg); border-radius: 8px; padding: 8px 12px !important; margin: 10px auto; }
 
 /* ---------- composer ---------- */
-.composer { padding: 10px 20px 12px; border-top: 1px solid var(--border); }
+.composer { padding: 10px 20px 4px; }
 .composer-box {
   max-width: 820px; margin: 0 auto; display: flex; gap: 8px; align-items: flex-end;
   background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 8px;
@@ -218,13 +223,13 @@ fieldset small { color: var(--muted); font-size: 11.5px; }
 .row { display: flex; gap: 6px; }
 
 /* ---------- layout: sidebar | chat | viewer ---------- */
-.layout { flex: 1; display: flex; min-height: 0; }
+.layout { flex: 1; display: flex; min-height: 0; padding: 2px 12px 12px; gap: 12px; }
 .chat { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 .muted { color: var(--muted); }
 .hidden:not(.drawer) { display: none !important; }
 
 #sidebar {
-  width: 250px; flex-shrink: 0; border-right: 1px solid var(--border); background: var(--side);
+  width: 250px; flex-shrink: 0; background: var(--side);
   display: flex; flex-direction: column; min-height: 0;
 }
 body.no-sidebar #sidebar { display: none; }
@@ -290,8 +295,8 @@ body.no-sidebar #sidebar { display: none; }
 .tree .caret { width: 10px; color: var(--muted); font-size: 10px; flex-shrink: 0; }
 
 .viewer {
-  width: 46%; min-width: 320px; max-width: 70%; border-left: 1px solid var(--border);
-  display: flex; flex-direction: column; min-height: 0; background: var(--panel);
+  width: 46%; min-width: 320px; max-width: 70%;
+  display: flex; flex-direction: column; min-height: 0; background: var(--sheet);
 }
 .viewer-head { display: flex; align-items: center; gap: 4px; padding: 6px 8px 6px 12px; border-bottom: 1px solid var(--border); }
 .viewer-path { flex: 1; font-family: var(--mono); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
@@ -300,7 +305,7 @@ body.no-sidebar #sidebar { display: none; }
 .code-view { display: flex; font: 12.5px/1.55 var(--mono); min-width: max-content; }
 .code-view .gutter {
   text-align: right; color: var(--muted); padding: 10px 10px 10px 12px; user-select: none;
-  border-right: 1px solid var(--border); position: sticky; left: 0; background: var(--panel); white-space: pre;
+  border-right: 1px solid var(--border); position: sticky; left: 0; background: var(--sheet-solid); white-space: pre;
 }
 .code-view pre { margin: 0; padding: 10px 14px; white-space: pre; }
 .code-view pre code.hljs { background: transparent; padding: 0; }
@@ -539,7 +544,6 @@ body.running .resume-btn { display: none; }
 /* The conversation (and a sub-agent's, in its panel) in --chat; the file viewer,
    the settings and the code keep theirs. */
 #transcript, .agent-panel-body, #input { font-family: var(--chat); font-size: 15px; line-height: 1.6; }
-.agent-panel, .live-panel { background: var(--surface); backdrop-filter: blur(18px); }
 .card, .statusline, .notice, .plan-panel, .memory-panel { font-family: var(--ui); font-size: 13.5px; line-height: 1.55; }
 .empty h1 { font-family: var(--chat); font-weight: 500; letter-spacing: 0.2px; }
 
@@ -569,7 +573,28 @@ body.running .resume-btn { display: none; }
   backdrop-filter: blur(30px) saturate(170%);
 }
 .prompt-dialog { border-radius: 18px; }
-.drawer { border-width: 0 0 0 1px; }
+.drawer { top: 12px; right: 12px; bottom: 12px; max-width: calc(100% - 24px); border-radius: 16px; box-shadow: var(--glass-light), var(--float); }
+.drawer.hidden { transform: translateX(calc(100% + 24px)); }
 .prompt-dialog::backdrop { background: rgba(0, 0, 0, 0.28); backdrop-filter: blur(3px); }
 .prompt-dialog #promptText, .steps-body textarea, .drawer fieldset input, .drawer fieldset select { background: color-mix(in srgb, var(--bg) 55%, transparent); }
 .drawer fieldset { border-color: var(--glass-edge); }
+
+/* ---------- floating panes ---------- */
+/* The sidebar and the side panels float above the conversation: off the window
+   edges, rounded, lit on their top edge, with a soft shadow on the base plane. */
+#sidebar, .viewer {
+  border: 1px solid var(--glass-edge); border-radius: 16px; overflow: hidden;
+  box-shadow: var(--float);
+  backdrop-filter: blur(24px) saturate(150%);
+}
+.agent-panel, .live-panel { background: var(--glass-sheen), var(--surface); }
+.viewer-head { border-bottom-color: color-mix(in srgb, var(--border) 70%, transparent); padding-top: 8px; padding-bottom: 8px; }
+.tabs { border-bottom-color: color-mix(in srgb, var(--border) 70%, transparent); }
+
+/* Thin scrollbars in the theme's colors, with a clear track (a white track cut
+   the rounded corners of the panes). */
+:root { color-scheme: light dark; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--muted) 35%, transparent); border: 3px solid transparent; border-radius: 8px; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background-color: color-mix(in srgb, var(--muted) 60%, transparent); }
