@@ -37,12 +37,42 @@ export function triageInstruction() {
   ].join('\n');
 }
 
+// ---------- updates during the answer ----------
+// Results from outside (web pages, searches, commands, the user's CLIs) can settle a
+// doubt or raise a new one. After such results the assessment is asked again, about
+// the CURRENT TASK only: what the model does not need for it is left out, so that it
+// does not turn away from its work to look up everything it does not know. The app
+// also caps it: a few updates per answer, a few items each, and a few refusals in all.
+
+/** Tools whose results bring outside information worth reassessing after. */
+export const UPDATE_TOOLS = new Set(['web_search', 'fetch', 'run']);
+export const MAX_UPDATES = 3; // per answer
+export const MAX_REFUSALS = 3; // per answer, all assessments together
+const UPDATE_MIN_CHARS = 300; // a short result (an echo, "ok") brings nothing to reassess
+
+/** Whether results just received call for an update of the assessment. */
+export function needsUpdate(results, updatesSoFar) {
+  if (updatesSoFar >= MAX_UPDATES) return false;
+  return results.some((r) => r.ok && UPDATE_TOOLS.has(r.tool) && String(r.output ?? '').length >= UPDATE_MIN_CHARS);
+}
+
+export function triageUpdateInstruction(task) {
+  const t = String(task ?? '').replace(/\s+/g, ' ').trim();
+  return [
+    '(Before you go on, the app asks you to update your assessment from the results above. Do NOT go on with the task and do NOT use any tool now.',
+    t ? `Your current task: ${t.length > 400 ? `${t.slice(0, 400)}…` : t}` : '',
+    'Reply with ONLY this JSON object:',
+    '{"known": ["what the results established that your task needs"], "doubts": [{"point": "what is still uncertain", "why": "why"}], "unknowns": [{"point": "what you still do not know", "why": "why"}]}',
+    'Only what matters for YOUR CURRENT TASK: list a doubt or unknown only if the task cannot be done well without it. Something the results mention that is interesting but not needed: leave it out, do not chase it. A point the results settled goes in "known", not in doubts. At most 3 items per list.)',
+  ].filter(Boolean).join('\n');
+}
+
 /** The request for the assessment: the cached conversation, the instruction appended to its last message. */
-export function triageRequest(prompt) {
+export function triageRequest(prompt, instruction = triageInstruction()) {
   const msgs = prompt.map((m) => ({ ...m }));
   const last = msgs[msgs.length - 1];
-  if (last?.role === 'user') last.content = `${last.content}\n\n${triageInstruction()}`;
-  else msgs.push({ role: 'user', content: triageInstruction() });
+  if (last?.role === 'user') last.content = `${last.content}\n\n${instruction}`;
+  else msgs.push({ role: 'user', content: instruction });
   return msgs;
 }
 
@@ -76,16 +106,16 @@ export function parseTriage(text) {
 }
 
 const ROUTE_TEXT = {
-  direct: 'Nothing you lack: act or answer directly, no lookup is needed.',
+  direct: 'Nothing you lack: act or answer directly, no lookup is needed. Do not look up more.',
   check: 'Check your doubts with at least ONE lookup (read the file, search the project, or the web) before relying on them.',
   investigate: `Read at least ${ROUTE_SOURCES.investigate} sources (files, project search, web pages) to fill what you do not know BEFORE concluding. A final answer given before that will be refused.`,
 };
 
-/** The assessment as added to the user's message, with the route the app chose. */
-export function triageBlock(t) {
+/** The assessment as added to the user's message (or, updated, to the results), with the route the app chose. */
+export function triageBlock(t, { update = false } = {}) {
   const line = (x) => `- ${x.point}${x.why ? ` (${x.why})` : ''}`;
   return [
-    '(Your assessment before acting, made at the app\'s request:',
+    update ? '(Your assessment, updated from these results at the app\'s request (it replaces the earlier one):' : '(Your assessment before acting, made at the app\'s request:',
     t.known.length ? `You know:\n${t.known.map((k) => `- ${k}`).join('\n')}` : '',
     t.doubts.length ? `You doubt:\n${t.doubts.map(line).join('\n')}` : '',
     t.unknowns.length ? `You do not know:\n${t.unknowns.map(line).join('\n')}` : '',

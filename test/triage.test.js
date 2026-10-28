@@ -110,3 +110,59 @@ test('a server without structured output: the assessment is asked again without 
   assert.equal(events.filter((e) => e.type === 'notice' && /refusée/.test(e.text)).length, 1);
   assert.deepEqual(events.filter((e) => e.type === 'final').map((e) => e.text), ['I could not check it: no source available. Here is my best answer.']);
 });
+
+const isUpdate = (r) => /update your assessment/.test(r.messages.at(-1).content);
+const LONG = `node -e "console.log('data '.repeat(100))"`; // an output long enough to reassess
+
+test('outside results update the assessment, about the current task, and the new route applies', async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-triage-'));
+  await fs.writeFile(path.join(cwd, 'a.txt'), 'alpha');
+  await fs.writeFile(path.join(cwd, 'b.txt'), 'beta');
+  let step = 0;
+  const f = await fake((r) => {
+    if (isTriage(r)) return '{"known": ["how to run the tool"], "doubts": [], "unknowns": []}';
+    if (isUpdate(r)) return '{"known": ["the tool prints data"], "doubts": [], "unknowns": [{"point": "the format of a.txt and b.txt", "why": "the output refers to them"}]}';
+    step++;
+    if (step === 1) return `<run>${LONG}</run>`;
+    if (step === 2) return 'Done, here it is.'; // refused: the update found something unknown
+    if (step === 3) return '<read path="a.txt" />';
+    if (step === 4) return '<read path="b.txt" />';
+    return 'Done: alpha and beta.';
+  });
+  const agent = new Agent({ cwd, triage: true, config: { baseUrl: f.url, model: 'm', approval: 'auto' } });
+  const events = [];
+  agent.on('event', (e) => events.push(e));
+  try {
+    await agent.send('Run the tool and tell me about its files');
+  } finally {
+    f.server.close();
+  }
+  const upd = f.requests.find(isUpdate);
+  assert.match(lastUser(upd), /<result tool="run"[\s\S]*data data[\s\S]*Your current task: [^\n]*Run the tool and tell me about its files[\s\S]*Only what matters for YOUR CURRENT TASK/);
+  // The update goes with the results, and replaces the first assessment.
+  const after = f.requests[f.requests.indexOf(upd) + 1];
+  assert.match(lastUser(after), /<result tool="run"[\s\S]*updated from these results[\s\S]*You do not know:\n- the format of a\.txt and b\.txt[\s\S]*Read at least 2 sources/);
+  assert.deepEqual(events.filter((e) => e.type === 'triage').map((e) => [Boolean(e.update), e.route]), [[false, 'direct'], [true, 'investigate']]);
+  // The run that triggered the update does not count for it: two reads after it are needed.
+  assert.equal(events.filter((e) => e.type === 'notice' && /refusée/.test(e.text)).length, 1);
+  assert.deepEqual(events.filter((e) => e.type === 'final').map((e) => e.text), ['Done: alpha and beta.']);
+});
+
+test('updates are capped per answer, and short outputs do not call for one', async () => {
+  let step = 0;
+  const f = await fake((r) => {
+    if (isTriage(r) || isUpdate(r)) return '{"known": [], "doubts": [], "unknowns": []}';
+    step++;
+    if (step === 1) return '<run>echo ok</run>';
+    if (step <= 6) return `<run>${LONG}</run>`;
+    return 'Done.';
+  });
+  const agent = new Agent({ cwd: await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-triage-')), triage: true, config: { baseUrl: f.url, model: 'm', approval: 'auto' } });
+  try {
+    await agent.send('run things');
+  } finally {
+    f.server.close();
+  }
+  assert.equal(f.requests.filter(isUpdate).length, 3); // 5 long outputs, 3 updates at most
+  assert.ok(!f.requests.some((r) => isUpdate(r) && /command="echo ok"/.test(lastUser(r)))); // "ok": nothing to reassess
+});

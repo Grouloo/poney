@@ -132,6 +132,11 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   at least two sources (files, project search, commands, web pages, sub-agents) before concluding. A final answer
   given before that is refused (once for a doubt, twice for an unknown, then let through), and what is still to
   check is recalled with each result until it is. Shown under the user message ("🧭 Bilan").
+  Outside information can change it: after a web search, a page or a command with a real output (300 characters or
+  more), the assessment is asked again, about the current task only (a point the results settled moves to "known";
+  something interesting but not needed for the task is left out, not chased). The update replaces the previous
+  assessment and its route counts the sources read from then on. Against detours: at most 3 updates and 3 refused
+  answers per turn, 3 items per list. Shown where it was made ("🧭 Bilan mis à jour").
 - **Command approval** (unless "sans confirmation" is checked): Exécuter, Toujours autoriser, or Refuser, with an
   optional reason that is passed on to the model, so it can change its approach.
 - **Context gauge** under the input (the tick marks the compaction threshold); a click compacts on demand.

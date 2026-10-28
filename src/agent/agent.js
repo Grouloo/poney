@@ -8,7 +8,7 @@ import { executeAction, runShell, truncateMiddle, checkOldBlock } from './tools.
 import { remember, forget, memoryBlock, standingInstructions, instructionNote, replacedAutoNote } from './memory.js';
 import { recall, autoRecall, recalledBlock, keywordsOf } from './history.js';
 import { linksToRead, readLinks } from './autofetch.js';
-import { TRIAGE_SCHEMA, TRIAGE_MAX_TOKENS, ROUTE_SOURCES, SOURCE_TOOLS, triageRequest, parseTriage, triageBlock, triageReminder, triageRefusal } from './triage.js';
+import { TRIAGE_SCHEMA, TRIAGE_MAX_TOKENS, ROUTE_SOURCES, SOURCE_TOOLS, MAX_REFUSALS, triageRequest, triageInstruction, triageUpdateInstruction, needsUpdate, parseTriage, triageBlock, triageReminder, triageRefusal } from './triage.js';
 import { parsePlan, mergePlan, nextGroup, setStatus, formatPlan, subAgentTask, turnDigest } from './plan.js';
 import {
   summaryTokens, summaryWords, mechanicalSummary, DEFAULT_CHARS_PER_TOKEN,
@@ -945,8 +945,9 @@ export class Agent extends EventEmitter {
    * The assessment before acting (see triage.js): a dedicated call on the cached
    * conversation, whose output can only be the JSON assessment. Null when the
    * model gave none that can be read (the turn then goes on without it).
+   * instruction: the first assessment of the message, or its update after results.
    */
-  async assess(system, signal) {
+  async assess(system, signal, instruction = triageInstruction()) {
     const prompt = this.buildPrompt(system);
     const ask = async (jsonSchema) => {
       let text = '';
@@ -955,7 +956,7 @@ export class Agent extends EventEmitter {
         // Same tools as the turn's calls, so that the server reuses its cached prompt.
         toolSchemas: toolSchemas(this.config, { subagentRole: this.role === 'sub' }),
         maxTokens: TRIAGE_MAX_TOKENS,
-        messages: triageRequest(prompt),
+        messages: triageRequest(prompt, instruction),
         jsonSchema,
         signal,
       })) {
@@ -1071,9 +1072,12 @@ export class Agent extends EventEmitter {
     let codeDumpNudged = false;
     let afterStepDone = false;
     let invisibleRetried = false;
-    let triage = null; // the assessment before acting, and the route the app chose from it
-    let triageRefusals = 0;
+    let triage = null; // the assessment before acting (or its latest update), and the route the app chose from it
+    let triageRefusals = 0; // final answers refused for the current assessment
+    let turnRefusals = 0; // … for all of them, this turn
+    let triageUpdates = 0;
     let sourcesRead = 0; // sources read this turn (for the route of the assessment)
+    let triageBase = 0; // sources already read when the current assessment was made
     const recent = [];
     let reason = 'done';
 
@@ -1203,10 +1207,12 @@ export class Agent extends EventEmitter {
 
           // The assessment said something was doubtful or unknown: no final answer before
           // the sources its route asks for were read (asked twice at most, then let through).
-          if (triage && sourcesRead < ROUTE_SOURCES[triage.route] && triageRefusals < (triage.route === 'investigate' ? 2 : 1)) {
+          const since = sourcesRead - triageBase;
+          if (triage && since < ROUTE_SOURCES[triage.route] && triageRefusals < (triage.route === 'investigate' ? 2 : 1) && turnRefusals < MAX_REFUSALS) {
             triageRefusals++;
-            notice(`Réponse finale refusée : le bilan ${triage.unknowns.length ? 'signalait des inconnues' : 'signalait des doutes'} et ${sourcesRead ? `seulement ${sourcesRead} source lue` : 'aucune source n’a été lue'} (${sourcesRead}/${ROUTE_SOURCES[triage.route]}). Le modèle est relancé.`);
-            this.messages.push({ role: 'user', content: triageRefusal(triage, sourcesRead) });
+            turnRefusals++;
+            notice(`Réponse finale refusée : le bilan ${triage.unknowns.length ? 'signalait des inconnues' : 'signalait des doutes'} et ${since ? `seulement ${since} source lue` : 'aucune source n’a été lue'} depuis (${since}/${ROUTE_SOURCES[triage.route]}). Le modèle est relancé.`);
+            this.messages.push({ role: 'user', content: triageRefusal(triage, since) });
             continue;
           }
           // Test gate 1: project test command must pass.
@@ -1259,6 +1265,7 @@ export class Agent extends EventEmitter {
         } // end of the generation step (skipped when resuming a batch)
 
         let stopBatch = false;
+        const received = []; // results of this batch (to update the assessment after outside information)
         // Resume point for the actions of this batch: the history up to the
         // message that asked for them, and the results already obtained.
         const resumePoint = (actIds, fromIndex) => this.checkpoints.push({
@@ -1366,6 +1373,7 @@ export class Agent extends EventEmitter {
           if (signal.aborted) throw stopped(); // the action was interrupted: keep it as the resume point
           if (action.tool === 'write' && r.changed) seenFiles.add(r.changed);
           if (r.ok && SOURCE_TOOLS.has(action.tool)) sourcesRead++;
+          received.push({ tool: action.tool, ok: r.ok, output: r.output });
 
           if (r.changed) {
             changedThisTurn = true;
@@ -1394,9 +1402,25 @@ export class Agent extends EventEmitter {
         if (cutNote) content += `\n${cutNote}`;
         // The assessment recalled while its route is not satisfied (it is at the start of
         // the turn, far up once results pile up).
-        const reminder = triage ? triageReminder(triage, sourcesRead) : '';
+        // Outside information (web, commands) may settle a doubt or raise one: the assessment
+        // is updated, about the current task only (see triage.js). Otherwise, what is
+        // still to check is recalled.
+        const update = triage && needsUpdate(received, triageUpdates);
+        const reminder = triage && !update ? triageReminder(triage, sourcesRead - triageBase) : '';
         if (reminder) content += `\n${reminder}`;
         this.messages.push({ role: 'user', content });
+        if (update) {
+          triageUpdates++;
+          this.emit('event', { type: 'triage_start', update: true });
+          const t = await this.assess(system, signal, triageUpdateInstruction(this.currentTask));
+          if (t) {
+            triage = t;
+            triageBase = sourcesRead;
+            triageRefusals = 0;
+            this.messages[this.messages.length - 1].content += `\n\n${triageBlock(t, { update: true })}`;
+          }
+          this.emit('event', t ? { type: 'triage', update: true, ...t } : { type: 'triage', update: true, failed: true });
+        }
       }
     } catch (e) {
       if (e.name === 'AbortError' || signal.aborted) {

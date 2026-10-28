@@ -1024,25 +1024,29 @@ function onEvent(ev) {
       break;
     }
     case 'triage_start': {
+      if (replaying) break;
+      if (ev.update) { add(div('triage pending', '<span class="spin">◌</span> Mise à jour du bilan…')); break; }
       const msg = [...(target || transcript).querySelectorAll('.msg.user')].pop();
-      if (msg && !replaying) msg.appendChild(div('triage pending', '<span class="spin">◌</span> Bilan avant d’agir…'));
+      if (msg) msg.appendChild(div('triage pending', '<span class="spin">◌</span> Bilan avant d’agir…'));
       break;
     }
     case 'triage': {
-      // The assessment before acting, under the user message: what the model knows,
-      // doubts and does not know, and the route the app chose.
-      const msg = [...(target || transcript).querySelectorAll('.msg.user')].pop();
-      if (!msg) break;
-      msg.querySelector('.triage.pending')?.remove();
-      if (ev.failed) { msg.appendChild(div('triage', '🧭 Bilan illisible : l’agent continue sans.')); break; }
+      // The assessment before acting, under the user message (its updates after outside
+      // results, where they were made): what the model knows, doubts and does not know,
+      // and the route the app chose.
+      const where = ev.update ? (target || transcript) : [...(target || transcript).querySelectorAll('.msg.user')].pop();
+      if (!where) break;
+      where.querySelectorAll('.triage.pending').forEach((p) => p.remove());
+      const place = (el) => (ev.update ? add(el) : where.appendChild(el));
+      if (ev.failed) { place(div('triage', `🧭 ${ev.update ? 'Mise à jour du bilan illisible' : 'Bilan illisible'} : l’agent continue sans.`)); break; }
       const route = { direct: 'agir directement', check: 'vérifier d’abord', investigate: 'lire plusieurs sources' }[ev.route];
       const count = (n, one, many) => (n ? `${n} ${n > 1 ? many : one}` : '');
       const parts = [count(ev.known.length, 'acquis', 'acquis'), count(ev.doubts.length, 'doute', 'doutes'), count(ev.unknowns.length, 'inconnue', 'inconnues')].filter(Boolean);
       const d = document.createElement('details');
       d.className = `triage route-${ev.route}`;
       const list = (title, items) => (items.length ? `<div class="triage-sec"><b>${title}</b><ul>${items.map((x) => `<li>${esc(typeof x === 'string' ? x : x.point)}${x.why ? ` <span class="muted">— ${esc(x.why)}</span>` : ''}</li>`).join('')}</ul></div>` : '');
-      d.innerHTML = `<summary>🧭 Bilan${parts.length ? ` : ${parts.join(', ')}` : ''} → ${route}</summary>${list('Sait', ev.known)}${list('Doute', ev.doubts)}${list('Ignore', ev.unknowns)}`;
-      msg.appendChild(d);
+      d.innerHTML = `<summary>🧭 ${ev.update ? 'Bilan mis à jour' : 'Bilan'}${parts.length ? ` : ${parts.join(', ')}` : ''} → ${route}</summary>${list('Sait', ev.known)}${list('Doute', ev.doubts)}${list('Ignore', ev.unknowns)}`;
+      place(d);
       break;
     }
     case 'fetching':
