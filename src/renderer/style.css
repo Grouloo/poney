@@ -18,7 +18,15 @@
   --glow-1: rgba(112, 122, 255, 0.17);
   --glow-2: rgba(232, 150, 108, 0.11);
   --glow-3: rgba(90, 190, 180, 0.07);
-  --grain-opacity: 0.14;
+  --grain-opacity: 0.085;
+  --side: linear-gradient(175deg, rgba(112, 122, 255, 0.13), rgba(112, 122, 255, 0.03) 45%, rgba(232, 150, 108, 0.07)), rgba(18, 18, 23, 0.35);
+  /* Liquid glass (buttons, dialogs): a blurred, tinted pane with a lit top edge. */
+  --glass: rgba(255, 255, 255, 0.055);
+  --glass-strong: rgba(30, 31, 40, 0.62);
+  --glass-edge: rgba(255, 255, 255, 0.13);
+  --glass-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0) 55%);
+  --glass-light: inset 0 1px 0 rgba(255, 255, 255, 0.16), inset 0 -1px 0 rgba(0, 0, 0, 0.22);
+  --glass-drop: 0 4px 14px rgba(0, 0, 0, 0.22);
   --ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif;
   /* Conversations: a humanist face, softer to read at length than the system UI one. */
   --chat: Seravek, 'Gill Sans Nova', Ubuntu, Calibri, 'Segoe UI', -apple-system, sans-serif;
@@ -33,16 +41,21 @@
     --surface: rgba(255, 254, 251, 0.6); --surface-2: rgba(232, 228, 221, 0.6);
     --glow-1: rgba(110, 120, 240, 0.10); --glow-2: rgba(240, 160, 110, 0.12); --glow-3: rgba(90, 180, 170, 0.07);
     --grain-opacity: 0.07;
+    --side: linear-gradient(175deg, rgba(110, 120, 240, 0.12), rgba(110, 120, 240, 0.02) 45%, rgba(240, 160, 110, 0.1)), rgba(255, 253, 249, 0.3);
+    --glass: rgba(255, 255, 255, 0.42); --glass-strong: rgba(252, 250, 246, 0.6); --glass-edge: rgba(255, 255, 255, 0.75);
+    --glass-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0) 60%);
+    --glass-light: inset 0 1px 0 rgba(255, 255, 255, 0.9), inset 0 -1px 0 rgba(0, 0, 0, 0.05);
+    --glass-drop: 0 3px 12px rgba(60, 50, 40, 0.1);
   }
 }
 
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
-/* Film grain over the whole window (above the gradient, under nothing that must stay crisp:
-   it is faint, and does not take clicks). */
+/* Film grain over the whole window (faint, and it does not take clicks). No blend mode:
+   one anywhere in the page turns off the blur (backdrop-filter) of the glass panes. */
 body::after {
   content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 100;
-  opacity: var(--grain-opacity); mix-blend-mode: overlay;
+  opacity: var(--grain-opacity);
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 body {
@@ -211,7 +224,7 @@ fieldset small { color: var(--muted); font-size: 11.5px; }
 .hidden:not(.drawer) { display: none !important; }
 
 #sidebar {
-  width: 250px; flex-shrink: 0; border-right: 1px solid var(--border); background: var(--surface);
+  width: 250px; flex-shrink: 0; border-right: 1px solid var(--border); background: var(--side);
   display: flex; flex-direction: column; min-height: 0;
 }
 body.no-sidebar #sidebar { display: none; }
@@ -527,6 +540,36 @@ body.running .resume-btn { display: none; }
    the settings and the code keep theirs. */
 #transcript, .agent-panel-body, #input { font-family: var(--chat); font-size: 15px; line-height: 1.6; }
 .agent-panel, .live-panel { background: var(--surface); backdrop-filter: blur(18px); }
-#sidebar { backdrop-filter: blur(18px); }
 .card, .statusline, .notice, .plan-panel, .memory-panel { font-family: var(--ui); font-size: 13.5px; line-height: 1.55; }
 .empty h1 { font-family: var(--chat); font-weight: 500; letter-spacing: 0.2px; }
+
+/* ---------- liquid glass ---------- */
+.primary, .chip, .approval button, .recent button, .new-conv, .ghost:hover, .msg-editor button {
+  background: var(--glass-sheen), var(--glass);
+  border: 1px solid var(--glass-edge);
+  box-shadow: var(--glass-light), var(--glass-drop);
+  backdrop-filter: blur(14px) saturate(160%);
+}
+.ghost { transition: background-color 0.15s, box-shadow 0.15s; }
+.primary, .approval button.yes {
+  background: var(--glass-sheen), color-mix(in srgb, var(--accent-2) 82%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent); color: #fff;
+}
+.primary:hover, .approval button.yes:hover { background: var(--glass-sheen), color-mix(in srgb, var(--accent) 80%, transparent); }
+.primary.stop { background: var(--glass-sheen), color-mix(in srgb, var(--err) 82%, transparent); border-color: color-mix(in srgb, var(--err) 60%, transparent); }
+.approval.refuse button.no { background: var(--glass-sheen), color-mix(in srgb, var(--err) 75%, transparent); }
+.chip:hover, .recent button:hover, .new-conv:hover, .approval button:not(.yes):not(.no):hover { background: var(--glass-sheen), color-mix(in srgb, var(--glass) 100%, var(--glass-edge) 40%); }
+.primary, .chip, .ghost, .approval button, .recent button { border-radius: 10px; }
+.primary { padding: 8px 18px; }
+
+.prompt-dialog, .drawer {
+  background: var(--glass-sheen), var(--glass-strong);
+  border: 1px solid var(--glass-edge);
+  box-shadow: var(--glass-light), 0 24px 70px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(30px) saturate(170%);
+}
+.prompt-dialog { border-radius: 18px; }
+.drawer { border-width: 0 0 0 1px; }
+.prompt-dialog::backdrop { background: rgba(0, 0, 0, 0.28); backdrop-filter: blur(3px); }
+.prompt-dialog #promptText, .steps-body textarea, .drawer fieldset input, .drawer fieldset select { background: color-mix(in srgb, var(--bg) 55%, transparent); }
+.drawer fieldset { border-color: var(--glass-edge); }
