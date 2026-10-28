@@ -8,6 +8,7 @@ import { executeAction, runShell, truncateMiddle, checkOldBlock } from './tools.
 import { remember, forget, memoryBlock, standingInstructions, instructionNote, replacedAutoNote } from './memory.js';
 import { recall, autoRecall, recalledBlock, keywordsOf } from './history.js';
 import { linksToRead, readLinks } from './autofetch.js';
+import { TRIAGE_SCHEMA, TRIAGE_MAX_TOKENS, ROUTE_SOURCES, SOURCE_TOOLS, triageRequest, parseTriage, triageBlock, triageReminder, triageRefusal } from './triage.js';
 import { parsePlan, mergePlan, nextGroup, setStatus, formatPlan, subAgentTask, turnDigest } from './plan.js';
 import {
   summaryTokens, summaryWords, mechanicalSummary, DEFAULT_CHARS_PER_TOKEN,
@@ -123,8 +124,9 @@ export function messageStamp(d) {
 let nextId = Date.now(); // unique across restarts, since saved conversations are replayed by id
 
 export class Agent extends EventEmitter {
-  constructor({ cwd, config, approve, shared, role = 'main', offProject = false }) {
+  constructor({ cwd, config, approve, shared, role = 'main', offProject = false, triage = false }) {
     super();
+    this.triageByDefault = triage; // the assessment before acting when the steps do not say (the app: on)
     this.cwd = cwd;
     this.offProject = offProject; // a conversation outside any project: cwd is its own folder
     this.role = role; // 'main' or 'sub' (a sub-agent cannot start sub-agents)
@@ -141,8 +143,9 @@ export class Agent extends EventEmitter {
     this.memory = []; // notes kept with <remember> for the whole conversation (see memory.js)
     this.memoryShownAt = 0; // index of the last message showing the whole memory
     this.chapters = []; // index of the compacted parts (see maybeCompact)
-    // Steps set by the user for this conversation: { before, after, afterOnlyIfChanged }
-    // (before: done first at each message; after: once, before the final answer).
+    // Steps set by the user for this conversation: { before, after, afterOnlyIfChanged, triage }
+    // (before: done first at each message; after: once, before the final answer;
+    // triage: the assessment before acting, see triage.js; when unset, triageByDefault).
     this.steps = null;
     this.running = false;
     this.abort = null;
@@ -930,6 +933,38 @@ export class Agent extends EventEmitter {
     return { id, text: visible, thinking, truncated, looped, earlyEdit, contextLimited: truncated && !streamError && maxTokens < this.config.maxTokens, stats, invisible };
   }
 
+  /**
+   * The assessment before acting (see triage.js): a dedicated call on the cached
+   * conversation, whose output can only be the JSON assessment. Null when the
+   * model gave none that can be read (the turn then goes on without it).
+   */
+  async assess(system, signal) {
+    const prompt = this.buildPrompt(system);
+    const ask = async (jsonSchema) => {
+      let text = '';
+      for await (const chunk of (this.streamChat ?? streamChat)({ // (replaceable in tests)
+        ...this.cfg,
+        // Same tools as the turn's calls, so that the server reuses its cached prompt.
+        toolSchemas: toolSchemas(this.config, { subagentRole: this.role === 'sub' }),
+        maxTokens: TRIAGE_MAX_TOKENS,
+        messages: triageRequest(prompt),
+        jsonSchema,
+        signal,
+      })) {
+        if (chunk.type === 'text') text += chunk.text;
+        else if (chunk.type === 'progress') this.emit('event', { type: 'prompt_progress', id: 'triage', progress: chunk.progress });
+      }
+      return parseTriage(text);
+    };
+    try {
+      return await ask(TRIAGE_SCHEMA);
+    } catch (e) {
+      if (signal.aborted) throw e;
+      // A server without structured output: the same request, the JSON only asked for.
+      return ask(undefined).catch((e2) => { if (signal.aborted) throw e2; return null; });
+    }
+  }
+
   // ----- main loop -----
 
   async send(userText, { turnId, resume } = {}) {
@@ -961,6 +996,7 @@ export class Agent extends EventEmitter {
     };
     // Each message carries its date and time: the model cannot know them, and here
     // (unlike in the system prompt) they never change the cached start of the prompt.
+    let preRead = 0; // sources read by the app for this message (links, recalled passages)
     if (!resume) {
       // Lasting instructions ("answer in English", "from now on…") are noted by the app
       // itself, in the user's words: small models rarely note them, then drift back.
@@ -988,6 +1024,7 @@ export class Agent extends EventEmitter {
         const passages = autoRecall(this.archives, this.messages, userText);
         if (passages.length) {
           content += `\n\n${recalledBlock(passages)}`;
+          preRead++;
           this.emit('event', { type: 'recalled', turnId, passages });
         }
       }
@@ -999,6 +1036,7 @@ export class Agent extends EventEmitter {
           this.emit('event', { type: 'fetching', urls }); // (shown while it lasts, not kept)
           const { pages, block } = await readLinks(urls, { cwd: this.cwd, config, signal, maxChars: Math.min(4800, Math.floor(this.maxResultChars / urls.length)) });
           content += `\n\n${block}`;
+          preRead += pages.filter((p) => p.ok).length;
           this.emit('event', { type: 'fetched', turnId, pages });
         }
       }
@@ -1025,6 +1063,9 @@ export class Agent extends EventEmitter {
     let codeDumpNudged = false;
     let afterStepDone = false;
     let invisibleRetried = false;
+    let triage = null; // the assessment before acting, and the route the app chose from it
+    let triageRefusals = 0;
+    let sourcesRead = 0; // sources read this turn (for the route of the assessment)
     const recent = [];
     let reason = 'done';
 
@@ -1034,6 +1075,21 @@ export class Agent extends EventEmitter {
 
     try {
       const stopped = () => Object.assign(new Error('aborted'), { name: 'AbortError' });
+      // The assessment before acting: what the model knows, doubts and does not know.
+      // The route (act directly, check, read several sources) is the app's decision.
+      if (!resume && this.role === 'main' && (this.steps?.triage ?? this.triageByDefault)) {
+        await this.maybeCompact(system, signal);
+        this.emit('event', { type: 'triage_start', turnId });
+        triage = await this.assess(system, signal);
+        if (triage) {
+          sourcesRead = preRead;
+          const last = this.messages[this.messages.length - 1];
+          last.content += `\n\n${triageBlock(triage)}`;
+          this.emit('event', { type: 'triage', turnId, ...triage });
+        } else {
+          this.emit('event', { type: 'triage', turnId, failed: true });
+        }
+      }
       for (let step = 0; ; step++) {
         if (signal.aborted) throw stopped(); // stopped during an action: do not generate again
         if (step >= config.maxSteps) {
@@ -1137,6 +1193,14 @@ export class Agent extends EventEmitter {
             continue;
           }
 
+          // The assessment said something was doubtful or unknown: no final answer before
+          // the sources its route asks for were read (asked twice at most, then let through).
+          if (triage && sourcesRead < ROUTE_SOURCES[triage.route] && triageRefusals < (triage.route === 'investigate' ? 2 : 1)) {
+            triageRefusals++;
+            notice(`Réponse finale refusée : le bilan ${triage.unknowns.length ? 'signalait des inconnues' : 'signalait des doutes'} et ${sourcesRead ? `seulement ${sourcesRead} source lue` : 'aucune source n’a été lue'} (${sourcesRead}/${ROUTE_SOURCES[triage.route]}). Le modèle est relancé.`);
+            this.messages.push({ role: 'user', content: triageRefusal(triage, sourcesRead) });
+            continue;
+          }
           // Test gate 1: project test command must pass.
           if (config.testCommand && codeChangedThisTurn && shellOn) {
             notice(`Vérification : ${config.testCommand}`);
@@ -1218,6 +1282,7 @@ export class Agent extends EventEmitter {
             const ids = toRun.map(() => nextId++);
             resumePoint(ids, 0); // resuming any member re-runs the whole group
             results.push(...await this.runSubAgents(toRun, signal, ids));
+            sourcesRead += toRun.length;
             changedThisTurn = true; // sub-agents may have changed files
           }
           toRun.length = 0;
@@ -1250,6 +1315,7 @@ export class Agent extends EventEmitter {
           }
           if (action.tool === 'recall') {
             const r = recall(this.archives, this.messages, action.args.query, { maxChars: Math.min(3000, this.maxResultChars) });
+            if (r.ok) sourcesRead++;
             this.emit('event', { type: 'action_end', id: actId, ok: r.ok, output: r.text, meta: {} });
             results.push(formatResult('recall', { query: action.args.query }, r.text));
             continue;
@@ -1272,6 +1338,7 @@ export class Agent extends EventEmitter {
           }
           if (action.tool === 'plan') {
             const out = await this.runPlan(action, signal, actId);
+            sourcesRead++;
             this.emit('event', { type: 'action_end', id: actId, ok: out.ok, output: out.text, meta: { tasks: this.taskPlan?.tasks.length ?? 0 } });
             results.push(out.result);
             continue;
@@ -1289,6 +1356,7 @@ export class Agent extends EventEmitter {
           this.emit('event', { type: 'action_end', id: actId, ok: r.ok, output: r.output, diff: r.diff, meta: r.meta });
           if (signal.aborted) throw stopped(); // the action was interrupted: keep it as the resume point
           if (action.tool === 'write' && r.changed) seenFiles.add(r.changed);
+          if (r.ok && SOURCE_TOOLS.has(action.tool)) sourcesRead++;
 
           if (r.changed) {
             changedThisTurn = true;
@@ -1315,6 +1383,10 @@ export class Agent extends EventEmitter {
         let content = results.join('\n');
         if (skipped > 0) content += `\n(${skipped} later action(s) were NOT run. Look at the result above first, then continue.)`;
         if (cutNote) content += `\n${cutNote}`;
+        // The assessment recalled while its route is not satisfied (it is at the start of
+        // the turn, far up once results pile up).
+        const reminder = triage ? triageReminder(triage, sourcesRead) : '';
+        if (reminder) content += `\n${reminder}`;
         this.messages.push({ role: 'user', content });
       }
     } catch (e) {

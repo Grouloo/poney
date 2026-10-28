@@ -125,6 +125,13 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   changed in the project since your last answer") goes with every message; a step to do before finishing (e.g.
   "document what you did in CHANGELOG.md") is asked once per turn, before the final answer, optionally only when
   files were changed during the turn. Both show as a line in the conversation; saved with it.
+- **Assessment before acting** (on by default, can be turned off per conversation in "Étapes"): before the model
+  may use its tools on a message, a dedicated call (on the cached prompt, JSON-only output when the server supports
+  structured output) asks it what it knows, what it doubts and what it does not know, with why. The app, not the
+  model, picks the route: nothing lacking, act directly; a doubt, check it with one lookup; something unknown, read
+  at least two sources (files, project search, commands, web pages, sub-agents) before concluding. A final answer
+  given before that is refused (once for a doubt, twice for an unknown, then let through), and what is still to
+  check is recalled with each result until it is. Shown under the user message ("🧭 Bilan").
 - **Command approval** (unless "sans confirmation" is checked): Exécuter, Toujours autoriser, or Refuser, with an
   optional reason that is passed on to the model, so it can change its approach.
 - **Context gauge** under the input (the tick marks the compaction threshold); a click compacts on demand.

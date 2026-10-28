@@ -51,6 +51,7 @@ const rl = readline.createInterface({ input: process.stdin, output: process.stdo
 const agent = new Agent({
   cwd: path.resolve(opts.cwd || '.'),
   config,
+  triage: true,
   approve: async ({ command }) => /^(y|o|yes|oui)?$/i.test((await rl.question(`${c.yellow}Run \`${command}\`? [Y/n] ${c.reset}`)).trim()),
 });
 

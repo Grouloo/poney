@@ -1023,6 +1023,28 @@ function onEvent(ev) {
       } else add(div('notice', `Étape avant de conclure : ${esc(ev.text)}`));
       break;
     }
+    case 'triage_start': {
+      const msg = [...(target || transcript).querySelectorAll('.msg.user')].pop();
+      if (msg && !replaying) msg.appendChild(div('triage pending', '<span class="spin">◌</span> Bilan avant d’agir…'));
+      break;
+    }
+    case 'triage': {
+      // The assessment before acting, under the user message: what the model knows,
+      // doubts and does not know, and the route the app chose.
+      const msg = [...(target || transcript).querySelectorAll('.msg.user')].pop();
+      if (!msg) break;
+      msg.querySelector('.triage.pending')?.remove();
+      if (ev.failed) { msg.appendChild(div('triage', '🧭 Bilan illisible : l’agent continue sans.')); break; }
+      const route = { direct: 'agir directement', check: 'vérifier d’abord', investigate: 'lire plusieurs sources' }[ev.route];
+      const count = (n, one, many) => (n ? `${n} ${n > 1 ? many : one}` : '');
+      const parts = [count(ev.known.length, 'acquis', 'acquis'), count(ev.doubts.length, 'doute', 'doutes'), count(ev.unknowns.length, 'inconnue', 'inconnues')].filter(Boolean);
+      const d = document.createElement('details');
+      d.className = `triage route-${ev.route}`;
+      const list = (title, items) => (items.length ? `<div class="triage-sec"><b>${title}</b><ul>${items.map((x) => `<li>${esc(typeof x === 'string' ? x : x.point)}${x.why ? ` <span class="muted">— ${esc(x.why)}</span>` : ''}</li>`).join('')}</ul></div>` : '');
+      d.innerHTML = `<summary>🧭 Bilan${parts.length ? ` : ${parts.join(', ')}` : ''} → ${route}</summary>${list('Sait', ev.known)}${list('Doute', ev.doubts)}${list('Ignore', ev.unknowns)}`;
+      msg.appendChild(d);
+      break;
+    }
     case 'fetching':
       if (!replaying) $('status').textContent = `Lecture de ${ev.urls.length > 1 ? 'des liens' : 'la page'} du message…`;
       break;
@@ -1612,13 +1634,14 @@ $('stepsBtn').onclick = async () => {
   $('stepsBefore').value = steps?.before || '';
   $('stepsAfter').value = steps?.after || '';
   $('stepsAfterOnlyIfChanged').checked = Boolean(steps?.afterOnlyIfChanged);
+  $('stepsTriage').checked = steps?.triage !== false;
   $('stepsDialog').showModal();
   $('stepsBefore').focus();
 };
 for (const id of ['stepsCancel', 'stepsCloseX']) $(id).onclick = () => $('stepsDialog').close();
 $('stepsSave').onclick = async () => {
   try {
-    await window.api.setSteps({ before: $('stepsBefore').value, after: $('stepsAfter').value, afterOnlyIfChanged: $('stepsAfterOnlyIfChanged').checked });
+    await window.api.setSteps({ before: $('stepsBefore').value, after: $('stepsAfter').value, afterOnlyIfChanged: $('stepsAfterOnlyIfChanged').checked, triage: $('stepsTriage').checked });
   } catch (e) {
     $('status').textContent = errorText(e);
   }

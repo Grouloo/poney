@@ -137,6 +137,7 @@
         <button type="button" id="stepsCloseX" class="ghost icon" title="Fermer">✕</button>
       </div>
       <div class="steps-body">
+        <label class="check"><input id="stepsTriage" type="checkbox" checked> Bilan avant d’agir : l’agent écrit ce qu’il sait, ce dont il doute et ce qu’il ignore ; l’app décide s’il doit vérifier ou lire plusieurs sources avant de conclure</label>
         <label>Avant de répondre, à chacun de vos messages
           <textarea id="stepsBefore" rows="3" placeholder="Ex. : vérifie si le projet a été modifié depuis ta dernière réponse (git status)."></textarea>
         </label>
@@ -144,7 +145,7 @@
           <textarea id="stepsAfter" rows="3" placeholder="Ex. : documente ce que tu as fait dans CHANGELOG.md."></textarea>
         </label>
         <label class="check"><input id="stepsAfterOnlyIfChanged" type="checkbox"> Seulement si des fichiers ont été modifiés</label>
-        <p class="muted">Vides : pas d’étape. Ces consignes s’ajoutent à vos messages ; elles ne changent pas le prompt système.</p>
+        <p class="muted">Consignes vides : pas d’étape. Ces consignes s’ajoutent à vos messages ; elles ne changent pas le prompt système.</p>
       </div>
       <div class="prompt-foot">
         <div class="spacer"></div>

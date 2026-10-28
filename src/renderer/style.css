@@ -516,6 +516,12 @@ body.running .resume-btn { display: none; }
 .list li.waiting .state { background: #e3a008; }
 .list li.unread .state { background: var(--accent); }
 .msg.user .fetched { margin: 4px 0 0 15%; font-size: 12px; color: var(--muted); white-space: pre-line; }
+.msg.user .triage { margin: 4px 0 0 15%; font-family: var(--ui); font-size: 12px; color: var(--muted); }
+.msg.user .triage summary { cursor: pointer; user-select: none; }
+.msg.user .triage.route-check summary { color: var(--warn); }
+.msg.user .triage.route-investigate summary { color: var(--accent); }
+.triage-sec { margin: 6px 0 0 18px; }
+.triage-sec ul { margin: 2px 0 0; padding-left: 18px; color: var(--text); }
 
 /* a file being written or edited: card in the answer, followed in the side panel */
 .live-action { display: flex; align-items: center; gap: 6px; margin: 8px 0 2px; padding: 6px 10px; border: 1px solid var(--border); border-left: 3px solid var(--accent-2); border-radius: 8px; background: var(--surface); cursor: pointer; font-size: 13px; }

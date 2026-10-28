@@ -44,6 +44,7 @@ async function checkResponse(res) {
  * (0..1) while the prompt is being read when the server reports it, and at the
  * end (if the server reports them) {type: 'usage', promptTokens, outputTokens,
  * promptMs?, evalMs?} and {type: 'done', reason} ('length' = the answer was cut).
+ * opts.jsonSchema: the answer must be JSON following this schema (structured output).
  */
 export async function* streamChat(opts) {
   if (opts.provider === 'openai' && await isLMStudio(opts)) {
@@ -58,7 +59,8 @@ export async function* streamChat(opts) {
       // Stop trying the SDK if it could not even connect.
       if (/ECONNREFUSED|websocket|connect/i.test(String(e?.message))) lmsBroken.add(lmsRoot(opts.baseUrl));
     }
-    if (lmsRawMode(opts) && !lmsBroken.has(lmsRoot(opts.baseUrl))) {
+    // (raw completions cannot constrain the output to a JSON schema: the chat endpoint does)
+    if (!opts.jsonSchema && lmsRawMode(opts) && !lmsBroken.has(lmsRoot(opts.baseUrl))) {
       let yielded = false;
       try {
         for await (const chunk of streamLMStudioRaw(opts)) {
@@ -307,7 +309,7 @@ async function* readPromptLMStudio({ baseUrl, model, messages, temperature, sign
 
 // ---------- HTTP (Ollama native, OpenAI-compatible) ----------
 
-async function* streamHTTP({ provider, baseUrl, apiKey, model, messages, numCtx, temperature, maxTokens, signal, tools }) {
+async function* streamHTTP({ provider, baseUrl, apiKey, model, messages, numCtx, temperature, maxTokens, signal, tools, jsonSchema }) {
   if (!model) throw new Error('No model selected.');
   if (provider === 'ollama') {
     const res = await fetch(`${trimSlash(baseUrl)}/api/chat`, {
@@ -318,6 +320,7 @@ async function* streamHTTP({ provider, baseUrl, apiKey, model, messages, numCtx,
         model,
         messages,
         stream: true,
+        ...(jsonSchema ? { format: jsonSchema } : {}),
         options: { num_ctx: numCtx, ...sampling(temperature), num_predict: maxTokens },
       }),
     });
@@ -357,7 +360,8 @@ async function* streamHTTP({ provider, baseUrl, apiKey, model, messages, numCtx,
     method: 'POST',
     headers,
     signal,
-    body: JSON.stringify({ model, messages, stream: true, stream_options: { include_usage: true }, ...sampling(temperature), max_tokens: maxTokens, ...(tools ? { tools } : {}) }),
+    body: JSON.stringify({ model, messages, stream: true, stream_options: { include_usage: true }, ...sampling(temperature), max_tokens: maxTokens, ...(tools ? { tools } : {}),
+      ...(jsonSchema ? { response_format: { type: 'json_schema', json_schema: { name: 'answer', strict: true, schema: jsonSchema } } } : {}) }),
   });
   await checkResponse(res);
   const toolCalls = []; // native function calls, streamed in pieces

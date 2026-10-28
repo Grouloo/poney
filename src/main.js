@@ -104,6 +104,7 @@ class Session {
       const agent = new Agent({
         cwd: this.cwd,
         offProject: this.offProject,
+        triage: true, // the assessment before acting, on unless the conversation's steps turn it off
         config: settings.config,
         approve: (req) => new Promise((resolve) => {
           this.approvals.set(req.id, { req, resolve });
@@ -439,8 +440,9 @@ ipcMain.handle('steps:set', (_, steps) => {
     before: String(steps?.before ?? '').trim().slice(0, 2000),
     after: String(steps?.after ?? '').trim().slice(0, 2000),
     afterOnlyIfChanged: Boolean(steps?.afterOnlyIfChanged),
+    triage: steps?.triage !== false, // the assessment before acting: on by default
   };
-  a.steps = clean.before || clean.after ? clean : null;
+  a.steps = clean.before || clean.after || !clean.triage ? clean : null;
   s.save();
   return a.steps;
 });
