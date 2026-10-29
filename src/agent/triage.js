@@ -7,18 +7,33 @@
 // prompt alone does it for a few turns, then skips it, mostly when it is wrongly
 // sure of itself.
 
-const item = { type: 'object', properties: { point: { type: 'string' }, why: { type: 'string' } }, required: ['point', 'why'] };
+// The model lists the facts its answer will rely on, then grades each one. Asked
+// directly "what do you know", a small model restates the request ("the user wants
+// an explanation of X") and is done: its knowledge of X was never weighed. The
+// reason comes before the grade, so that the grade follows from it.
+const claim = {
+  type: 'object',
+  properties: {
+    point: { type: 'string' },
+    why: { type: 'string' },
+    status: { type: 'string', enum: ['known', 'doubt', 'unknown'] },
+  },
+  required: ['point', 'why', 'status'],
+};
 
 /** The JSON the assessment call must produce (sent as structured output when the server supports it). */
 export const TRIAGE_SCHEMA = {
   type: 'object',
-  properties: {
-    known: { type: 'array', items: { type: 'string' }, maxItems: 5 },
-    doubts: { type: 'array', items: item, maxItems: 5 },
-    unknowns: { type: 'array', items: item, maxItems: 5 },
-  },
-  required: ['known', 'doubts', 'unknowns'],
+  properties: { claims: { type: 'array', items: claim, maxItems: 6 } },
+  required: ['claims'],
 };
+
+const CLAIM_FORMAT = '{"claims": [{"point": "a fact your answer or work relies on", "why": "where your knowledge of it comes from, or why it may be wrong", "status": "known" or "doubt" or "unknown"}]}';
+const GRADES = [
+  '"known": you are sure of it: well-established knowledge you could state precisely, or read in this conversation.',
+  '"doubt": you may be wrong: details, numbers, names, formulas, versions, edge cases you remember only roughly.',
+  '"unknown": you would have to guess.',
+].join(' ');
 
 /** Sources a turn must read: none, one check, several. */
 export const ROUTE_SOURCES = { direct: 0, check: 1, investigate: 2 };
@@ -37,14 +52,16 @@ export const TRIAGE_ATTEMPTS = [
   { temperature: 0.3, maxTokens: 900, retry: true },
   { temperature: 0.6, maxTokens: 900, retry: true },
 ];
-export const TRIAGE_RETRY = '(Your previous reply could not be read as this JSON. Reply with the JSON object ONLY: no text, no code fence, nothing before or after it; short items.)';
+export const TRIAGE_RETRY = '(Your previous reply could not be used: it was not this JSON, or it only restated the request. Reply with the JSON object ONLY, nothing before or after it: the facts your answer relies on, each graded; short items.)';
 
 export function triageInstruction() {
   return [
     '(Before you act on this message, the app asks you for an honest assessment. Do NOT answer the message and do NOT use any tool now.',
+    'This is about YOUR KNOWLEDGE, not about the request: do not restate what the user asks ("the user wants…"). List the facts your answer or your work will rely on, and grade each one honestly.',
     'Reply with ONLY this JSON object:',
-    '{"known": ["what you know for sure that this message needs"], "doubts": [{"point": "what you are not sure of", "why": "why"}], "unknowns": [{"point": "what you do not know", "why": "why"}]}',
-    'A fact about this project (its files, its code, its state) that you have not read in this conversation is a doubt at best. A recent fact (versions, news, prices, APIs that change) is a doubt or unknown. Empty lists are fine when the message needs nothing you lack (a greeting, a thanks). Short items, at most 5 per list.)',
+    CLAIM_FORMAT,
+    GRADES,
+    'A fact about this project (its files, its code, its state) that you have not read in this conversation is a doubt at best. A recent fact (versions, news, prices, APIs that change) is a doubt or unknown. An empty list only when the message needs no knowledge at all (a greeting, a thanks). Short items, at most 6.)',
   ].join('\n');
 }
 
@@ -75,8 +92,9 @@ export function triageUpdateInstruction(task) {
     '(Before you go on, the app asks you to update your assessment from the results above. Do NOT go on with the task and do NOT use any tool now.',
     t ? `Your current task: ${t.length > 400 ? `${t.slice(0, 400)}…` : t}` : '',
     'Reply with ONLY this JSON object:',
-    '{"known": ["what the results established that your task needs"], "doubts": [{"point": "what is still uncertain", "why": "why"}], "unknowns": [{"point": "what you still do not know", "why": "why"}]}',
-    'Only what matters for YOUR CURRENT TASK: list a doubt or unknown only if the task cannot be done well without it. Something the results mention that is interesting but not needed: leave it out, do not chase it. A point the results settled goes in "known", not in doubts. At most 3 items per list.)',
+    CLAIM_FORMAT,
+    GRADES,
+    'The facts your task relies on, as the results leave them: a point the results settled is "known". Only what matters for YOUR CURRENT TASK: a doubt or unknown only if the task cannot be done well without it. Something the results mention that is interesting but not needed: leave it out, do not chase it. At most 6 items.)',
   ].filter(Boolean).join('\n');
 }
 
@@ -91,10 +109,13 @@ export function triageRequest(prompt, instruction = triageInstruction()) {
 
 const clean = (s, n = 200) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, n);
 
+// An item about the request, not about knowledge ("The user wants an explanation of X").
+const RESTATES = /^(the )?user('s)? (wants|asks|is asking|would like|requests|needs|question|request)\b|^(the )?(request|question|task) (is|asks)\b/i;
+
 function items(list) {
   if (!Array.isArray(list)) return [];
   return list
-    .map((x) => (typeof x === 'string' ? { point: clean(x), why: '' } : { point: clean(x?.point ?? x?.what ?? x?.item), why: clean(x?.why ?? x?.reason) }))
+    .map((x) => (typeof x === 'string' ? { point: clean(x), why: '' } : { point: clean(x?.point ?? x?.what ?? x?.item ?? x?.fact), why: clean(x?.why ?? x?.reason) }))
     .filter((x) => x.point)
     .slice(0, 5);
 }
@@ -112,9 +133,24 @@ export function parseTriage(text) {
     try { data = JSON.parse(s.slice(start, end + 1)); } catch {}
   }
   if (!data || typeof data !== 'object') return null;
-  const known = (Array.isArray(data.known) ? data.known : []).map((k) => clean(typeof k === 'string' ? k : k?.point)).filter(Boolean).slice(0, 5);
-  const doubts = items(data.doubts ?? data.doubt);
-  const unknowns = items(data.unknowns ?? data.unknown ?? data.ignored);
+  let known;
+  let doubts;
+  let unknowns;
+  if (Array.isArray(data.claims)) {
+    const all = data.claims.map((c) => ({ ...items([c])[0], status: String(c?.status ?? '').trim().toLowerCase() })).filter((x) => x.point);
+    const kept = all.filter((x) => !RESTATES.test(x.point));
+    // Only the request restated: no knowledge was weighed, the assessment is asked again.
+    if (all.length && !kept.length) return null;
+    const of = (status) => kept.filter((x) => x.status === status).map(({ point, why }) => ({ point, why })).slice(0, 5);
+    known = of('known');
+    doubts = kept.filter((x) => x.status !== 'known' && x.status !== 'unknown').map(({ point, why }) => ({ point, why })).slice(0, 5); // (no grade: a doubt)
+    unknowns = of('unknown');
+  } else {
+    // (the earlier form: three lists)
+    known = items(data.known).filter((x) => !RESTATES.test(x.point));
+    doubts = items(data.doubts ?? data.doubt);
+    unknowns = items(data.unknowns ?? data.unknown ?? data.ignored);
+  }
   return { known, doubts, unknowns, route: unknowns.length ? 'investigate' : doubts.length ? 'check' : 'direct' };
 }
 
@@ -129,7 +165,7 @@ export function triageBlock(t, { update = false } = {}) {
   const line = (x) => `- ${x.point}${x.why ? ` (${x.why})` : ''}`;
   return [
     update ? '(Your assessment, updated from these results at the app\'s request (it replaces the earlier one):' : '(Your assessment before acting, made at the app\'s request:',
-    t.known.length ? `You know:\n${t.known.map((k) => `- ${k}`).join('\n')}` : '',
+    t.known.length ? `You know:\n${t.known.map(line).join('\n')}` : '',
     t.doubts.length ? `You doubt:\n${t.doubts.map(line).join('\n')}` : '',
     t.unknowns.length ? `You do not know:\n${t.unknowns.map(line).join('\n')}` : '',
     `Route set by the app: ${ROUTE_TEXT[t.route]})`,

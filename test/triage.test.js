@@ -27,7 +27,7 @@ const isTriage = (r) => /honest assessment/.test(r.messages.at(-1).content);
 const lastUser = (r) => r.messages.at(-1).content;
 
 test('the assessment is read from JSON (in a fence, in prose, cut) and gives the route', () => {
-  assert.deepEqual(parseTriage('```json\n{"known": ["Node 24"], "doubts": [], "unknowns": []}\n```'), { known: ['Node 24'], doubts: [], unknowns: [], route: 'direct' });
+  assert.deepEqual(parseTriage('```json\n{"known": ["Node 24"], "doubts": [], "unknowns": []}\n```'), { known: [{ point: 'Node 24', why: '' }], doubts: [], unknowns: [], route: 'direct' });
   const t = parseTriage('Here: {"known": [], "doubts": [{"point": "the test command", "why": "not read"}], "unknowns": []} done');
   assert.equal(t.route, 'check');
   assert.deepEqual(t.doubts, [{ point: 'the test command', why: 'not read' }]);
@@ -37,6 +37,46 @@ test('the assessment is read from JSON (in a fence, in prose, cut) and gives the
   assert.match(triageBlock(t), /You doubt:\n- the test command \(not read\)\nRoute set by the app: Check your doubts/);
   assert.equal(triageReminder(t, 1), '');
   assert.match(triageReminder(t, 0), /still to check: the test command\. Sources read this turn: 0\/1/);
+});
+
+test('the assessment grades the facts the answer relies on; restating the request is not one', () => {
+  const t = parseTriage(JSON.stringify({ claims: [
+    { point: 'The user wants an explanation of the exclusion principle', why: 'from the message', status: 'known' },
+    { point: 'No two identical fermions share a quantum state', why: 'textbook physics', status: 'known' },
+    { point: 'Its derivation from the spin-statistics theorem', why: 'remembered only roughly', status: 'doubt' },
+    { point: 'Who first measured it', why: 'never learned', status: 'Unknown' },
+    { point: 'A fact without a grade', why: '' },
+  ] }));
+  assert.deepEqual(t.known, [{ point: 'No two identical fermions share a quantum state', why: 'textbook physics' }]);
+  assert.deepEqual(t.doubts.map((x) => x.point), ['Its derivation from the spin-statistics theorem', 'A fact without a grade']);
+  assert.deepEqual(t.unknowns.map((x) => x.point), ['Who first measured it']);
+  assert.equal(t.route, 'investigate');
+  assert.match(triageBlock(t), /You know:\n- No two identical fermions share a quantum state \(textbook physics\)/);
+  // Only the request restated: nothing was weighed, so nothing can be read (asked again).
+  assert.equal(parseTriage('{"claims": [{"point": "The user wants an explanation of X", "why": "asked", "status": "known"}]}'), null);
+  assert.equal(parseTriage('{"claims": []}').route, 'direct'); // a greeting
+});
+
+test('the request restated: the assessment is asked again', async () => {
+  let tries = 0;
+  const f = await fake((r) => {
+    if (!isTriage(r)) return 'Answer.';
+    return ++tries === 1
+      ? '{"claims": [{"point": "The user wants an explanation of Pauli\'s exclusion principle", "why": "the message", "status": "known"}]}'
+      : '{"claims": [{"point": "No two electrons share all four quantum numbers", "why": "textbook physics", "status": "known"}]}';
+  });
+  const agent = new Agent({ cwd: await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-triage-')), triage: true, config: { baseUrl: f.url, model: 'm', shellEnabled: false } });
+  const events = [];
+  agent.on('event', (e) => events.push(e));
+  try {
+    await agent.send("Explain me Pauli's exclusion principle");
+  } finally {
+    f.server.close();
+  }
+  assert.equal(f.requests.filter(isTriage).length, 2);
+  assert.deepEqual(f.requests[0].format.properties.claims.items.required, ['point', 'why', 'status']);
+  const t = events.find((e) => e.type === 'triage');
+  assert.deepEqual([t.route, t.known.map((x) => x.point)], ['direct', ['No two electrons share all four quantum numbers']]);
 });
 
 test('something unknown: the final answer is refused until several sources are read', async () => {
@@ -222,7 +262,7 @@ test('an unreadable assessment is asked again (low temperature, then a little hi
   }
   const asks = f.requests.filter(isTriage);
   assert.deepEqual(asks.map((r) => r.options.temperature), [0.1, 0.3]);
-  assert.match(lastUser(asks[1]), /could not be read as this JSON/);
+  assert.match(lastUser(asks[1]), /could not be used: it was not this JSON, or it only restated the request/);
   assert.ok(events.some((e) => e.type === 'notice' && /Bilan illisible : nouvel essai \(2\/3\)/.test(e.text)));
   assert.equal(events.find((e) => e.type === 'triage').route, 'check');
 
