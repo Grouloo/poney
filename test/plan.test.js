@@ -301,3 +301,18 @@ test('a sub-agent sees what the earlier ones changed, even beyond their task, an
   const first = f.requests.find((r) => isSub(r) && taskOf(r) === 'Write a').messages.at(-1).content;
   assert.doesNotMatch(first, /earlier agents/);
 });
+
+test('parsePlan: the commands of a step are part of it, not tasks of their own', () => {
+  // indented under their step
+  assert.deepEqual(parsePlan('1. Étape 1 : Installer\n   - Lancer npm install\n   - Lancer npm test\n2. Étape 2 : Documenter').map((t) => t.text), [
+    'Étape 1 : Installer (includes: Lancer npm install; Lancer npm test)',
+    'Étape 2 : Documenter',
+  ]);
+  // flat, after a "Step N" heading
+  assert.deepEqual(parsePlan('1. Step 1: Build\n2. Run make\n3. Run make check\n4. Step 2: Ship\n5. Run deploy').map((t) => t.text), [
+    'Step 1: Build (includes: Run make; Run make check)',
+    'Step 2: Ship (includes: Run deploy)',
+  ]);
+  // no step headings: every item is a task
+  assert.equal(parsePlan('- Read\n- Run tests\n- Fix').length, 3);
+});

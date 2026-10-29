@@ -333,7 +333,7 @@ test('an answer cut because the window is full triggers compaction and a retry',
   });
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-ctx-'));
   const agent = new Agent({ cwd, config: { baseUrl: fake.url, model: 'fake', numCtx: 8192, maxTokens: 4096 } });
-  bigHistory(agent, 10, 205); // just under the budget: no compaction up front, but a short answer room
+  bigHistory(agent, 10, 203); // just under the budget: no compaction up front, but a short answer room
   const events = [];
   agent.on('event', (e) => events.push(e));
   await agent.send('go');

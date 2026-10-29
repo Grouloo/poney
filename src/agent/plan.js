@@ -16,9 +16,19 @@ const ITEM_RE = /^\s*(?:[-*+]|\d+[.)])\s+(.+?)\s*$/;
 // "@parallel" ("@agent", the mark of earlier versions, means the same).
 const PARALLEL_RE = /^(?:@parallel\b|@agent\b|\((?:parallel|agent)\))\s*:?\s*/i;
 
-/** Tasks written by the model: [{ text, done, parallel }]. */
+// A heading of the model's own numbering ("Étape 2 : …", "Step 2: …").
+const STEP_RE = /^(?:[ée]tape|step|phase|partie|part)\s*\d+\b/i;
+
+/**
+ * Tasks written by the model: [{ text, done, parallel }]. A task is a goal, done by
+ * one sub-agent. Seen with Gemma: steps with their commands under them ("Étape 1 :
+ * …", then "Lancer telle commande"), indented or not; each command became a task
+ * of its own, whose sub-agent ran again what the step's sub-agent had already run.
+ * So an indented item, or an item after a "Step N" heading that is not a step
+ * itself, is part of the task above it.
+ */
 export function parsePlan(body) {
-  const tasks = [];
+  const items = [];
   for (const line of String(body ?? '').split('\n')) {
     const m = line.match(CHECKBOX_RE) || line.match(ITEM_RE);
     if (!m) continue;
@@ -26,9 +36,18 @@ export function parsePlan(body) {
     let text = (m.length === 3 ? m[2] : m[1]).trim();
     const parallel = PARALLEL_RE.test(text);
     if (parallel) text = text.replace(PARALLEL_RE, '').trim();
-    if (text) tasks.push({ text, done: /x/i.test(box), parallel });
+    if (text) items.push({ text, done: /x/i.test(box), parallel, indent: line.match(/^\s*/)[0].replace(/\t/g, '    ').length });
   }
-  return tasks;
+  const base = Math.min(...items.map((t) => t.indent));
+  const steps = items.some((t) => t.indent === base && STEP_RE.test(t.text));
+  const tasks = [];
+  for (const t of items) {
+    const parent = tasks[tasks.length - 1];
+    const part = parent && (t.indent > base || (steps && parent.step && !STEP_RE.test(t.text)));
+    if (part) parent.parts.push(t.text);
+    else tasks.push({ text: t.text, done: t.done, parallel: t.parallel, step: steps && STEP_RE.test(t.text), parts: [] });
+  }
+  return tasks.map((t) => ({ text: t.parts.length ? `${t.text.replace(/\s*:$/, '')} (includes: ${t.parts.join('; ')})` : t.text, done: t.done, parallel: t.parallel }));
 }
 
 const key = (text) => text.toLowerCase().replace(/\s+/g, ' ').replace(/[.:;!]+$/, '').trim();
