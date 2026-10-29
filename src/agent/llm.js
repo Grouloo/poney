@@ -50,8 +50,16 @@ async function checkResponse(res) {
  */
 export async function* streamChat(opts) {
   if (opts.provider === 'openai' && await isLMStudio(opts)) {
-    // Declare our tools to models with native tool calls (see toolSchemas).
-    opts = { ...opts, tools: lmsToolUse(opts) && opts.toolSchemas?.length ? opts.toolSchemas : undefined };
+    // Declare our tools to models with native tool calls (see toolSchemas), for the
+    // chat endpoint only. Not in raw mode, which holds nothing back: declared there
+    // (in the system turn, in Gemma's own format, while the history calls them with
+    // our tags), they made Gemma skip its reasoning and loop on a few words. Seen on
+    // a sub-agent's report: 25 loops in 47 tries with them, 1 in 25 without.
+    // (raw completions cannot constrain the output to a JSON schema: the chat endpoint
+    // does; but only raw mode can keep the model from reasoning first, which wins)
+    const raw = (!opts.jsonSchema || opts.noThinking) && lmsRawMode(opts) && !lmsBroken.has(lmsRoot(opts.baseUrl));
+    const tools = lmsToolUse(opts) && opts.toolSchemas?.length ? opts.toolSchemas : undefined;
+    opts = { ...opts, tools: raw ? undefined : tools };
     try {
       yield* readPromptLMStudio(opts);
       yield { type: 'prompt_read' }; // the prompt is in the server cache
@@ -61,9 +69,7 @@ export async function* streamChat(opts) {
       // Stop trying the SDK if it could not even connect.
       if (/ECONNREFUSED|websocket|connect/i.test(String(e?.message))) lmsBroken.add(lmsRoot(opts.baseUrl));
     }
-    // (raw completions cannot constrain the output to a JSON schema: the chat endpoint
-    // does; but only raw mode can keep the model from reasoning first, which wins)
-    if ((!opts.jsonSchema || opts.noThinking) && lmsRawMode(opts) && !lmsBroken.has(lmsRoot(opts.baseUrl))) {
+    if (raw && !lmsBroken.has(lmsRoot(opts.baseUrl))) {
       let yielded = false;
       try {
         for await (const chunk of streamLMStudioRaw(opts)) {
@@ -73,7 +79,8 @@ export async function* streamChat(opts) {
         return;
       } catch (e) {
         if (yielded || opts.signal?.aborted) throw e;
-        // Raw mode unusable this time: the chat endpoint below.
+        // Raw mode unusable this time: the chat endpoint below, with the tools.
+        opts = { ...opts, tools };
       }
     }
   }

@@ -61,6 +61,7 @@ const OPEN_RE = new RegExp(`<(${NAME_RE})(\\s[^<>]*?)?\\s*(/?)>`, 'g');
  * whose model supports native tool calls (LM Studio, "tool_use"): Gemma uses
  * its native format anyway, and without the declaration LM Studio holds those
  * calls back until they end, and drops them if cut (nothing visible for minutes).
+ * Not in LM Studio's raw mode (see streamChat).
  */
 export function toolSchemas(config = {}, { subagentRole = false } = {}) {
   const fn = (name, description, props, required) => ({
