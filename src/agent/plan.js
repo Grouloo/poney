@@ -68,6 +68,17 @@ export function mergePlan(prev, written) {
   return { tasks, done, work: [...(prev?.work || [])] };
 }
 
+/**
+ * The plan a new message starts with. A plan the user stopped (or that failed) is
+ * kept for the next message only, which is often "continue" or an answer to the
+ * agent's question: rewritten then, its tasks already done are not run again
+ * (otherwise all of them were, from the first). Not written again then, it is dropped.
+ */
+export function carryPlan(plan) {
+  if (!plan || plan.carried || plan.tasks.every((t) => t.status === 'done')) return null;
+  return { ...structuredClone(plan), carried: true };
+}
+
 /** The next tasks to run: the first pending one, with the @parallel ones right after it if it is one too. */
 export function nextGroup(plan) {
   const i = plan.tasks.findIndex((t) => t.status === 'pending');
@@ -90,6 +101,21 @@ const BOX = { pending: '[ ]', running: '[~]', done: '[x]', failed: '[!]' };
 /** The plan as shown to the model ([!]: its sub-agent failed). */
 export function formatPlan(plan, mark = null) {
   return plan.tasks.map((t) => `- ${BOX[t.status]} ${t.parallel ? '@parallel ' : ''}${t.text}${t === mark ? '   <- YOUR TASK' : ''}`).join('\n');
+}
+
+/**
+ * What the main agent keeps of a plan the user stopped: what was done (the
+ * reports), what the interrupted tasks had already changed. Without it, it saw
+ * only its <plan> then "(stopped by the user)", and did everything again.
+ */
+export function stoppedPlanText(plan, reports, interrupted = []) {
+  return [
+    'The user STOPPED this plan before its end.',
+    formatPlan(plan),
+    reports.length ? `\nReports of the tasks done:\n${reports.join('\n\n')}` : '\nNo task was finished.',
+    ...interrupted.map((t) => `\nInterrupted task: ${t.text}\n${t.items.length ? `It had already: ${t.items.join('; ')}` : 'It had changed nothing yet.'}`),
+    '\nIf the plan is written again, the tasks done are not run again.',
+  ].join('\n');
 }
 
 /** The name under which a sub-agent reads step n of the main agent's turn in full (see turnDigest). */

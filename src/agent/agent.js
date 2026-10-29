@@ -9,7 +9,7 @@ import { remember, forget, memoryBlock, standingInstructions, instructionNote, r
 import { recall, autoRecall, recalledBlock, keywordsOf } from './history.js';
 import { linksToRead, readLinks } from './autofetch.js';
 import { TRIAGE_SCHEMA, TRIAGE_ATTEMPTS, TRIAGE_RETRY, TRIAGE_RETRY_CUT, fallbackTriage, ROUTE_SOURCES, SOURCE_TOOLS, MAX_REFUSALS, triageRequest, triageInstruction, triageUpdateInstruction, needsUpdate, parseTriage, triageBlock, triageReminder, triageRefusal } from './triage.js';
-import { parsePlan, mergePlan, nextGroup, setStatus, formatPlan, subAgentTask, turnDigest } from './plan.js';
+import { parsePlan, mergePlan, carryPlan, nextGroup, setStatus, formatPlan, subAgentTask, turnDigest, stoppedPlanText } from './plan.js';
 import {
   summaryTokens, summaryWords, mechanicalSummary, DEFAULT_CHARS_PER_TOKEN,
   makeEstimator, contextPlan, answerTokens, isValidSample, historyTokens, splitForCompaction, extractFacts, buildSummaryRequest, cleanSummary,
@@ -535,7 +535,8 @@ export class Agent extends EventEmitter {
       }
     };
     await Promise.all(Array.from({ length: Math.min(limit, group.length) }, worker));
-    if (signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+    // (with the reports of those that ended before the stop: a plan keeps them)
+    if (signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError', results });
     return results;
   }
 
@@ -629,6 +630,7 @@ export class Agent extends EventEmitter {
     }
     this.taskPlan = mergePlan(this.taskPlan, written);
     const plan = this.taskPlan;
+    const already = action.resumeId ? 0 : plan.tasks.filter((t) => t.status === 'done').length;
     this.emit('event', { type: 'plan', tasks: plan.tasks });
     if (!isToolEnabled('agent', this.config)) {
       // No sub-agents: a list for the model, which does the tasks itself.
@@ -660,8 +662,26 @@ export class Agent extends EventEmitter {
       try {
         results = await this.runSubAgents(agents, signal, ids);
       } catch (e) {
-        for (const t of group) setStatus(plan, t, 'pending'); // stopped: to be started again
+        // Stopped: the sub-agents that ended keep their task done, the others are to be
+        // started again; the main agent is told what was done and changed.
+        const interrupted = [];
+        group.forEach((t, k) => {
+          const r = e.results?.[k];
+          const work = [...new Set(this.subWork.get(ids[k]) || [])];
+          this.subWork.delete(ids[k]);
+          if (r && /\bstatus="done"/.test(r)) {
+            const report = r.replace(/^<result[^>]*>\n?|\n?<\/result>$/g, '').trim();
+            setStatus(plan, t, 'done', report);
+            reports.push(`${t.text}:\n${report}`);
+            if (work.length) plan.work.push({ task: t.text, items: work });
+          } else {
+            setStatus(plan, t, 'pending');
+            interrupted.push({ text: t.text, items: work });
+            if (work.length) plan.work.push({ task: `${t.text} (interrupted)`, items: work });
+          }
+        });
         this.emit('event', { type: 'plan', tasks: plan.tasks });
+        e.planText = stoppedPlanText(plan, reports, interrupted);
         throw e;
       }
       group.forEach((t, k) => {
@@ -680,7 +700,8 @@ export class Agent extends EventEmitter {
     const end = failed
       ? `\nA task failed, the plan stopped there (${left} task(s) not done). Fix it with a new <plan> (done tasks are not run again), or tell the user.`
       : '\nAll the tasks are done: check the reports, then answer the user (or write a new <plan> if something is missing).';
-    const text = `${formatPlan(plan)}${reports.length ? `\n\nReports:\n${reports.join('\n\n')}` : ''}${end}`;
+    const before = already ? `\n(${already} task(s) were already done earlier in this request and were not run again: their reports are in the earlier result. To run one again, word it differently.)` : '';
+    const text = `${formatPlan(plan)}${before}${reports.length ? `\n\nReports:\n${reports.join('\n\n')}` : ''}${end}`;
     return { ok: !failed, text, result: formatResult('plan', {}, text) };
   }
 
@@ -1008,8 +1029,9 @@ export class Agent extends EventEmitter {
     this.turnStartIndex = resume ? resume.turnStartIndex : this.messages.length;
     this.currentTask = resume ? resume.currentTask : userText;
     // A plan is the plan of one request: a new message starts without one
-    // (a resumed turn keeps the plan of its resume point).
-    if (!resume) this.taskPlan = null;
+    // (a resumed turn keeps the plan of its resume point; a plan stopped or failed in
+    // the previous turn is kept for this one, see carryPlan).
+    if (!resume) this.taskPlan = carryPlan(this.taskPlan);
     const turnT0 = Date.now();
     // Totals over all the generations of this turn, shown once under the answer.
     const turnStats = { totalMs: 0, genMs: 0, promptMs: 0, tokens: 0, exact: true, steps: 0 };
@@ -1377,7 +1399,14 @@ export class Agent extends EventEmitter {
               plan: structuredClone(plan),
               remaining: [{ ...remainingOf(action), resumeId: actId, planReports: [...reports] }, ...toRun.slice(k + 1).map(remainingOf)],
             });
-            const out = await this.runPlan(action, signal, stepPoint);
+            let out;
+            try {
+              out = await this.runPlan(action, signal, stepPoint);
+            } catch (e) {
+              // Stopped: the results so far and what the plan did go into the history.
+              if (e.planText) e.partialResults = [...results, formatResult('plan', {}, e.planText)];
+              throw e;
+            }
             sourcesRead++;
             this.emit('event', { type: 'action_end', id: actId, ok: out.ok, output: out.text, meta: { tasks: this.taskPlan?.tasks.length ?? 0 } });
             results.push(out.result);
@@ -1453,7 +1482,7 @@ export class Agent extends EventEmitter {
         notice('Arrêté.');
         // Keep history consistent: the last message must be a user message or a full exchange.
         if (this.messages[this.messages.length - 1]?.role === 'assistant') {
-          this.messages.push({ role: 'user', content: '(stopped by the user)' });
+          this.messages.push({ role: 'user', content: e.partialResults ? `${e.partialResults.join('\n')}\n(stopped by the user)` : '(stopped by the user)' });
         }
       } else {
         reason = 'error';

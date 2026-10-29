@@ -316,3 +316,48 @@ test('parsePlan: the commands of a step are part of it, not tasks of their own',
   // no step headings: every item is a task
   assert.equal(parsePlan('- Read\n- Run tests\n- Fix').length, 3);
 });
+
+test('a plan stopped by the user: the agent sees what was done and changed, and "continue" does not redo it', async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-plan-'));
+  let main = 0;
+  let stop = true;
+  const runs = {};
+  let agent;
+  const f = await fake((r) => {
+    if (isSub(r)) {
+      const task = taskOf(r);
+      if (r.messages.length === 2) runs[task] = (runs[task] || 0) + 1;
+      if (task === 'Step two' && r.messages.length === 2) return '<write path="two.md">\npart\n</write>';
+      if (task === 'Step two' && stop) { stop = false; agent.stop(); return 'Halfway.'; }
+      return `Did ${task}.`;
+    }
+    main++;
+    if (main <= 2) return '<plan>\n- Step one\n- Step two\n- Step three\n</plan>';
+    return 'Done.';
+  });
+  agent = new Agent({ cwd, config: { baseUrl: f.url, model: 'm', approval: 'auto', shellEnabled: false } });
+  try {
+    await agent.send('do the three steps');
+    const stopped = agent.messages.at(-1).content;
+    assert.match(stopped, /The user STOPPED this plan[\s\S]*Step one:\nDid Step one\.[\s\S]*Interrupted task: Step two\nIt had already: wrote two\.md[\s\S]*\(stopped by the user\)$/);
+    await agent.send('continue');
+  } finally {
+    f.server.close();
+  }
+  assert.deepEqual(runs, { 'Step one': 1, 'Step two': 2, 'Step three': 1 });
+  const rewritten = f.requests.filter((r) => !isSub(r))[2].messages.at(-1).content;
+  assert.match(rewritten, /1 task\(s\) were already done earlier in this request and were not run again/);
+  assert.deepEqual(agent.taskPlan.tasks.map((t) => t.status), ['done', 'done', 'done']);
+});
+
+test('carryPlan keeps an unfinished plan for the next message only', async () => {
+  const { carryPlan } = await import('../src/agent/plan.js');
+  const plan = mergePlan(null, parsePlan('- A\n- B'));
+  setStatus(plan, plan.tasks[0], 'done', 'ok');
+  const next = carryPlan(plan);
+  assert.equal(next.carried, true);
+  assert.equal(carryPlan(next), null);
+  setStatus(plan, plan.tasks[1], 'done', 'ok');
+  assert.equal(carryPlan(plan), null);
+  assert.equal(carryPlan(null), null);
+});
