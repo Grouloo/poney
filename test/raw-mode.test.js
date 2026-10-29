@@ -29,6 +29,14 @@ test('markers cut across stream pieces are still recognized', () => {
   assert.deepEqual(run(pieces), run([raw]));
 });
 
+test('an empty reasoning without newline does not swallow the answer', () => {
+  const empty = '<|channel>thought<channel|><|tool_call>call:web_search{query:<|"|>France news<|"|>}<tool_call|><turn|>';
+  const call = [{ type: 'text', text: '<|tool_call>call:web_search{query:<|"|>France news<|"|>}<tool_call|>' }];
+  assert.deepEqual(run([empty]), call);
+  assert.deepEqual(run(empty.match(/[\s\S]{1,3}/g)), call); // the name cut across pieces too
+  assert.deepEqual(run(['<|channel>thought<channel|>Hello.']), [{ type: 'text', text: 'Hello.' }]);
+});
+
 test('a tool call opened inside the reasoning stays visible (as thinking)', () => {
   const r = run(['<|channel>thought\nI will <|tool_call>call:run{command:<|"|>ls<|"|>}', ' then think more']);
   assert.equal(r.length, 1);

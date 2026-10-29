@@ -119,12 +119,16 @@ export function makeChannelSplitter() {
     for (const end of END_MARKERS) buf = buf.split(end).join('');
     while (true) {
       if (mode === 'header') {
-        const nl = buf.indexOf('\n');
-        if (nl < 0) {
-          if (final) buf = '';
-          return;
-        }
-        buf = buf.slice(nl + 1);
+        // The channel name ("thought"), then a newline. An empty reasoning comes without
+        // the newline ("<|channel>thought<channel|>" then the answer): the name ends at
+        // the first character that cannot be part of it. (Waiting for a newline there
+        // swallowed the whole answer.)
+        if (buf.startsWith(CHANNEL_OPEN)) { buf = buf.slice(CHANNEL_OPEN.length); continue; } // (opened twice)
+        if (!final && CHANNEL_OPEN.startsWith(buf) && buf) return; // (maybe opened twice, cut)
+        const name = buf.match(/^[A-Za-z_]*/)[0];
+        if (name.length === buf.length && !final) return; // (the name may go on in the next piece)
+        buf = buf.slice(name.length);
+        if (buf.startsWith('\n')) buf = buf.slice(1);
         mode = headerThen;
         continue;
       }
