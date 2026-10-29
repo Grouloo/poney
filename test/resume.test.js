@@ -112,3 +112,42 @@ test('an unknown action cannot be resumed from', async () => {
   const agent = new Agent({ cwd: await tmp(), config: { model: 'm' } });
   assert.throws(() => agent.resumeFrom(12345), /point de reprise/);
 });
+
+test('in a plan, resuming from a sub-agent re-runs from its step: the tasks done before it are kept', async () => {
+  const cwd = await tmp();
+  const runs = [];
+  let main = 0;
+  const m = await fake((messages) => {
+    const task = messages.find((x) => x.role === 'user' && /YOUR TASK: /.test(x.content))?.content.match(/YOUR TASK: ([^\n]+)/)?.[1];
+    if (task) { runs.push(task); return `Report for ${task}.`; }
+    return ++main === 1 ? '<plan>\n- Step one\n- Step two\n- Step three\n</plan>' : 'All done.';
+  });
+  const agent = new Agent({ cwd, config: { baseUrl: m.url, model: 'm', shellEnabled: false, parallelAgents: false } });
+  const events = [];
+  agent.on('event', (e) => events.push(e));
+  await agent.send('do it', { turnId: 't1' });
+  const [plan, , two] = actionsOf(events);
+  assert.equal(plan.tool, 'plan');
+  assert.deepEqual(runs, ['Step one', 'Step two', 'Step three']);
+
+  const before = events.length;
+  await agent.resumeFrom(two.id);
+  m.server.close();
+  assert.deepEqual(runs.slice(3), ['Step two', 'Step three'], 'step one is not run again');
+  // Same plan card: no new one, and it ends with the reports of all three steps.
+  assert.deepEqual(actionsOf(events, before).map((e) => e.args.title), ['Step two', 'Step three']);
+  const end = events.slice(before).find((e) => e.type === 'action_end' && e.id === plan.id);
+  assert.match(end.output, /\[x\] Step one[\s\S]*Report for Step one[\s\S]*Report for Step two[\s\S]*Report for Step three/);
+  assert.equal(events.filter((e) => e.type === 'final').at(-1).text, 'All done.');
+
+  // Resuming from the plan card itself still runs it all again.
+  const m2 = await fake((messages) => {
+    const task = messages.find((x) => x.role === 'user' && /YOUR TASK: /.test(x.content))?.content.match(/YOUR TASK: ([^\n]+)/)?.[1];
+    if (task) { runs.push(task); return `Report for ${task}.`; }
+    return 'All done.';
+  });
+  agent.config = { ...agent.config, baseUrl: m2.url };
+  await agent.resumeFrom(plan.id);
+  m2.server.close();
+  assert.deepEqual(runs.slice(5), ['Step one', 'Step two', 'Step three']);
+});

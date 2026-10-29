@@ -614,7 +614,7 @@ export class Agent extends EventEmitter {
    * A failure stops the plan there: the model gets the reports and may write a
    * new plan (tasks already done are not run again).
    */
-  async runPlan(action, signal, actId) {
+  async runPlan(action, signal, stepPoint = () => {}) {
     const written = parsePlan(action.args.body);
     if (!written.length) {
       const text = 'Empty plan: write one task per line, like "- task".';
@@ -635,17 +635,17 @@ export class Agent extends EventEmitter {
       const text = `${formatPlan(plan)}\n(Sub-agents are not available: do these tasks yourself, in order.)`;
       return { ok: true, text, result: formatResult('plan', {}, text) };
     }
-    const reports = [];
+    const reports = [...(action.planReports ?? [])]; // (resumed: those of the steps kept)
     let failed = false;
     // (sub-agents one at a time: @parallel tasks too, so that only the one running shows as such)
     const next = () => (this.config.parallelAgents === false ? nextGroup(plan).slice(0, 1) : nextGroup(plan));
     for (let group = next(); group.length && !failed; group = next()) {
+      const ids = group.map(() => nextId++);
+      // Resuming from one of these sub-agents runs the plan again from this step:
+      // the tasks done before it (and their reports) are kept.
+      stepPoint(ids, plan, reports);
       for (const t of group) setStatus(plan, t, 'running');
       this.emit('event', { type: 'plan', tasks: plan.tasks });
-      const ids = group.map(() => nextId++);
-      // Resuming from one of these sub-agents re-runs the plan step (done tasks are kept).
-      const cp = this.checkpoints.findLast((c) => c.kind === 'action' && c.actIds.includes(actId));
-      if (cp) cp.actIds.push(...ids);
       // (the turn after the request, without the message with the plan)
       // Each sub-agent its own digest: the steps that concern its task are kept longer.
       // Sized from the window (the same model), and every step readable in full.
@@ -1269,7 +1269,8 @@ export class Agent extends EventEmitter {
         const received = []; // results of this batch (to update the assessment after outside information)
         // Resume point for the actions of this batch: the history up to the
         // message that asked for them, and the results already obtained.
-        const resumePoint = (actIds, fromIndex) => this.checkpoints.push({
+        const remainingOf = ({ tool, args, raw, start, end, complete }) => ({ tool, args, raw, start, end, complete });
+        const resumePoint = (actIds, fromIndex, over = {}) => this.checkpoints.push({
           kind: 'action',
           actIds,
           archive: null,
@@ -1279,10 +1280,11 @@ export class Agent extends EventEmitter {
           memory: [...this.memory],
           memoryShownAt: this.memoryShownAt,
           chapters: [...this.chapters],
-          remaining: toRun.slice(fromIndex).map(({ tool, args, raw, start, end, complete }) => ({ tool, args, raw, start, end, complete })),
+          remaining: toRun.slice(fromIndex).map(remainingOf),
           priorResults: [...results],
           turnStartIndex: this.turnStartIndex,
           currentTask: this.currentTask,
+          ...over,
         });
         // Files the model can see the content of (the current message has no results yet).
         const seenFiles = filesInContext(this.messages);
@@ -1305,9 +1307,12 @@ export class Agent extends EventEmitter {
         }
         for (const [k, action] of toRun.entries()) {
           if (stopBatch) break;
-          const actId = nextId++;
-          resumePoint([actId], k);
-          this.emit('event', { type: 'action_start', id: actId, tool: action.tool, args: action.args });
+          // (a plan resumed from one of its steps goes on in its card: same id, its resume point kept)
+          const actId = action.resumeId ?? nextId++;
+          if (!action.resumeId) {
+            resumePoint([actId], k);
+            this.emit('event', { type: 'action_start', id: actId, tool: action.tool, args: action.args });
+          }
           if (!isToolEnabled(action.tool, config)) {
             const what = action.tool === 'run' ? 'Running commands' : 'Internet access';
             this.emit('event', { type: 'action_end', id: actId, ok: false, output: 'Outil désactivé dans les réglages.', meta: {} });
@@ -1353,7 +1358,11 @@ export class Agent extends EventEmitter {
             continue;
           }
           if (action.tool === 'plan') {
-            const out = await this.runPlan(action, signal, actId);
+            const stepPoint = (ids, plan, reports) => resumePoint(ids, k, {
+              plan: structuredClone(plan),
+              remaining: [{ ...remainingOf(action), resumeId: actId, planReports: [...reports] }, ...toRun.slice(k + 1).map(remainingOf)],
+            });
+            const out = await this.runPlan(action, signal, stepPoint);
             sourcesRead++;
             this.emit('event', { type: 'action_end', id: actId, ok: out.ok, output: out.text, meta: { tasks: this.taskPlan?.tasks.length ?? 0 } });
             results.push(out.result);
