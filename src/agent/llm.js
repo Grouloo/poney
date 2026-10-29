@@ -45,6 +45,8 @@ async function checkResponse(res) {
  * end (if the server reports them) {type: 'usage', promptTokens, outputTokens,
  * promptMs?, evalMs?} and {type: 'done', reason} ('length' = the answer was cut).
  * opts.jsonSchema: the answer must be JSON following this schema (structured output).
+ * opts.noThinking: the model answers at once, without reasoning first, where the
+ * server allows it (Gemma in LM Studio's raw mode, Ollama's think: false).
  */
 export async function* streamChat(opts) {
   if (opts.provider === 'openai' && await isLMStudio(opts)) {
@@ -59,8 +61,9 @@ export async function* streamChat(opts) {
       // Stop trying the SDK if it could not even connect.
       if (/ECONNREFUSED|websocket|connect/i.test(String(e?.message))) lmsBroken.add(lmsRoot(opts.baseUrl));
     }
-    // (raw completions cannot constrain the output to a JSON schema: the chat endpoint does)
-    if (!opts.jsonSchema && lmsRawMode(opts) && !lmsBroken.has(lmsRoot(opts.baseUrl))) {
+    // (raw completions cannot constrain the output to a JSON schema: the chat endpoint
+    // does; but only raw mode can keep the model from reasoning first, which wins)
+    if ((!opts.jsonSchema || opts.noThinking) && lmsRawMode(opts) && !lmsBroken.has(lmsRoot(opts.baseUrl))) {
       let yielded = false;
       try {
         for await (const chunk of streamLMStudioRaw(opts)) {
@@ -158,9 +161,14 @@ export function makeChannelSplitter() {
   };
 }
 
-async function* streamLMStudioRaw({ baseUrl, apiKey, model, messages, temperature, maxTokens, signal, tools }) {
+// Gemma's own way of not reasoning: an empty reasoning channel, closed at once.
+export const GEMMA_NO_THINKING = '<|channel>thought<channel|>';
+
+async function* streamLMStudioRaw({ baseUrl, apiKey, model, messages, temperature, maxTokens, signal, tools, noThinking }) {
   const handle = await lmsModelHandle(baseUrl, model);
-  const prompt = await handle.applyPromptTemplate(Chat.from(messages), tools ? { toolDefinitions: tools } : undefined);
+  let prompt = await handle.applyPromptTemplate(Chat.from(messages), tools ? { toolDefinitions: tools } : undefined);
+  // The answer starts after an empty reasoning (the prompt before it is unchanged: still cached).
+  if (noThinking) prompt += GEMMA_NO_THINKING;
   const headers = { 'Content-Type': 'application/json' };
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
   const res = await fetch(`${openaiBase(baseUrl)}/completions`, {
@@ -313,10 +321,10 @@ async function* readPromptLMStudio({ baseUrl, model, messages, temperature, sign
 
 // ---------- HTTP (Ollama native, OpenAI-compatible) ----------
 
-async function* streamHTTP({ provider, baseUrl, apiKey, model, messages, numCtx, temperature, maxTokens, signal, tools, jsonSchema }) {
+async function* streamHTTP({ provider, baseUrl, apiKey, model, messages, numCtx, temperature, maxTokens, signal, tools, jsonSchema, noThinking }) {
   if (!model) throw new Error('No model selected.');
   if (provider === 'ollama') {
-    const res = await fetch(`${trimSlash(baseUrl)}/api/chat`, {
+    const post = (think) => fetch(`${trimSlash(baseUrl)}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       signal,
@@ -325,9 +333,13 @@ async function* streamHTTP({ provider, baseUrl, apiKey, model, messages, numCtx,
         messages,
         stream: true,
         ...(jsonSchema ? { format: jsonSchema } : {}),
+        ...(think === false ? { think: false } : {}),
         options: { num_ctx: numCtx, ...sampling(temperature), num_predict: maxTokens },
       }),
     });
+    let res = await post(noThinking ? false : undefined);
+    // (a server too old for "think": the same request without it)
+    if (noThinking && res.status === 400 && /think/i.test(await res.clone().text().catch(() => ''))) res = await post(undefined);
     await checkResponse(res);
     for await (const line of readLines(res.body)) {
       let data;

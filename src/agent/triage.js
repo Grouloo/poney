@@ -48,8 +48,10 @@ export const SOURCE_TOOLS = new Set(['read', 'search', 'list', 'run', 'fetch', '
  * The assessment calls: low temperature (the model's own, often 1.0, makes small
  * models wander out of the JSON), then, if nothing could be read, again with a
  * reminder, more room and a little more temperature (at the same one, the same
- * mistake comes back). The room includes the model's reasoning, if it reasons
- * first (seen with Gemma on updates: 600 tokens of reasoning, then cut before the JSON).
+ * mistake comes back). The model is asked not to reason first (see noThinking in
+ * llm.js: a first impression is what is wanted, and the "why" of each item is its
+ * reasoning); where a server cannot prevent it, the room includes the reasoning
+ * (seen with Gemma on updates: 600 tokens of reasoning, then cut before the JSON).
  */
 export const TRIAGE_ATTEMPTS = [
   { temperature: 0.1, maxTokens: 1200 },

@@ -961,6 +961,7 @@ export class Agent extends EventEmitter {
         toolSchemas: toolSchemas(this.config, { subagentRole: this.role === 'sub' }),
         temperature: attempt.temperature,
         maxTokens: attempt.maxTokens,
+        noThinking: true, // a first impression, not an inquiry (the "why" of each item is its reasoning)
         messages: triageRequest(prompt, attempt.retry ? `${instruction}\n${cut ? TRIAGE_RETRY_CUT : TRIAGE_RETRY}` : instruction),
         jsonSchema,
         signal,

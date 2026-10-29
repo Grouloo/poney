@@ -101,6 +101,8 @@ test('something unknown: the final answer is refused until several sources are r
   const triageReq = f.requests[0];
   assert.ok(isTriage(triageReq));
   assert.equal(triageReq.format?.type, 'object'); // structured output asked for
+  assert.equal(triageReq.think, false); // a first impression: no reasoning first
+  assert.equal(f.requests[1].think, undefined); // (the answer itself reasons as usual)
   // The turn's message carries the assessment and the route.
   assert.match(f.requests[1].messages.at(-1).content, /You do not know:\n- what a\.txt and b\.txt hold \(never read\)\nRoute set by the app: Read at least 2 sources/);
   const triage = events.find((e) => e.type === 'triage');
@@ -348,5 +350,22 @@ test('a reply cut while the model was still reasoning: asked again with more roo
   assert.deepEqual(asks.map((r) => r.maxTokens), [1200, 1800]);
   assert.match(asks[1].last, /ran out of room while you were still reasoning/);
   assert.ok(events.some((e) => e.type === 'notice' && /Bilan coupé pendant la réflexion du modèle : nouvel essai \(2\/3\)/.test(e.text)));
+  assert.equal(events.find((e) => e.type === 'triage').route, 'direct');
+});
+
+test('a server too old for "think": the assessment is asked again without it', async () => {
+  const f = await fake((r) => {
+    if ('think' in r) return { status: 400, body: 'invalid field: think' };
+    return isTriage(r) ? '{"claims": [{"point": "greetings", "why": "common", "status": "known"}]}' : 'Hello!';
+  });
+  const agent = new Agent({ cwd: await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-triage-')), triage: true, config: { baseUrl: f.url, model: 'm', shellEnabled: false } });
+  const events = [];
+  agent.on('event', (e) => events.push(e));
+  try {
+    await agent.send('hi');
+  } finally {
+    f.server.close();
+  }
+  assert.deepEqual(f.requests.map((r) => [isTriage(r), 'think' in r, Boolean(r.format)]), [[true, true, true], [true, false, true], [false, false, false]]);
   assert.equal(events.find((e) => e.type === 'triage').route, 'direct');
 });
