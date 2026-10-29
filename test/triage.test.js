@@ -205,3 +205,36 @@ test('in a plan, the update names the sub-agent\'s own task, not the context it 
   const text = triageUpdateInstruction('You are one of several agents…\n\nThe plan:\n1. A\n2. B\n\nYOUR TASK: Write the docs');
   assert.match(text, /Your current task: Write the docs\n/);
 });
+
+test('an unreadable assessment is asked again (low temperature, then a little higher); given up after 3', async () => {
+  let tries = 0;
+  const f = await fake((r) => {
+    if (isTriage(r)) return ++tries === 1 ? 'Sure! I know things about this.' : '{"known": [], "doubts": [{"point": "the API", "why": "it changes"}], "unknowns": []}';
+    return 'Answer.';
+  });
+  const agent = new Agent({ cwd: await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-triage-')), triage: true, config: { baseUrl: f.url, model: 'm', shellEnabled: false } });
+  const events = [];
+  agent.on('event', (e) => events.push(e));
+  try {
+    await agent.send('How does the API work?');
+  } finally {
+    f.server.close();
+  }
+  const asks = f.requests.filter(isTriage);
+  assert.deepEqual(asks.map((r) => r.options.temperature), [0.1, 0.3]);
+  assert.match(lastUser(asks[1]), /could not be read as this JSON/);
+  assert.ok(events.some((e) => e.type === 'notice' && /Bilan illisible : nouvel essai \(2\/3\)/.test(e.text)));
+  assert.equal(events.find((e) => e.type === 'triage').route, 'check');
+
+  const g = await fake((r) => (isTriage(r) ? 'no json' : 'Answer.'));
+  agent.config = { ...agent.config, baseUrl: g.url };
+  events.length = 0;
+  try {
+    await agent.send('again');
+  } finally {
+    g.server.close();
+  }
+  assert.equal(g.requests.filter(isTriage).length, 3);
+  assert.ok(events.find((e) => e.type === 'triage').failed);
+  assert.deepEqual(events.filter((e) => e.type === 'final').map((e) => e.text), ['Answer.']);
+});

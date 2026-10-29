@@ -8,7 +8,7 @@ import { executeAction, runShell, truncateMiddle, checkOldBlock } from './tools.
 import { remember, forget, memoryBlock, standingInstructions, instructionNote, replacedAutoNote } from './memory.js';
 import { recall, autoRecall, recalledBlock, keywordsOf } from './history.js';
 import { linksToRead, readLinks } from './autofetch.js';
-import { TRIAGE_SCHEMA, TRIAGE_MAX_TOKENS, ROUTE_SOURCES, SOURCE_TOOLS, MAX_REFUSALS, triageRequest, triageInstruction, triageUpdateInstruction, needsUpdate, parseTriage, triageBlock, triageReminder, triageRefusal } from './triage.js';
+import { TRIAGE_SCHEMA, TRIAGE_ATTEMPTS, TRIAGE_RETRY, ROUTE_SOURCES, SOURCE_TOOLS, MAX_REFUSALS, triageRequest, triageInstruction, triageUpdateInstruction, needsUpdate, parseTriage, triageBlock, triageReminder, triageRefusal } from './triage.js';
 import { parsePlan, mergePlan, nextGroup, setStatus, formatPlan, subAgentTask, turnDigest } from './plan.js';
 import {
   summaryTokens, summaryWords, mechanicalSummary, DEFAULT_CHARS_PER_TOKEN,
@@ -950,14 +950,15 @@ export class Agent extends EventEmitter {
    */
   async assess(system, signal, instruction = triageInstruction()) {
     const prompt = this.buildPrompt(system);
-    const ask = async (jsonSchema) => {
+    const ask = async (jsonSchema, attempt) => {
       let text = '';
       for await (const chunk of (this.streamChat ?? streamChat)({ // (replaceable in tests)
         ...this.cfg,
         // Same tools as the turn's calls, so that the server reuses its cached prompt.
         toolSchemas: toolSchemas(this.config, { subagentRole: this.role === 'sub' }),
-        maxTokens: TRIAGE_MAX_TOKENS,
-        messages: triageRequest(prompt, instruction),
+        temperature: attempt.temperature,
+        maxTokens: attempt.maxTokens,
+        messages: triageRequest(prompt, attempt.retry ? `${instruction}\n${TRIAGE_RETRY}` : instruction),
         jsonSchema,
         signal,
       })) {
@@ -966,13 +967,22 @@ export class Agent extends EventEmitter {
       }
       return parseTriage(text);
     };
-    try {
-      return await ask(TRIAGE_SCHEMA);
-    } catch (e) {
-      if (signal.aborted) throw e;
-      // A server without structured output: the same request, the JSON only asked for.
-      return ask(undefined).catch((e2) => { if (signal.aborted) throw e2; return null; });
+    let schema = TRIAGE_SCHEMA;
+    for (const [k, attempt] of TRIAGE_ATTEMPTS.entries()) {
+      if (k) this.emit('event', { type: 'notice', text: `Bilan illisible : nouvel essai (${k + 1}/${TRIAGE_ATTEMPTS.length}).` });
+      let t = null;
+      try {
+        t = await ask(schema, attempt);
+      } catch (e) {
+        if (signal.aborted) throw e;
+        if (!schema) continue;
+        // A server without structured output: the same request, the JSON only asked for.
+        schema = undefined;
+        t = await ask(undefined, attempt).catch((e2) => { if (signal.aborted) throw e2; return null; });
+      }
+      if (t) return t;
     }
+    return null;
   }
 
   // ----- main loop -----

@@ -26,7 +26,18 @@ export const ROUTE_SOURCES = { direct: 0, check: 1, investigate: 2 };
 /** Tools that read a source (files, project, commands, web, earlier conversation, sub-agents). */
 export const SOURCE_TOOLS = new Set(['read', 'search', 'list', 'run', 'web_search', 'fetch', 'recall', 'agent', 'plan']);
 
-export const TRIAGE_MAX_TOKENS = 600;
+/**
+ * The assessment calls: low temperature (the model's own, often 1.0, makes small
+ * models wander out of the JSON), then, if nothing could be read, again with a
+ * reminder, more room (a cut reply cannot be read) and a little more temperature
+ * (at the same one, the same mistake comes back).
+ */
+export const TRIAGE_ATTEMPTS = [
+  { temperature: 0.1, maxTokens: 600 },
+  { temperature: 0.3, maxTokens: 900, retry: true },
+  { temperature: 0.6, maxTokens: 900, retry: true },
+];
+export const TRIAGE_RETRY = '(Your previous reply could not be read as this JSON. Reply with the JSON object ONLY: no text, no code fence, nothing before or after it; short items.)';
 
 export function triageInstruction() {
   return [

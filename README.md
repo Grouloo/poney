@@ -127,7 +127,9 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   files were changed during the turn. Both show as a line in the conversation; saved with it.
 - **Assessment before acting** (on by default, can be turned off per conversation in "Étapes"): before the model
   may use its tools on a message, a dedicated call (on the cached prompt, JSON-only output when the server supports
-  structured output) asks it what it knows, what it doubts and what it does not know, with why. The app, not the
+  structured output, temperature 0.1) asks it what it knows, what it doubts and what it does not know, with why. A
+  reply that cannot be read is asked again, up to 3 times (with a reminder, more room and a little more temperature).
+  The app, not the
   model, picks the route: nothing lacking, act directly; a doubt, check it with one lookup; something unknown, read
   at least two sources (files, project search, commands, web pages, sub-agents) before concluding. A final answer
   given before that is refused (once for a doubt, twice for an unknown, then let through), and what is still to
