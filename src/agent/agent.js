@@ -9,7 +9,7 @@ import { remember, forget, memoryBlock, standingInstructions, instructionNote, r
 import { recall, autoRecall, recalledBlock, keywordsOf } from './history.js';
 import { linksToRead, readLinks } from './autofetch.js';
 import { TRIAGE_SCHEMA, TRIAGE_ATTEMPTS, TRIAGE_RETRY, TRIAGE_RETRY_CUT, fallbackTriage, ROUTE_SOURCES, SOURCE_TOOLS, MAX_REFUSALS, triageRequest, triageInstruction, triageUpdateInstruction, needsUpdate, parseTriage, triageBlock, triageReminder, triageRefusal } from './triage.js';
-import { parsePlan, mergePlan, carryPlan, nextGroup, setStatus, formatPlan, subAgentTask, turnDigest, stoppedPlanText } from './plan.js';
+import { parsePlan, taskParts, mergePlan, carryPlan, nextGroup, setStatus, formatPlan, subAgentTask, turnDigest, stoppedPlanText } from './plan.js';
 import {
   summaryTokens, summaryWords, mechanicalSummary, DEFAULT_CHARS_PER_TOKEN,
   makeEstimator, contextPlan, answerTokens, isValidSample, historyTokens, splitForCompaction, extractFacts, buildSummaryRequest, cleanSummary,
@@ -656,7 +656,7 @@ export class Agent extends EventEmitter {
       const agents = group.map((t) => {
         const outputs = new Map();
         const digest = turnDigest(turn, { maxChars, task: `${t.text}\n${this.currentTask ?? ''}`, outputs });
-        return { tool: 'agent', args: { title: t.text.slice(0, 60), task: subAgentTask(plan, t, this.currentTask, digest) }, outputs };
+        return { tool: 'agent', args: { title: taskParts(t.text).head.slice(0, 60), task: subAgentTask(plan, t, this.currentTask, digest) }, outputs };
       });
       let results;
       try {

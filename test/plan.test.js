@@ -361,3 +361,10 @@ test('carryPlan keeps an unfinished plan for the next message only', async () =>
   assert.equal(carryPlan(plan), null);
   assert.equal(carryPlan(null), null);
 });
+
+test('taskParts gives back a step and its commands, for display', async () => {
+  const { taskParts } = await import('../src/agent/plan.js');
+  const [t] = parsePlan('1. Étape 1 : Installer\n   - npm install\n   - npm test');
+  assert.deepEqual(taskParts(t.text), { head: 'Étape 1 : Installer', parts: ['npm install', 'npm test'] });
+  assert.deepEqual(taskParts('Read the code'), { head: 'Read the code', parts: [] });
+});

@@ -444,9 +444,14 @@ body.running .resume-btn { display: none; }
 .plan-list li { display: flex; align-items: baseline; gap: 8px; padding: 2px 0; }
 .plan-box { width: 14px; flex: none; text-align: center; color: var(--muted); }
 .plan-list li.done .plan-box { color: #3fb950; }
-.plan-list li.done .plan-text { color: var(--muted); text-decoration: line-through; }
+.plan-list li.done .plan-text { color: var(--muted); }
+.plan-list li.done .plan-text > span { text-decoration: line-through; }
 .plan-list li.failed .plan-box { color: #f85149; }
 .plan-list li.running .plan-text { font-weight: 600; }
+.plan-text { min-width: 0; }
+.plan-list .plan-parts { list-style: disc; margin: 1px 0 2px; padding-left: 16px; font-size: 12px; color: var(--muted); }
+.plan-list .plan-parts li { display: list-item; padding: 0; }
+.plan-list li.running .plan-parts { font-weight: 400; }
 .plan-list .tag { margin-left: 4px; font-size: 11px; color: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 0 6px; white-space: nowrap; }
 .plan-panel.hidden { display: none; }
 

@@ -50,6 +50,14 @@ export function parsePlan(body) {
   return tasks.map((t) => ({ text: t.parts.length ? `${t.text.replace(/\s*:$/, '')} (includes: ${t.parts.join('; ')})` : t.text, done: t.done, parallel: t.parallel }));
 }
 
+const PARTS_RE = /^([\s\S]*?) \(includes: ([\s\S]*)\)$/;
+
+/** A task's own text and the sub-steps parsePlan put in it (for display: titles, the plan panel). */
+export function taskParts(text) {
+  const m = String(text ?? '').match(PARTS_RE);
+  return m ? { head: m[1], parts: m[2].split('; ') } : { head: String(text ?? ''), parts: [] };
+}
+
 const key = (text) => text.toLowerCase().replace(/\s+/g, ' ').replace(/[.:;!]+$/, '').trim();
 
 /**

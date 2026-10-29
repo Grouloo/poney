@@ -1,6 +1,7 @@
 import { parseActions, splitThinking, normalizeToolCalls, liveAction, partialEditPairs } from '../agent/protocol.js';
 import hljs from '../../node_modules/@highlightjs/cdn-assets/es/highlight.min.js';
 import { fmtNum, fmtDuration } from './format.js';
+import { parsePlan, taskParts } from '../agent/plan.js';
 import { markdown, esc } from './markdown.js';
 import { documentHtml } from './document.js';
 import DOMPurify from '../../node_modules/dompurify/dist/purify.es.mjs';
@@ -234,8 +235,12 @@ function renderPlan(tasks = []) {
   if (!tasks.length) return;
   const done = tasks.filter((t) => t.status === 'done').length;
   panel.querySelector('.plan-count').textContent = `${done}/${tasks.length}`;
-  panel.querySelector('.plan-list').innerHTML = tasks.map((t) =>
-    `<li class="${t.status}"><span class="plan-box">${PLAN_ICON[t.status] || '○'}</span><span class="plan-text">${esc(t.text)}</span>${t.parallel ? '<span class="tag">en parallèle</span>' : ''}</li>`).join('');
+  panel.querySelector('.plan-list').innerHTML = tasks.map((t) => {
+    // (the commands of a step, which parsePlan puts in its task, as a list under it)
+    const { head, parts } = taskParts(t.text);
+    const sub = parts.length ? `<ul class="plan-parts">${parts.map((p) => `<li>${esc(p)}</li>`).join('')}</ul>` : '';
+    return `<li class="${t.status}"><span class="plan-box">${PLAN_ICON[t.status] || '○'}</span><div class="plan-text"><span>${esc(head)}</span>${sub}</div>${t.parallel ? '<span class="tag">en parallèle</span>' : ''}</li>`;
+  }).join('');
   panel.classList.toggle('all-done', done === tasks.length);
 }
 $('planPanel').querySelector('.plan-head').onclick = () => $('planPanel').classList.toggle('collapsed');
@@ -649,7 +654,7 @@ function summarize(tool, args) {
     case 'remember': return args.note || '';
     case 'forget': return `note ${args.id || ''}`;
     case 'plan': {
-      const n = (args.body || '').split('\n').filter((l) => l.trim()).length;
+      const n = parsePlan(args.body).length; // (as the agent counts them: a step's commands are part of it)
       return `${n} tâche${n > 1 ? 's' : ''}`;
     }
     default: return args.path || '.';
