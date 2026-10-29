@@ -47,15 +47,25 @@ export const SOURCE_TOOLS = new Set(['read', 'search', 'list', 'run', 'fetch', '
 /**
  * The assessment calls: low temperature (the model's own, often 1.0, makes small
  * models wander out of the JSON), then, if nothing could be read, again with a
- * reminder, more room (a cut reply cannot be read) and a little more temperature
- * (at the same one, the same mistake comes back).
+ * reminder, more room and a little more temperature (at the same one, the same
+ * mistake comes back). The room includes the model's reasoning, if it reasons
+ * first (seen with Gemma on updates: 600 tokens of reasoning, then cut before the JSON).
  */
 export const TRIAGE_ATTEMPTS = [
-  { temperature: 0.1, maxTokens: 600 },
-  { temperature: 0.3, maxTokens: 900, retry: true },
-  { temperature: 0.6, maxTokens: 900, retry: true },
+  { temperature: 0.1, maxTokens: 1200 },
+  { temperature: 0.3, maxTokens: 1800, retry: true },
+  { temperature: 0.6, maxTokens: 1800, retry: true },
 ];
 export const TRIAGE_RETRY = '(Your previous reply could not be used: it was not this JSON, or it only restated the request. Reply with the JSON object ONLY, nothing before or after it: the facts your answer relies on, each graded; short items.)';
+export const TRIAGE_RETRY_CUT = '(Your previous reply ran out of room while you were still reasoning, before the JSON. Reason briefly this time, then write the JSON object.)';
+
+/**
+ * When no assessment could be read at all: a careful route instead of none, so
+ * that failing it is never a way around it (one source to read before answering).
+ */
+export function fallbackTriage() {
+  return { known: [], doubts: [{ point: 'what your answer relies on', why: 'your assessment could not be read' }], unknowns: [], route: 'check' };
+}
 
 export function triageInstruction() {
   return [
@@ -173,7 +183,7 @@ export function triageBlock(t, { update = false, web = false } = {}) {
     t.known.length ? `You know:\n${t.known.map(line).join('\n')}` : '',
     t.doubts.length ? `You doubt:\n${t.doubts.map(line).join('\n')}` : '',
     t.unknowns.length ? `You do not know:\n${t.unknowns.map(line).join('\n')}` : '',
-    web ? `Route set by the app: ${ROUTE_TEXT[t.route]}\nWhen you answer from the web: end with the pages you rely on (their URL), and say which details you could not check.)` : `Route set by the app: ${ROUTE_TEXT[t.route]})`,
+    web ? `Route set by the app: ${ROUTE_TEXT[t.route]}\nWhen you answer from the web: end with "Sources" (only pages you opened with <fetch>) and "Seen in search results (not opened)", and say which details you could not check.)` : `Route set by the app: ${ROUTE_TEXT[t.route]})`,
   ].filter(Boolean).join('\n');
 }
 

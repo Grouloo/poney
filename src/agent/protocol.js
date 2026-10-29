@@ -184,7 +184,7 @@ export function buildSystemPrompt({ cwd, offProject = false, memory = true, para
   if (shell) rules.push('Commands time out; do not start servers that never stop.');
   if (web) {
     rules.push('Your knowledge stops at your training. When the user mentions something you do not know or that may have changed (recent news, a new version, a product, a person, prices), search with <web_search> (then <fetch> a page) before answering. Do not guess, and do not just say you do not know.');
-    rules.push('Search results are only snippets: <fetch> a page before relying on a detail (a number, a date, a name, a quote). When your answer relies on the web, end it with the pages it relies on (their URL), and say plainly which details you could not check.');
+    rules.push('Search results are only snippets: <fetch> a page before relying on a detail (a number, a date, a name, a quote). When your answer relies on the web, end it with its sources: under "Sources", only the pages you opened with <fetch>; pages you only saw in search results go under "Seen in search results (not opened)". Say plainly which details you could not check.');
   } else {
     rules.push('You have no internet access: say so when the user asks about something you do not know or that may be recent.');
   }

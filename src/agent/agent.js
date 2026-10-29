@@ -8,7 +8,7 @@ import { executeAction, runShell, truncateMiddle, checkOldBlock } from './tools.
 import { remember, forget, memoryBlock, standingInstructions, instructionNote, replacedAutoNote } from './memory.js';
 import { recall, autoRecall, recalledBlock, keywordsOf } from './history.js';
 import { linksToRead, readLinks } from './autofetch.js';
-import { TRIAGE_SCHEMA, TRIAGE_ATTEMPTS, TRIAGE_RETRY, ROUTE_SOURCES, SOURCE_TOOLS, MAX_REFUSALS, triageRequest, triageInstruction, triageUpdateInstruction, needsUpdate, parseTriage, triageBlock, triageReminder, triageRefusal } from './triage.js';
+import { TRIAGE_SCHEMA, TRIAGE_ATTEMPTS, TRIAGE_RETRY, TRIAGE_RETRY_CUT, fallbackTriage, ROUTE_SOURCES, SOURCE_TOOLS, MAX_REFUSALS, triageRequest, triageInstruction, triageUpdateInstruction, needsUpdate, parseTriage, triageBlock, triageReminder, triageRefusal } from './triage.js';
 import { parsePlan, mergePlan, nextGroup, setStatus, formatPlan, subAgentTask, turnDigest } from './plan.js';
 import {
   summaryTokens, summaryWords, mechanicalSummary, DEFAULT_CHARS_PER_TOKEN,
@@ -950,26 +950,32 @@ export class Agent extends EventEmitter {
    */
   async assess(system, signal, instruction = triageInstruction()) {
     const prompt = this.buildPrompt(system);
+    let cut = false; // the previous reply ran out of room while reasoning
     const ask = async (jsonSchema, attempt) => {
       let text = '';
+      let thinking = '';
+      let done = null;
       for await (const chunk of (this.streamChat ?? streamChat)({ // (replaceable in tests)
         ...this.cfg,
         // Same tools as the turn's calls, so that the server reuses its cached prompt.
         toolSchemas: toolSchemas(this.config, { subagentRole: this.role === 'sub' }),
         temperature: attempt.temperature,
         maxTokens: attempt.maxTokens,
-        messages: triageRequest(prompt, attempt.retry ? `${instruction}\n${TRIAGE_RETRY}` : instruction),
+        messages: triageRequest(prompt, attempt.retry ? `${instruction}\n${cut ? TRIAGE_RETRY_CUT : TRIAGE_RETRY}` : instruction),
         jsonSchema,
         signal,
       })) {
         if (chunk.type === 'text') text += chunk.text;
+        else if (chunk.type === 'thinking') thinking += chunk.text;
+        else if (chunk.type === 'done') done = chunk.reason;
         else if (chunk.type === 'progress') this.emit('event', { type: 'prompt_progress', id: 'triage', progress: chunk.progress });
       }
+      cut = done === 'length' && Boolean(thinking.trim()) && !text.trim();
       return parseTriage(text);
     };
     let schema = TRIAGE_SCHEMA;
     for (const [k, attempt] of TRIAGE_ATTEMPTS.entries()) {
-      if (k) this.emit('event', { type: 'notice', text: `Bilan illisible : nouvel essai (${k + 1}/${TRIAGE_ATTEMPTS.length}).` });
+      if (k) this.emit('event', { type: 'notice', text: `${cut ? 'Bilan coupé pendant la réflexion du modèle' : 'Bilan illisible'} : nouvel essai (${k + 1}/${TRIAGE_ATTEMPTS.length}).` });
       let t = null;
       try {
         t = await ask(schema, attempt);
@@ -1103,15 +1109,13 @@ export class Agent extends EventEmitter {
       if (!resume && (this.steps?.triage ?? this.triageByDefault)) {
         await this.maybeCompact(system, signal);
         this.emit('event', { type: 'triage_start', turnId });
-        triage = await this.assess(system, signal);
-        if (triage) {
-          sourcesRead = preRead;
-          const last = this.messages[this.messages.length - 1];
-          last.content += `\n\n${triageBlock(triage)}`;
-          this.emit('event', { type: 'triage', turnId, ...triage });
-        } else {
-          this.emit('event', { type: 'triage', turnId, failed: true });
-        }
+        const t = await this.assess(system, signal);
+        // None could be read: a careful route all the same (failing it never skips it).
+        triage = t ?? fallbackTriage();
+        sourcesRead = preRead;
+        const last = this.messages[this.messages.length - 1];
+        last.content += `\n\n${triageBlock(triage)}`;
+        this.emit('event', { type: 'triage', turnId, ...triage, ...(t ? {} : { failed: true }) });
       }
       for (let step = 0; ; step++) {
         if (signal.aborted) throw stopped(); // stopped during an action: do not generate again

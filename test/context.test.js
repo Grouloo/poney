@@ -367,7 +367,7 @@ test('the summary request continues the cached conversation (same prefix, no re-
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-ctx-'));
   await fs.writeFile(path.join(cwd, 'big.txt'), `${'data '.repeat(1000)}\n`);
   const agent = new Agent({ cwd, config: { baseUrl: fake.url, model: 'fake', numCtx: 8192, maxTokens: 4096, subagentsEnabled: false } });
-  bigHistory(agent, 10, 205); // just under the budget; reading big.txt pushes it over
+  bigHistory(agent, 10, 203); // just under the budget; reading big.txt pushes it over
   const events = [];
   agent.on('event', (e) => events.push(e));
   await agent.send('go');

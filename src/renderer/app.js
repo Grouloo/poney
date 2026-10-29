@@ -1039,7 +1039,7 @@ function onEvent(ev) {
       const msg = ev.update || target ? null : [...transcript.querySelectorAll('.msg.user')].pop();
       (target || transcript).querySelectorAll('.triage.pending').forEach((p) => p.remove());
       const place = (el) => (msg ? msg.appendChild(el) : add(el));
-      if (ev.failed) { place(div('triage', `🧭 ${ev.update ? 'Mise à jour du bilan illisible' : 'Bilan illisible'} : l’agent continue sans.`)); break; }
+      if (ev.failed) { place(div('triage', ev.update ? '🧭 Mise à jour du bilan illisible : le bilan précédent reste en vigueur.' : '🧭 Bilan illisible : l’agent devra vérifier au moins une source avant de répondre.')); break; }
       const route = { direct: 'agir directement', check: 'vérifier d’abord', investigate: 'lire plusieurs sources' }[ev.route];
       const count = (n, one, many) => (n ? `${n} ${n > 1 ? many : one}` : '');
       const parts = [count(ev.known.length, 'acquis', 'acquis'), count(ev.doubts.length, 'doute', 'doutes'), count(ev.unknowns.length, 'inconnue', 'inconnues')].filter(Boolean);

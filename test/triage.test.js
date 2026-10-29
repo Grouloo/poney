@@ -275,7 +275,11 @@ test('an unreadable assessment is asked again (low temperature, then a little hi
     g.server.close();
   }
   assert.equal(g.requests.filter(isTriage).length, 3);
-  assert.ok(events.find((e) => e.type === 'triage').failed);
+  // None readable: a careful route all the same (one source), never a way around the assessment.
+  const failed = events.find((e) => e.type === 'triage');
+  assert.deepEqual([failed.failed, failed.route], [true, 'check']);
+  assert.match(lastUser(g.requests.find((r) => !isTriage(r))), /Route set by the app: Check your doubts/);
+  assert.equal(events.filter((e) => e.type === 'notice' && /refusée/.test(e.text)).length, 1);
   assert.deepEqual(events.filter((e) => e.type === 'final').map((e) => e.text), ['Answer.']);
 });
 
@@ -283,8 +287,8 @@ test('search snippets are not pages read: a doubt needs a fetched page; from the
   const { triageUpdateInstruction } = await import('../src/agent/triage.js');
   assert.match(triageUpdateInstruction('task'), /only a snippet gives is a "doubt" until a page you fetched confirms it/);
   const t = { known: [], doubts: [{ point: 'the date', why: 'a snippet' }], unknowns: [], route: 'check' };
-  assert.match(triageBlock(t, { update: true, web: true }), /end with the pages you rely on \(their URL\)/);
-  assert.doesNotMatch(triageBlock(t, { update: true }), /their URL/);
+  assert.match(triageBlock(t, { update: true, web: true }), /"Sources" \(only pages you opened with <fetch>\) and "Seen in search results \(not opened\)"/);
+  assert.doesNotMatch(triageBlock(t, { update: true }), /Sources/);
 
   let step = 0;
   const requests = [];
@@ -321,4 +325,28 @@ test('search snippets are not pages read: a doubt needs a fetched page; from the
   assert.equal(events.filter((e) => e.type === 'notice' && /refusée/.test(e.text)).length, 1);
   assert.ok(requests.some((r) => /<result tool="fetch"[\s\S]*October 17[\s\S]*/.test(lastUser(r)) && !/Sources read this turn/.test(lastUser(r))), 'the page counts');
   assert.match(events.filter((e) => e.type === 'final').at(-1).text, /Source: http/);
+});
+
+test('a reply cut while the model was still reasoning: asked again with more room, told to reason briefly', async () => {
+  const replies = [];
+  const agent = new Agent({ cwd: await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-triage-')), triage: true, config: { baseUrl: 'http://x', model: 'm', shellEnabled: false } });
+  agent.streamChat = async function* (opts) {
+    const triage = /honest assessment/.test(opts.messages.at(-1).content);
+    replies.push({ triage, maxTokens: opts.maxTokens, last: opts.messages.at(-1).content });
+    if (triage && replies.filter((r) => r.triage).length === 1) {
+      yield { type: 'thinking', text: 'Let me think about this at length…' };
+      yield { type: 'done', reason: 'length' };
+      return;
+    }
+    yield { type: 'text', text: triage ? '{"claims": [{"point": "greetings", "why": "common", "status": "known"}]}' : 'Hello!' };
+    yield { type: 'done', reason: 'stop' };
+  };
+  const events = [];
+  agent.on('event', (e) => events.push(e));
+  await agent.send('hi');
+  const asks = replies.filter((r) => r.triage);
+  assert.deepEqual(asks.map((r) => r.maxTokens), [1200, 1800]);
+  assert.match(asks[1].last, /ran out of room while you were still reasoning/);
+  assert.ok(events.some((e) => e.type === 'notice' && /Bilan coupé pendant la réflexion du modèle : nouvel essai \(2\/3\)/.test(e.text)));
+  assert.equal(events.find((e) => e.type === 'triage').route, 'direct');
 });
