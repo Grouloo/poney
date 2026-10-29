@@ -38,8 +38,11 @@ const GRADES = [
 /** Sources a turn must read: none, one check, several. */
 export const ROUTE_SOURCES = { direct: 0, check: 1, investigate: 2 };
 
-/** Tools that read a source (files, project, commands, web, earlier conversation, sub-agents). */
-export const SOURCE_TOOLS = new Set(['read', 'search', 'list', 'run', 'web_search', 'fetch', 'recall', 'agent', 'plan']);
+/**
+ * Tools that read a source (files, project, commands, web pages, earlier conversation,
+ * sub-agents). Not <web_search>: it finds pages, its snippets are not pages read.
+ */
+export const SOURCE_TOOLS = new Set(['read', 'search', 'list', 'run', 'fetch', 'recall', 'agent', 'plan']);
 
 /**
  * The assessment calls: low temperature (the model's own, often 1.0, makes small
@@ -94,7 +97,9 @@ export function triageUpdateInstruction(task) {
     'Reply with ONLY this JSON object:',
     CLAIM_FORMAT,
     GRADES,
-    'The facts your task relies on, as the results leave them: a point the results settled is "known". Only what matters for YOUR CURRENT TASK: a doubt or unknown only if the task cannot be done well without it. Something the results mention that is interesting but not needed: leave it out, do not chase it. At most 6 items.)',
+    'The facts your task relies on, as the results leave them: a point the results settled is "known".',
+    'Search results are snippets, not pages read: a detail (a number, a date, a name, a quote) that only a snippet gives is a "doubt" until a page you fetched confirms it; only the broad picture several snippets agree on can be "known".',
+    'Only what matters for YOUR CURRENT TASK: a doubt or unknown only if the task cannot be done well without it. Something the results mention that is interesting but not needed: leave it out, do not chase it. At most 6 items.)',
   ].filter(Boolean).join('\n');
 }
 
@@ -161,14 +166,14 @@ const ROUTE_TEXT = {
 };
 
 /** The assessment as added to the user's message (or, updated, to the results), with the route the app chose. */
-export function triageBlock(t, { update = false } = {}) {
+export function triageBlock(t, { update = false, web = false } = {}) {
   const line = (x) => `- ${x.point}${x.why ? ` (${x.why})` : ''}`;
   return [
     update ? '(Your assessment, updated from these results at the app\'s request (it replaces the earlier one):' : '(Your assessment before acting, made at the app\'s request:',
     t.known.length ? `You know:\n${t.known.map(line).join('\n')}` : '',
     t.doubts.length ? `You doubt:\n${t.doubts.map(line).join('\n')}` : '',
     t.unknowns.length ? `You do not know:\n${t.unknowns.map(line).join('\n')}` : '',
-    `Route set by the app: ${ROUTE_TEXT[t.route]})`,
+    web ? `Route set by the app: ${ROUTE_TEXT[t.route]}\nWhen you answer from the web: end with the pages you rely on (their URL), and say which details you could not check.)` : `Route set by the app: ${ROUTE_TEXT[t.route]})`,
   ].filter(Boolean).join('\n');
 }
 
@@ -185,6 +190,6 @@ export function triageRefusal(t, read) {
   const need = ROUTE_SOURCES[t.route];
   const what = [...t.unknowns, ...t.doubts].map((x) => `- ${x.point}`).join('\n');
   return `Not yet: in your assessment you said you ${t.unknowns.length ? 'do not know' : 'are not sure of'}:\n${what}\n` +
-    `You have read ${read} source(s) this turn; read at least ${need} (<read>, <search>, <web_search>, <fetch>) before giving your final answer. ` +
+    `You have read ${read} source(s) this turn; read at least ${need} (<read>, <search>, <fetch> a page found with <web_search>: its snippets do not count) before giving your final answer. ` +
     'If it really cannot be found, say so plainly in your answer instead of guessing.';
 }

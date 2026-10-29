@@ -132,7 +132,9 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   the request is not one). A reply that cannot be read or used is asked again, up to 3 times (with a reminder, more room and a little more temperature).
   The app, not the
   model, picks the route: nothing lacking, act directly; a doubt, check it with one lookup; something unknown, read
-  at least two sources (files, project search, commands, web pages, sub-agents) before concluding. A final answer
+  at least two sources (files, project search, commands, web pages, sub-agents) before concluding. A web search
+  does not count: its snippets are not pages read, and in an update a detail (number, date, name) only a snippet gives
+  stays a doubt until a fetched page confirms it; an answer from the web ends with the pages it relies on. A final answer
   given before that is refused (once for a doubt, twice for an unknown, then let through), and what is still to
   check is recalled with each result until it is. Shown under the user message ("🧭 Bilan").
   Outside information can change it: after a web search, a page or a command with a real output (300 characters or

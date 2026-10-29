@@ -1437,7 +1437,7 @@ export class Agent extends EventEmitter {
             triage = t;
             triageBase = sourcesRead;
             triageRefusals = 0;
-            this.messages[this.messages.length - 1].content += `\n\n${triageBlock(t, { update: true })}`;
+            this.messages[this.messages.length - 1].content += `\n\n${triageBlock(t, { update: true, web: received.some((x) => x.ok && (x.tool === 'web_search' || x.tool === 'fetch')) })}`;
           }
           this.emit('event', t ? { type: 'triage', update: true, ...t } : { type: 'triage', update: true, failed: true });
         }

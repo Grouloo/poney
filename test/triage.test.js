@@ -278,3 +278,47 @@ test('an unreadable assessment is asked again (low temperature, then a little hi
   assert.ok(events.find((e) => e.type === 'triage').failed);
   assert.deepEqual(events.filter((e) => e.type === 'final').map((e) => e.text), ['Answer.']);
 });
+
+test('search snippets are not pages read: a doubt needs a fetched page; from the web, pages are cited', async () => {
+  const { triageUpdateInstruction } = await import('../src/agent/triage.js');
+  assert.match(triageUpdateInstruction('task'), /only a snippet gives is a "doubt" until a page you fetched confirms it/);
+  const t = { known: [], doubts: [{ point: 'the date', why: 'a snippet' }], unknowns: [], route: 'check' };
+  assert.match(triageBlock(t, { update: true, web: true }), /end with the pages you rely on \(their URL\)/);
+  assert.doesNotMatch(triageBlock(t, { update: true }), /their URL/);
+
+  let step = 0;
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    if (req.method === 'GET' && req.url.startsWith('/search')) { res.end(JSON.stringify({ results: [{ title: 'News', url: `${base}/page`, content: 'Protests on Oct 17' }] })); return; }
+    if (req.method === 'GET') { res.setHeader('content-type', 'text/html'); res.end('<html><body><p>Protests began on October 17.</p></body></html>'); return; }
+    let body = '';
+    req.on('data', (d) => (body += d));
+    req.on('end', () => {
+      const r = JSON.parse(body);
+      requests.push(r);
+      let out;
+      if (isTriage(r)) out = '{"claims": [{"point": "the date of the protests", "why": "recent news", "status": "doubt"}]}';
+      else {
+        step++;
+        out = step === 1 ? '<web_search>France protests</web_search>' : step === 2 ? 'They began on October 17.' : step === 3 ? `<fetch>${base}/page</fetch>` : `They began on October 17.\nSource: ${base}/page`;
+      }
+      res.end(`${JSON.stringify({ message: { content: out }, done: true, done_reason: 'stop' })}\n`);
+    });
+  });
+  await new Promise((ok) => server.listen(0, ok));
+  const base = `http://localhost:${server.address().port}`;
+  const agent = new Agent({ cwd: await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-triage-')), triage: true, config: { baseUrl: base, model: 'm', shellEnabled: false, webEnabled: true, searxngUrl: base } });
+  const events = [];
+  agent.on('event', (e) => events.push(e));
+  try {
+    await agent.send('When did the protests in France begin?');
+  } finally {
+    server.close();
+  }
+  assert.ok(requests.some((r) => /<result tool="web_search"[\s\S]*Sources read this turn: 0\/1/.test(lastUser(r))), 'the search does not count');
+  const refusal = requests.find((r) => /^Not yet/.test(lastUser(r)));
+  assert.match(lastUser(refusal), /<fetch> a page found with <web_search>: its snippets do not count/);
+  assert.equal(events.filter((e) => e.type === 'notice' && /refusée/.test(e.text)).length, 1);
+  assert.ok(requests.some((r) => /<result tool="fetch"[\s\S]*October 17[\s\S]*/.test(lastUser(r)) && !/Sources read this turn/.test(lastUser(r))), 'the page counts');
+  assert.match(events.filter((e) => e.type === 'final').at(-1).text, /Source: http/);
+});
