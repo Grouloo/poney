@@ -3,6 +3,8 @@
 A desktop coding agent (in the spirit of Claude Code / Codex) built for **small local models**:
 Ollama, LM Studio, llama.cpp server, vLLM. The interface is in French.
 
+![A conversation: the agent edits the code, runs the tests and sums up](docs/screenshots/conversation.png)
+
 ```bash
 npm install
 npm start            # desktop app
@@ -104,21 +106,35 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   input as a quote (`> …`, formulas as their LaTeX source). Quotes show as quotes in the sent message.
 - **Several conversations at once**: switching conversation does not stop the one shown; it goes on in the
   background (its events are recorded, not drawn). Coming back shows it as it is now, the answer being written
-  included, at the same reading position (or following the end if you were there). In the list: a spinner while
-  one works in the background, an orange dot when it waits for an approval, a blue dot when it finished unseen.
-  Idle conversations stay in memory (8 at most) for a quick return. Generations at the same time share the GPU.
-- **Sidebar grouped by project**: all the conversations, one collapsible group per project (the open one stays
-  unfolded), a "＋" on each group to start a conversation there, and "＋ Ajouter un projet…".
-- **Conversations outside any project** (the "Hors projet" group): same tools, but the agent works in a folder of
+  included, at the same reading position (or following the end if you were there). Idle conversations stay in
+  memory (8 at most) for a quick return. Generations at the same time share the GPU.
+- **Sidebar by state**: the conversations are sorted into *En cours* (generating), *Action demandée* (waiting for an
+  approval), *Terminé* (answers not read yet) and *Archivées* (done and read; foldable). Each is a card with its
+  title, project and date, and a pill counting the approvals waiting (orange) or the answers to read (blue). The
+  unread count is saved with the conversation.
+- **Projects**: a picker at the top of the sidebar lists one project's conversations, all of them ("Tous", the
+  default) or those outside projects; a two-finger horizontal swipe goes to the next or previous project, and dots
+  at the bottom show where you are. A project can have an emoji or a small picture (☺ in the picker's menu): it
+  replaces the folder icon on its cards and its dot. "Ajouter un projet…" in the picker's menu.
+- **New conversation** ("＋ Nouvelle conversation", ⌘N or ⌘T): the same page as at launch, with the input in the
+  upper part of the window until the conversation starts, and a picker for the project it will work in. By
+  default: the project listed in the sidebar, else that of the last conversation looked at, else outside projects.
+
+![New conversation page, light theme: the project picker](docs/screenshots/new-conversation-light.png)
+
+- **Conversations outside any project** ("Hors projet"): same tools, but the agent works in a folder of
   the conversation's own (`~/Library/Application Support/poney/off-project/<id>/`), shown in the file browser.
   Deleting one deletes its folder; a new one abandoned before its first message leaves nothing behind.
 - **Markdown answers**: full GitHub Markdown (the same engine as the document viewer): italics, bold, quotes (`>`),
   numbered and nested lists, headings, links (opened in the browser), tables (GitHub style, with alignment), code;
   a single line break is kept. LaTeX formulas rendered by KaTeX (`$…$`, `\(…\)` inline; `$$…$$`, `\[…\]` as
   blocks); prices like "$5 and $10" stay text. Raw HTML in an answer is shown as text.
-- **File browser** that updates when the agent writes, and reveals the modified file.
-- **Web / Terminal switches** under the input box (`--no-web` / `--no-shell` in the CLI): a disabled tool
-  disappears from the system prompt (shorter prompt) and is refused if the model uses it anyway.
+- **File browser** in its own pane on the right (shown or hidden from the top bar), that updates when the agent
+  writes, and reveals the modified file.
+- **Tool switches** in the input box, as icons (Web, Tor, Sous-agents, Terminal, sans confirmation; green when on,
+  their names in instant tooltips), on one row with the model picker and the send button (`--no-web` /
+  `--no-shell` in the CLI): a disabled tool disappears from the system prompt (shorter prompt) and is refused if
+  the model uses it anyway.
 - **System prompt editable per conversation** ("Prompt système" button): see the generated prompt, edit it, and it is
   saved with the conversation. A "modifié" badge marks a custom prompt.
 - **Steps before and after each answer, per conversation** ("Étapes" button): a step to do first (e.g. "check what
@@ -146,8 +162,10 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   answers per turn, 3 items per list. Shown where it was made ("🧭 Bilan mis à jour").
   Sub-agents (`<agent>` and plan tasks) do the same on their own task, when their conversation has it on; in a
   plan, the update names the sub-agent's own task, not the context it was given. Shown in the sub-agent's panel.
-- **Command approval** (unless "sans confirmation" is checked): Exécuter, Toujours autoriser, or Refuser, with an
+- **Command approval** (unless "sans confirmation" is on): Exécuter, Toujours autoriser, or Refuser, with an
   optional reason that is passed on to the model, so it can change its approach.
+
+![A command waiting for approval; the sidebar sorts the conversations by state](docs/screenshots/approval.png)
 - **Context gauge** under the input (the tick marks the compaction threshold); a click compacts on demand.
   Each sub-agent has its own, on its card and in its panel (kept with its result).
   Summaries appear in the transcript, expandable.
@@ -174,6 +192,9 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   then the agent gets all the reports. No sub-sub-agents. Writing to a file modified by another agent since it was
   read is refused (it must be read again), and writes to the same file are serialized. One card per sub-agent in the
   transcript (task, live log, report); "Sous-agents" switch.
+
+![A plan whose first three tasks run at the same time in sub-agents](docs/screenshots/plan.png)
+
   One GPU: speed is shared; measured with gemma-4 on two modules + tests: 6 min 56 instead of 10 min 41.
   "Lancer les sous-agents en parallèle" (settings, on by default): off, sub-agents run one at a time (`<agent>` groups
   and `@parallel` plan tasks alike), and the prompt no longer offers parallel runs; on a modest machine, two
