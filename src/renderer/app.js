@@ -21,6 +21,14 @@ const agentContext = new Map(); // sub-agent id -> its latest context figures
 const bubbles = new Map(); // assistant id -> {el, raw, thinking}
 const cards = new Map(); // action id -> card element
 
+// The conversation runs under the input: its end stays above it, whatever its height
+// (the plan showing up, a long message), and in view if it was.
+new ResizeObserver(([{ target }]) => {
+  const atEnd = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 160;
+  transcript.style.setProperty('--composer-h', `${target.offsetHeight}px`);
+  if (atEnd) transcript.scrollTop = transcript.scrollHeight;
+}).observe(document.querySelector('.composer'));
+
 // ---------- helpers ----------
 function scrollDown(force) {
   const nearBottom = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 160;
