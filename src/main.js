@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell, nativeImage } from 'electron';
+import { app, BrowserWindow, Menu, ipcMain, dialog, shell, nativeImage } from 'electron';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -660,8 +660,43 @@ function createWindow() {
   });
 }
 
+/** Electron's default menus, with the settings in the application menu. */
+function macMenu() {
+  const openSettings = () => {
+    if (win && !win.isDestroyed()) return send('ui:openSettings');
+    createWindow();
+    win.webContents.once('did-finish-load', () => send('ui:openSettings'));
+  };
+  Menu.setApplicationMenu(Menu.buildFromTemplate([
+    {
+      label: app.name,
+      submenu: [
+        { role: 'about' },
+        { type: 'separator' },
+        { label: 'Réglages…', accelerator: 'Cmd+,', click: openSettings },
+        { type: 'separator' },
+        { role: 'services' },
+        { type: 'separator' },
+        { role: 'hide' },
+        { role: 'hideOthers' },
+        { role: 'unhide' },
+        { type: 'separator' },
+        { role: 'quit' },
+      ],
+    },
+    { role: 'fileMenu' },
+    { role: 'editMenu' },
+    { role: 'viewMenu' },
+    { role: 'windowMenu' },
+    { role: 'help' },
+  ]));
+}
+
 app.whenReady().then(() => {
-  if (process.platform === 'darwin') app.dock?.setIcon(path.join(here, '..', 'assets', 'icon.png'));
+  if (process.platform === 'darwin') {
+    app.dock?.setIcon(path.join(here, '..', 'assets', 'icon.png'));
+    macMenu();
+  }
   loadSettings();
   store = new ConversationStore(path.join(app.getPath('userData'), 'conversations'));
   pruneOffProject();

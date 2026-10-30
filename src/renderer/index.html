@@ -14,10 +14,8 @@
     <button id="sidebarBtn" class="ghost icon" title="Afficher / masquer les conversations et les fichiers">☰</button>
     <div class="brand">Poney</div>
     <div class="spacer"></div>
-    <button id="stepsBtn" class="ghost" title="Étapes que l’agent fait avant et après avoir répondu, dans cette conversation">Étapes<span id="stepsBadge" class="badge hidden">actives</span></button>
-    <button id="promptBtn" class="ghost" title="Voir et modifier le prompt système de cette conversation">Prompt système<span id="promptBadge" class="badge hidden">modifié</span></button>
+    <button id="convSettingsBtn" class="ghost with-icon" title="Étapes et prompt système de cette conversation"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M2 4.5h6.5M12 4.5h2M2 11.5h2M7.5 11.5H14"/><circle cx="10.2" cy="4.5" r="1.7"/><circle cx="5.8" cy="11.5" r="1.7"/></svg>Paramètres de la conversation<span id="convBadge" class="badge hidden">modifiés</span></button>
     <button id="settingsBtn" class="ghost icon" title="Réglages">⚙︎</button>
-    <button id="filesBtn" class="ghost icon" title="Passer des conversations aux fichiers, et inversement">🗂︎</button>
   </header>
 
   <div class="layout">
@@ -29,6 +27,7 @@
         <span class="picker-icon"></span><span class="picker-name"></span>
         <svg class="picker-chev" viewBox="0 0 12 12" width="11" height="11" aria-hidden="true"><path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
+      <button type="button" class="ghost icon deck-swap"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 5.5h10M10 3l2.5 2.5L10 8M13.5 10.5h-10M6 8l-2.5 2.5L6 13"/></svg></button>
       <div id="projectMenu" class="project-menu hidden"></div>
     </div>
     <div id="convPane" class="pane">
@@ -41,6 +40,7 @@
       <span class="files-title">Fichiers</span>
       <span id="filesRoot" class="muted"></span>
       <button id="refreshFiles" class="ghost icon" title="Rafraîchir">↻</button>
+      <button type="button" class="ghost icon deck-swap"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 5.5h10M10 3l2.5 2.5L10 8M13.5 10.5h-10M6 8l-2.5 2.5L6 13"/></svg></button>
     </div>
     <div class="pane">
       <ul id="fileTree" class="tree"></ul>
@@ -171,59 +171,61 @@
     </form>
   </dialog>
 
-  <dialog id="stepsDialog" class="prompt-dialog steps-dialog">
+  <dialog id="convDialog" class="prompt-dialog nav-dialog">
     <form method="dialog" class="prompt-form">
       <div class="prompt-head">
-        <h2>Étapes de cette conversation</h2>
+        <h2>Paramètres de la conversation</h2>
         <div class="spacer"></div>
-        <button type="button" id="stepsCloseX" class="ghost icon" title="Fermer">✕</button>
+        <button type="button" id="convClose" class="ghost icon" title="Fermer">✕</button>
       </div>
-      <div class="steps-body">
-        <label class="check"><input id="stepsTriage" type="checkbox" checked> Bilan avant d’agir : l’agent écrit ce qu’il sait, ce dont il doute et ce qu’il ignore ; l’app décide s’il doit vérifier ou lire plusieurs sources avant de conclure</label>
-        <label>Avant de répondre, à chacun de vos messages
-          <textarea id="stepsBefore" rows="3" placeholder="Ex. : vérifie si le projet a été modifié depuis ta dernière réponse (git status)."></textarea>
-        </label>
-        <label>Avant de conclure, une fois par réponse
-          <textarea id="stepsAfter" rows="3" placeholder="Ex. : documente ce que tu as fait dans CHANGELOG.md."></textarea>
-        </label>
-        <label class="check"><input id="stepsAfterOnlyIfChanged" type="checkbox"> Seulement si des fichiers ont été modifiés</label>
-        <p class="muted">Consignes vides : pas d’étape. Ces consignes s’ajoutent à vos messages ; elles ne changent pas le prompt système.</p>
+      <div class="nav-body">
+        <nav class="dialog-nav">
+          <button type="button" data-page="steps">Étapes</button>
+          <button type="button" data-page="prompt">Prompt système</button>
+        </nav>
+        <div class="nav-pages">
+          <div class="nav-page steps-body" data-page="steps">
+            <label class="check"><input id="stepsTriage" type="checkbox" checked> Bilan avant d’agir : l’agent écrit ce qu’il sait, ce dont il doute et ce qu’il ignore ; l’app décide s’il doit vérifier ou lire plusieurs sources avant de conclure</label>
+            <label>Avant de répondre, à chacun de vos messages
+              <textarea id="stepsBefore" rows="3" placeholder="Ex. : vérifie si le projet a été modifié depuis ta dernière réponse (git status)."></textarea>
+            </label>
+            <label>Avant de conclure, une fois par réponse
+              <textarea id="stepsAfter" rows="3" placeholder="Ex. : documente ce que tu as fait dans CHANGELOG.md."></textarea>
+            </label>
+            <label class="check"><input id="stepsAfterOnlyIfChanged" type="checkbox"> Seulement si des fichiers ont été modifiés</label>
+            <p class="muted">Consignes vides : pas d’étape. Ces consignes s’ajoutent à vos messages ; elles ne changent pas le prompt système.</p>
+          </div>
+          <div class="nav-page prompt-page" data-page="prompt">
+            <div class="prompt-tags"><span id="promptState" class="tag"></span><span id="promptTokens" class="tag"></span><div class="spacer"></div><button type="button" id="promptReset" class="ghost">Rétablir le prompt par défaut</button></div>
+            <p id="promptNote" class="prompt-note"></p>
+            <textarea id="promptText" spellcheck="false"></textarea>
+          </div>
+        </div>
       </div>
       <div class="prompt-foot">
         <div class="spacer"></div>
-        <button type="button" id="stepsCancel" class="ghost">Annuler</button>
-        <button type="button" id="stepsSave" class="primary">Enregistrer pour cette conversation</button>
+        <button type="button" id="convCancel" class="ghost">Annuler</button>
+        <button type="button" id="convSave" class="primary">Enregistrer pour cette conversation</button>
       </div>
     </form>
   </dialog>
 
-  <dialog id="promptDialog" class="prompt-dialog">
-    <form method="dialog" class="prompt-form">
+  <dialog id="settingsDialog" class="prompt-dialog nav-dialog settings-dialog">
+    <form id="settingsForm" class="prompt-form">
       <div class="prompt-head">
-        <h2>Prompt système</h2>
-        <span id="promptState" class="tag"></span>
-        <span id="promptTokens" class="tag"></span>
+        <h2>Réglages</h2>
         <div class="spacer"></div>
-        <button type="button" id="promptCloseX" class="ghost icon" title="Fermer">✕</button>
+        <button type="button" id="closeSettings" class="ghost icon" title="Fermer">✕</button>
       </div>
-      <p id="promptNote" class="prompt-note"></p>
-      <textarea id="promptText" spellcheck="false"></textarea>
-      <div class="prompt-foot">
-        <button type="button" id="promptReset" class="ghost">Rétablir le prompt par défaut</button>
-        <div class="spacer"></div>
-        <button type="button" id="promptCancel" class="ghost">Annuler</button>
-        <button type="button" id="promptSave" class="primary">Enregistrer pour cette conversation</button>
-      </div>
-    </form>
-  </dialog>
-
-  <aside id="settings" class="drawer hidden">
-    <div class="drawer-head">
-      <h2>Réglages</h2>
-      <button id="closeSettings" class="ghost icon">✕</button>
-    </div>
-    <form id="settingsForm">
-      <fieldset>
+      <div class="nav-body">
+      <nav class="dialog-nav">
+        <button type="button" data-page="server">Serveur de modèles</button>
+        <button type="button" data-page="generation">Génération</button>
+        <button type="button" data-page="tools">Outils</button>
+        <button type="button" data-page="privacy">Confidentialité</button>
+      </nav>
+      <div class="nav-pages">
+      <fieldset class="nav-page" data-page="server">
         <legend>Serveur de modèles</legend>
         <label>Fournisseur
           <select name="provider">
@@ -238,14 +240,14 @@
           <datalist id="modelList"></datalist>
         </label>
       </fieldset>
-      <fieldset>
+      <fieldset class="nav-page" data-page="generation">
         <legend>Génération</legend>
         <label>Contexte (tokens) <input name="numCtx" type="number" min="2048" step="1024"></label>
         <label>Tokens max par réponse <input name="maxTokens" type="number" min="256" step="256"></label>
         <label>Température <input name="temperature" type="number" min="0" max="2" step="0.05" placeholder="celle du modèle" title="Vide : la température prévue pour le modèle (réglages du serveur). Une valeur basse rend les réponses plates et favorise les boucles."></label>
         <label>Étapes max par tâche <input name="maxSteps" type="number" min="1"></label>
       </fieldset>
-      <fieldset>
+      <fieldset class="nav-page" data-page="tools">
         <legend>Outils</legend>
         <label>Commande de test du projet
           <input name="testCommand" placeholder="ex. pytest -q  ·  npm test">
@@ -273,7 +275,7 @@
           <small>Pages web publiques seulement (pas localhost ni le réseau local), 2 au plus, tronquées, avant que le modèle réponde. Via Tor s’il est activé.</small>
         </label>
       </fieldset>
-      <fieldset>
+      <fieldset class="nav-page" data-page="privacy">
         <legend>Confidentialité</legend>
         <label class="check"><input type="checkbox" name="torEnabled"> Faire passer la recherche web et la lecture de pages par Tor</label>
         <small>Recherche via le service .onion de DuckDuckGo. Si Tor est injoignable, la requête est refusée (jamais envoyée en clair). Le serveur de modèles local n’est pas concerné.</small>
@@ -286,8 +288,10 @@
         <div class="row tor-test"><button type="button" id="torTest" class="ghost">Tester la connexion Tor</button><button type="button" id="torNewnym" class="ghost" title="Demande à Tor de nouveaux circuits (utile s'il est lent ou bloqué après une mise en veille)">Renouveler les circuits</button></div>
         <p id="torResult" class="muted tor-result"></p>
       </fieldset>
+      </div>
+      </div>
     </form>
-  </aside>
+  </dialog>
 
   <script type="module" src="app.js"></script>
 </body>

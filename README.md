@@ -137,19 +137,19 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   numbered and nested lists, headings, links (opened in the browser), tables (GitHub style, with alignment), code;
   a single line break is kept. LaTeX formulas rendered by KaTeX (`$…$`, `\(…\)` inline; `$$…$$`, `\[…\]` as
   blocks); prices like "$5 and $10" stay text. Raw HTML in an answer is shown as text.
-- **File browser** stacked with the conversations like a deck of two cards (the edge of the card behind, or a two-finger swipe outside the card in front, brings it to the front; three fingers too on macOS), that updates when the agent
+- **File browser** stacked with the conversations like a deck of two cards (the button at the top right of the card, its edge behind, or a two-finger swipe outside the card in front, brings it to the front; three fingers too on macOS), that updates when the agent
   writes, and reveals the modified file.
 - **Tool switches** in the input box, as icons (Web, Tor, Sous-agents, Terminal, sans confirmation; green when on,
   their names in instant tooltips), on one row with the model picker and the send button (`--no-web` /
   `--no-shell` in the CLI): a disabled tool disappears from the system prompt (shorter prompt) and is refused if
   the model uses it anyway.
-- **System prompt editable per conversation** ("Prompt système" button): see the generated prompt, edit it, and it is
+- **System prompt editable per conversation** ("Paramètres de la conversation" button, "Prompt système" category): see the generated prompt, edit it, and it is
   saved with the conversation. A "modifié" badge marks a custom prompt.
-- **Steps before and after each answer, per conversation** ("Étapes" button): a step to do first (e.g. "check what
+- **Steps before and after each answer, per conversation** ("Paramètres de la conversation" button, "Étapes" category): a step to do first (e.g. "check what
   changed in the project since your last answer") goes with every message; a step to do before finishing (e.g.
   "document what you did in CHANGELOG.md") is asked once per turn, before the final answer, optionally only when
   files were changed during the turn. Both show as a line in the conversation; saved with it.
-- **Assessment before acting** (on by default, can be turned off per conversation in "Étapes"): before the model
+- **Assessment before acting** (on by default, can be turned off per conversation in the "Étapes" category): before the model
   may use its tools on a message, a dedicated call (on the cached prompt, JSON-only output when the server supports
   structured output, temperature 0.1) asks it to list the facts its answer or work will rely on, and to grade each
   one (known, doubt, unknown) with why: about its knowledge, not about the request (an assessment that only restates

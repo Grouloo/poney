@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld('api', {
   markConversationsRead: (ids) => ipcRenderer.invoke('conversations:markRead', ids),
   onConversationsChanged: (fn) => ipcRenderer.on('conversations:changed', (_, id) => fn(id)),
   onSessionsChanged: (fn) => ipcRenderer.on('sessions:changed', () => fn()),
+  onOpenSettings: (fn) => ipcRenderer.on('ui:openSettings', () => fn()),
   onContextMenu: (fn) => ipcRenderer.on('ui:contextMenu', (_, p) => fn(p)),
   onSwipe: (fn) => ipcRenderer.on('ui:swipe', (_, direction) => fn(direction)),
   edit: (cmd, arg) => ipcRenderer.invoke('ui:edit', cmd, arg),

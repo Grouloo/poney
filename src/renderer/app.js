@@ -206,8 +206,26 @@ $('torTest').onclick = async () => {
     ? (r.isTor ? `✓ Connecté via Tor (${r.proxy.replace('socks5h://', '')}), IP de sortie ${r.ip}` : `⚠ Le proxy répond mais le trafic ne sort pas par Tor (IP ${r.ip})`)
     : `✗ ${r.error}`;
 };
-$('settingsBtn').onclick = () => $('settings').classList.toggle('hidden');
-$('closeSettings').onclick = () => $('settings').classList.add('hidden');
+/** A dialog with its categories on the left: returns the function that shows one. */
+function navDialog(dialog) {
+  const show = (page) => {
+    for (const b of dialog.querySelectorAll('.dialog-nav button')) b.classList.toggle('active', b.dataset.page === page);
+    for (const p of dialog.querySelectorAll('.nav-page')) p.classList.toggle('hidden', p.dataset.page !== page);
+    dialog.querySelector('.nav-pages').scrollTop = 0;
+  };
+  dialog.querySelector('.dialog-nav').onclick = (e) => { if (e.target.dataset.page) show(e.target.dataset.page); };
+  show(dialog.querySelector('.dialog-nav button').dataset.page);
+  return show;
+}
+const settingsDialog = $('settingsDialog');
+const showSettingsPage = navDialog(settingsDialog);
+function openSettings(page) {
+  if (page) showSettingsPage(page);
+  if (!settingsDialog.open) settingsDialog.showModal();
+}
+$('settingsBtn').onclick = () => openSettings();
+$('closeSettings').onclick = () => settingsDialog.close();
+window.api.onOpenSettings(() => openSettings()); // (the application menu, ⌘,)
 /** A new project: a folder to choose, and a new conversation in it. */
 async function addProject() {
   rememberScroll();
@@ -547,7 +565,7 @@ async function submit() {
     onWorkspaceChanged();
   }
   if (!settings.config.model) {
-    $('settings').classList.remove('hidden');
+    openSettings('server');
     $('status').textContent = 'Choisissez un modèle dans les réglages.';
     return;
   }
@@ -1303,9 +1321,11 @@ window.addEventListener('keydown', (e) => {
 });
 
 const ctxMenu = document.body.appendChild(document.createElement('div'));
-ctxMenu.className = 'ctx-menu hidden';
+ctxMenu.className = 'ctx-menu';
+ctxMenu.popover = 'manual'; // (in the top layer: above an open dialog)
 ctxMenu.addEventListener('click', (e) => e.stopPropagation());
-function hideContextMenu() { ctxMenu.classList.add('hidden'); }
+ctxMenu.addEventListener('mousedown', (e) => e.preventDefault()); // (the focus stays in the field: cut, copy and paste act on it)
+function hideContextMenu() { if (ctxMenu.matches(':popover-open')) ctxMenu.hidePopover(); }
 document.addEventListener('click', hideContextMenu);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideContextMenu(); });
 window.addEventListener('blur', hideContextMenu);
@@ -1329,7 +1349,10 @@ function showContextMenu(x, y, title, items) {
     row.querySelector('.ctx-label').textContent = it.label;
     row.onclick = () => { hideContextMenu(); it.run(); };
   }
-  ctxMenu.classList.remove('hidden');
+  hideContextMenu();
+  // (outside an open dialog, it could be seen but not clicked)
+  ([...document.querySelectorAll('dialog[open]')].at(-1) ?? document.body).appendChild(ctxMenu);
+  ctxMenu.showPopover();
   const r = ctxMenu.getBoundingClientRect();
   ctxMenu.style.left = `${Math.min(x, innerWidth - r.width - 6)}px`;
   ctxMenu.style.top = `${Math.min(y, innerHeight - r.height - 6)}px`;
@@ -1548,6 +1571,7 @@ function renderDeck() {
   back.inert = true; // (under the other card: out of reach of the keyboard too)
   $('deckTab').textContent = filesInFront ? 'Conversations' : 'Fichiers';
   $('deckTab').setAttribute('aria-label', `Afficher : ${$('deckTab').textContent}`);
+  for (const b of document.querySelectorAll('.deck-swap')) b.title = `Afficher : ${$('deckTab').textContent}`;
 }
 function swapDeck() {
   filesInFront = !filesInFront;
@@ -1561,12 +1585,12 @@ function swapDeck() {
 $('deck').addEventListener('animationend', (e) => { if (e.target.classList.contains('front')) $('deck').classList.remove('swapping'); });
 $('deckTab').onclick = swapDeck;
 renderDeck();
-$('filesBtn').onclick = () => {
+for (const b of document.querySelectorAll('.deck-swap')) b.onclick = swapDeck;
+window.api.onSwipe(() => {
   if (!document.body.classList.contains('no-sidebar')) return swapDeck();
   document.body.classList.remove('no-sidebar'); // (hidden: shown, with the files on top)
   if (!filesInFront) swapDeck();
-};
-window.api.onSwipe(() => $('filesBtn').click());
+});
 
 function relativeTime(ts) {
   const s = (Date.now() - ts) / 1000;
@@ -1709,7 +1733,7 @@ function scrollsSideways(el) {
 }
 window.addEventListener('wheel', (e) => {
   if (Math.abs(e.deltaX) <= Math.abs(e.deltaY) || document.body.classList.contains('no-sidebar')) return;
-  if (e.target.closest?.('.deck .front, dialog, .drawer') || scrollsSideways(e.target)) return;
+  if (e.target.closest?.('.deck .front, dialog') || scrollsSideways(e.target)) return;
   deckSwipe.wheel(e.deltaX, e.deltaY, e.timeStamp);
 }, { passive: true });
 
@@ -1799,7 +1823,7 @@ function conversationItem(c, current) {
   li.className = `conv-card ${category(c)}`;
   li.dataset.project = projectOf(c);
   li.classList.toggle('active', c.id === current);
-  li.innerHTML = '<div class="card-top"><span class="title"></span><span class="pill"></span><button class="ren" title="Renommer">✎</button><button class="del" title="Supprimer">✕</button></div><div class="card-meta"><span class="state"></span><span class="project"></span><span class="when"></span></div>';
+  li.innerHTML = '<div class="card-top"><span class="title"></span><span class="pill"></span></div><div class="card-meta"><span class="state"></span><span class="project"></span><span class="when"></span><span class="card-actions"><button class="ren" title="Renommer">✎</button><button class="del" title="Supprimer">✕</button></span></div>';
   li.querySelector('.title').textContent = c.title;
   li.querySelector('.title').title = c.title;
   // How many things wait for the user: approvals (orange), answers to read (blue).
@@ -2150,46 +2174,25 @@ $('viewerOpen').onclick = () => openPath && window.api.openFileExternal(openPath
 $('viewerReveal').onclick = () => openPath && window.api.revealFile(openPath);
 
 // ---------- system prompt ----------
-const promptDialog = $('promptDialog');
 let promptInfo = null;
 
 const errorText = (e) => e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
 
-// ---------- steps before and after answering, per conversation ----------
-async function refreshStepsBadge() {
-  let steps = null;
-  try { steps = await window.api.getSteps(); } catch {}
-  $('stepsBadge').classList.toggle('hidden', !steps);
-  return steps;
-}
-$('stepsBtn').onclick = async () => {
-  const steps = await refreshStepsBadge();
-  $('stepsBefore').value = steps?.before || '';
-  $('stepsAfter').value = steps?.after || '';
-  $('stepsAfterOnlyIfChanged').checked = Boolean(steps?.afterOnlyIfChanged);
-  $('stepsTriage').checked = steps?.triage !== false;
-  $('stepsDialog').showModal();
-  $('stepsBefore').focus();
-};
-for (const id of ['stepsCancel', 'stepsCloseX']) $(id).onclick = () => $('stepsDialog').close();
-$('stepsSave').onclick = async () => {
-  try {
-    await window.api.setSteps({ before: $('stepsBefore').value, after: $('stepsAfter').value, afterOnlyIfChanged: $('stepsAfterOnlyIfChanged').checked, triage: $('stepsTriage').checked });
-  } catch (e) {
-    $('status').textContent = errorText(e);
-  }
-  $('stepsDialog').close();
-  refreshStepsBadge();
-};
+// ---------- conversation settings: its steps and its system prompt ----------
+const convDialog = $('convDialog');
+const showConvPage = navDialog(convDialog);
+let openedSteps = null;
 
 async function refreshPromptBadge() {
-  refreshStepsBadge(); // (shown next to it, follows the same conversation changes)
+  let steps = null;
   try {
+    steps = await window.api.getSteps();
     promptInfo = await window.api.getSystemPrompt();
   } catch {
     promptInfo = null;
   }
-  $('promptBadge').classList.toggle('hidden', !promptInfo?.custom);
+  $('convBadge').classList.toggle('hidden', !steps && !promptInfo?.custom);
+  return steps;
 }
 
 function updatePromptMeta() {
@@ -2201,13 +2204,16 @@ function updatePromptMeta() {
   $('promptReset').disabled = !custom;
 }
 
-$('promptBtn').onclick = async () => {
-  try {
-    promptInfo = await window.api.getSystemPrompt();
-  } catch (e) {
-    $('status').textContent = errorText(e);
-    return;
-  }
+const stepsForm = () => ({ before: $('stepsBefore').value, after: $('stepsAfter').value, afterOnlyIfChanged: $('stepsAfterOnlyIfChanged').checked, triage: $('stepsTriage').checked });
+
+$('convSettingsBtn').onclick = async () => {
+  const steps = await refreshPromptBadge();
+  if (!promptInfo) return;
+  $('stepsBefore').value = steps?.before || '';
+  $('stepsAfter').value = steps?.after || '';
+  $('stepsAfterOnlyIfChanged').checked = Boolean(steps?.afterOnlyIfChanged);
+  $('stepsTriage').checked = steps?.triage !== false;
+  openedSteps = JSON.stringify(stepsForm());
   $('promptText').value = promptInfo.custom ?? promptInfo.default;
   $('promptNote').textContent = [
     'Ce prompt s’applique uniquement à la conversation en cours et est enregistré avec elle.',
@@ -2215,8 +2221,9 @@ $('promptBtn').onclick = async () => {
     promptInfo.running ? 'L’agent travaille : la modification s’appliquera au prochain message.' : '',
   ].filter(Boolean).join(' ');
   updatePromptMeta();
-  promptDialog.showModal();
-  $('promptText').focus();
+  showConvPage('steps');
+  convDialog.showModal();
+  $('stepsBefore').focus();
   $('promptText').setSelectionRange(0, 0);
   $('promptText').scrollTop = 0;
 };
@@ -2225,17 +2232,18 @@ $('promptReset').onclick = () => {
   $('promptText').value = promptInfo.default;
   updatePromptMeta();
 };
-$('promptCancel').onclick = () => promptDialog.close();
-$('promptCloseX').onclick = () => promptDialog.close();
-$('promptSave').onclick = async () => {
+for (const id of ['convCancel', 'convClose']) $(id).onclick = () => convDialog.close();
+$('convSave').onclick = async () => {
   try {
-    promptInfo = await window.api.setSystemPrompt($('promptText').value);
+    if (JSON.stringify(stepsForm()) !== openedSteps) await window.api.setSteps(stepsForm());
+    if ($('promptText').value !== (promptInfo.custom ?? promptInfo.default)) await window.api.setSystemPrompt($('promptText').value);
   } catch (e) {
+    showConvPage('prompt');
     $('promptNote').textContent = errorText(e);
     return;
   }
-  $('promptBadge').classList.toggle('hidden', !promptInfo.custom);
-  promptDialog.close();
+  convDialog.close();
+  refreshPromptBadge();
   refreshGauge();
 };
 
