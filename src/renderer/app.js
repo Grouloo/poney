@@ -1724,7 +1724,7 @@ function fileIcon(name) {
 
 let treeRefresh = null;
 async function refreshTree() {
-  $('filesRoot').textContent = offMode() ? 'Dossier de la conversation' : shortPath(settings.workspace);
+  $('filesRoot').textContent = offMode() ? 'Dossier de la conversation' : shortPath(activeDir());
   $('filesRoot').title = activeDir();
   if (!activeDir()) {
     $('fileTree').innerHTML = '';
