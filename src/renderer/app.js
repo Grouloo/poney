@@ -1534,11 +1534,36 @@ let replaying = false;
 let currentConversation = null;
 
 $('sidebarBtn').onclick = () => document.body.classList.toggle('no-sidebar');
-// The files, in their own pane on the right (shown or not: remembered).
-try { if (localStorage.getItem('filesHidden') === '1') document.body.classList.add('no-files'); } catch {}
+// The conversations and the files, as a deck of two cards (the one in front: remembered).
+let filesInFront = false;
+try { filesInFront = localStorage.getItem('deckFront') === 'files'; } catch {}
+function renderDeck() {
+  const [front, back] = filesInFront ? [$('filesBar'), $('sidebar')] : [$('sidebar'), $('filesBar')];
+  front.className = front.className.replace(/\b(front|back)\b/g, '').trim();
+  back.className = back.className.replace(/\b(front|back)\b/g, '').trim();
+  front.classList.add('front');
+  back.classList.add('back');
+  front.inert = false;
+  back.inert = true; // (under the other card: out of reach of the keyboard too)
+  $('deckTab').textContent = filesInFront ? 'Conversations' : 'Fichiers';
+  $('deckTab').setAttribute('aria-label', `Afficher : ${$('deckTab').textContent}`);
+}
+function swapDeck() {
+  filesInFront = !filesInFront;
+  try { localStorage.setItem('deckFront', filesInFront ? 'files' : 'conversations'); } catch {}
+  renderDeck();
+  const deck = $('deck');
+  deck.classList.remove('swapping');
+  void deck.offsetWidth; // (swapped again during the animation: it starts over)
+  deck.classList.add('swapping');
+}
+$('deck').addEventListener('animationend', (e) => { if (e.target.classList.contains('front')) $('deck').classList.remove('swapping'); });
+$('deckTab').onclick = swapDeck;
+renderDeck();
 $('filesBtn').onclick = () => {
-  const hidden = document.body.classList.toggle('no-files');
-  try { localStorage.setItem('filesHidden', hidden ? '1' : '0'); } catch {}
+  if (!document.body.classList.contains('no-sidebar')) return swapDeck();
+  document.body.classList.remove('no-sidebar'); // (hidden: shown, with the files on top)
+  if (!filesInFront) swapDeck();
 };
 
 function relativeTime(ts) {

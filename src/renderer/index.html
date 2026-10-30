@@ -11,16 +11,18 @@
 </head>
 <body>
   <header class="topbar">
-    <button id="sidebarBtn" class="ghost icon" title="Afficher / masquer le panneau latéral">☰</button>
+    <button id="sidebarBtn" class="ghost icon" title="Afficher / masquer les conversations et les fichiers">☰</button>
     <div class="brand">Poney</div>
     <div class="spacer"></div>
     <button id="stepsBtn" class="ghost" title="Étapes que l’agent fait avant et après avoir répondu, dans cette conversation">Étapes<span id="stepsBadge" class="badge hidden">actives</span></button>
     <button id="promptBtn" class="ghost" title="Voir et modifier le prompt système de cette conversation">Prompt système<span id="promptBadge" class="badge hidden">modifié</span></button>
     <button id="settingsBtn" class="ghost icon" title="Réglages">⚙︎</button>
-    <button id="filesBtn" class="ghost icon" title="Afficher / masquer les fichiers">🗂︎</button>
+    <button id="filesBtn" class="ghost icon" title="Passer des conversations aux fichiers, et inversement">🗂︎</button>
   </header>
 
   <div class="layout">
+  <div id="deck" class="deck">
+  <button id="deckTab" class="deck-tab" type="button"></button>
   <aside id="sidebar">
     <div class="project-bar">
       <button id="projectPicker" class="project-picker" type="button" title="Projet affiché (balayez à deux doigts pour changer)">
@@ -34,6 +36,17 @@
     </div>
     <div id="projectDots" class="project-dots"></div>
   </aside>
+  <aside id="filesBar" class="side-pane">
+    <div class="files-head">
+      <span class="files-title">Fichiers</span>
+      <span id="filesRoot" class="muted"></span>
+      <button id="refreshFiles" class="ghost icon" title="Rafraîchir">↻</button>
+    </div>
+    <div class="pane">
+      <ul id="fileTree" class="tree"></ul>
+    </div>
+  </aside>
+  </div>
 
   <section class="chat">
   <main id="transcript"></main>
@@ -119,16 +132,6 @@
     </div>
     <div id="livePanelBody" class="viewer-body live-panel-body"></div>
   </section>
-  <aside id="filesBar" class="side-pane">
-    <div class="files-head">
-      <span class="files-title">Fichiers</span>
-      <span id="filesRoot" class="muted"></span>
-      <button id="refreshFiles" class="ghost icon" title="Rafraîchir">↻</button>
-    </div>
-    <div class="pane">
-      <ul id="fileTree" class="tree"></ul>
-    </div>
-  </aside>
   </div>
 
   <dialog id="projectDialog" class="prompt-dialog project-dialog">
