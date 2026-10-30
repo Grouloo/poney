@@ -1180,6 +1180,14 @@ window.api.onConversationsChanged(() => refreshConversations());
 window.api.onSessionsChanged(() => refreshConversations());
 window.api.onApproval((req) => { if (shown(req)) onApproval(req); });
 
+// ⌘N or ⌘T (Ctrl elsewhere): a new conversation in the project shown.
+window.addEventListener('keydown', (e) => {
+  const mod = window.api.platform === 'darwin' ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
+  if (!mod || e.altKey || e.shiftKey || !['n', 't'].includes(e.key.toLowerCase())) return;
+  e.preventDefault();
+  newConversationHere();
+});
+
 // ---------- sidebar ----------
 let replaying = false;
 let currentConversation = null;
@@ -1205,66 +1213,63 @@ function relativeTime(ts) {
 
 let renaming = false; // a title is being edited: don't rebuild the list under the cursor
 
-// ---------- conversations, grouped by project ----------
-const OFF_KEY = '@off-project';
-let sessionStates = { busy: new Set(), unread: new Set(), waiting: new Set() };
-let collapsedGroups = new Set();
-try { collapsedGroups = new Set(JSON.parse(localStorage.getItem('collapsedGroups') || '[]')); } catch {}
+// ---------- conversations, by where they stand ----------
+// Working, waiting for an approval, finished (answers not read yet, or the one
+// shown that just finished), then the archived ones: done and read.
+const CATEGORIES = [
+  { key: 'busy', label: 'En cours' },
+  { key: 'waiting', label: 'Action demandée' },
+  { key: 'done', label: 'Terminé' },
+  { key: 'archived', label: 'Archivées', foldable: true },
+];
+const category = (c) => c.approvals ? 'waiting' : c.running ? 'busy' : c.unread || c.finished ? 'done' : 'archived';
+let collapsedCategories = new Set();
+try { collapsedCategories = new Set(JSON.parse(localStorage.getItem('collapsedCategories') || '[]')); } catch {}
 const baseName = (p) => p.split(/[\\/]/).filter(Boolean).pop() || p;
 
 async function refreshConversations() {
   if (renaming) return;
-  const { current, all, recent, running: busy = [], unread = [], waiting = [] } = await window.api.listConversations();
-  sessionStates = { busy: new Set(busy), unread: new Set(unread), waiting: new Set(waiting) };
+  const { current, all } = await window.api.listConversations();
   currentConversation = current;
-  // One group per project (those with conversations, the recent ones, the open one), then "Hors projet".
-  const groups = new Map();
-  const group = (key) => {
-    if (!groups.has(key)) groups.set(key, { key, off: key === OFF_KEY, items: [], latest: 0 });
-    return groups.get(key);
-  };
-  if (settings.workspace) group(settings.workspace);
-  for (const dir of recent) group(dir);
-  for (const c of all) {
-    const g = group(c.offProject ? OFF_KEY : c.workspace);
-    g.items.push(c);
-    g.latest = Math.max(g.latest, c.updatedAt);
-  }
-  group(OFF_KEY);
-  const ordered = [...groups.values()].filter((g) => !g.off).sort((x, y) => y.latest - x.latest);
-  ordered.push(groups.get(OFF_KEY));
-
   const list = $('convList');
   list.innerHTML = '';
-  for (const g of ordered) {
-    const activeGroup = g.off ? offMode() : !offMode() && g.key === settings.workspace;
-    const collapsed = collapsedGroups.has(g.key) && !activeGroup;
+  const add = document.createElement('li');
+  add.innerHTML = '<button class="new-conv" type="button">＋ Nouvelle conversation<span class="kbd"></span></button>';
+  const key = window.api.platform === 'darwin' ? '⌘' : 'Ctrl+';
+  add.firstChild.querySelector('.kbd').textContent = `${key}N`;
+  add.firstChild.title = `Nouvelle conversation dans le projet en cours (${key}N ou ${key}T)`;
+  add.firstChild.onclick = newConversationHere;
+  list.appendChild(add);
+  for (const cat of CATEGORIES) {
+    const items = all.filter((c) => category(c) === cat.key);
+    if (!items.length) continue;
+    const collapsed = cat.foldable && collapsedCategories.has(cat.key);
     const li = document.createElement('li');
-    li.className = `group${activeGroup ? ' current' : ''}${collapsed ? ' collapsed' : ''}`;
-    li.innerHTML = '<div class="group-head"><span class="chev">▾</span><span class="name"></span><span class="count"></span><button class="add" type="button">＋</button></div><ul class="list"></ul>';
-    const name = li.querySelector('.name');
-    name.textContent = g.off ? '💬 Hors projet' : baseName(g.key);
-    name.title = g.off ? 'Conversations sans projet : chacune a son propre dossier de fichiers' : g.key;
-    li.querySelector('.count').textContent = collapsed && g.items.length ? String(g.items.length) : '';
-    li.querySelector('.add').title = g.off ? 'Nouvelle conversation hors projet' : `Nouvelle conversation dans ${baseName(g.key)}`;
-    li.querySelector('.group-head').onclick = () => {
-      if (activeGroup) return; // the open project stays unfolded
-      if (collapsedGroups.has(g.key)) collapsedGroups.delete(g.key); else collapsedGroups.add(g.key);
-      try { localStorage.setItem('collapsedGroups', JSON.stringify([...collapsedGroups])); } catch {}
-      refreshConversations();
-    };
-    li.querySelector('.add').onclick = (e) => { e.stopPropagation(); newConversationIn(g.off ? null : g.key); };
+    li.className = `group ${cat.key}${collapsed ? ' collapsed' : ''}${cat.foldable ? ' foldable' : ''}`;
+    li.innerHTML = '<div class="group-head"><span class="name"></span><span class="count"></span><span class="chev">▾</span></div><ul class="list"></ul>';
+    li.querySelector('.name').textContent = cat.label;
+    li.querySelector('.count').textContent = String(items.length);
+    if (cat.foldable) {
+      li.querySelector('.group-head').onclick = () => {
+        if (collapsedCategories.has(cat.key)) collapsedCategories.delete(cat.key); else collapsedCategories.add(cat.key);
+        try { localStorage.setItem('collapsedCategories', JSON.stringify([...collapsedCategories])); } catch {}
+        refreshConversations();
+      };
+    }
     const ul = li.querySelector('ul');
-    if (!g.items.length) ul.innerHTML = '<li class="empty-note">Aucune conversation.</li>';
-    for (const c of g.items) ul.appendChild(conversationItem(c, current));
+    for (const c of items) ul.appendChild(conversationItem(c, current));
     list.appendChild(li);
   }
-  const add = document.createElement('li');
-  add.className = 'add-project';
-  add.textContent = '＋ Ajouter un projet…';
-  add.onclick = () => $('workspaceBtn').click();
-  list.appendChild(add);
+  if (!all.length) {
+    const none = document.createElement('li');
+    none.className = 'empty-note';
+    none.textContent = 'Aucune conversation.';
+    list.appendChild(none);
+  }
 }
+
+/** A new conversation where the one shown works: its project, or outside any project. */
+const newConversationHere = () => newConversationIn(offMode() || !settings.workspace ? null : settings.workspace);
 
 /** A new conversation in a project folder, or outside any project (dir null). */
 async function newConversationIn(dir) {
@@ -1292,14 +1297,24 @@ async function newConversationIn(dir) {
 
 function conversationItem(c, current) {
   const li = document.createElement('li');
+  li.className = `conv-card ${category(c)}`;
   li.classList.toggle('active', c.id === current);
-  // Working in the background, waiting for an approval, or finished while elsewhere.
-  const state = sessionStates.waiting.has(c.id) ? 'waiting' : sessionStates.busy.has(c.id) ? 'busy' : sessionStates.unread.has(c.id) ? 'unread' : '';
-  if (state) li.classList.add(state);
-  li.innerHTML = '<span class="state"></span><span class="title"></span><span class="when"></span><button class="ren" title="Renommer">✎</button><button class="del" title="Supprimer">✕</button>';
-  li.querySelector('.state').title = { waiting: 'Attend votre autorisation', busy: 'En cours', unread: 'Terminé, pas encore lu' }[state] || '';
+  li.innerHTML = '<div class="card-top"><span class="title"></span><span class="pill"></span><button class="ren" title="Renommer">✎</button><button class="del" title="Supprimer">✕</button></div><div class="card-meta"><span class="state"></span><span class="project"></span><span class="when"></span></div>';
   li.querySelector('.title').textContent = c.title;
   li.querySelector('.title').title = c.title;
+  // How many things wait for the user: approvals (orange), answers to read (blue).
+  const pill = li.querySelector('.pill');
+  if (c.approvals) {
+    pill.textContent = String(c.approvals);
+    pill.classList.add('warn');
+    pill.title = c.approvals > 1 ? `${c.approvals} autorisations en attente` : 'Une autorisation en attente';
+  } else if (c.unread) {
+    pill.textContent = String(c.unread);
+    pill.title = c.unread > 1 ? `${c.unread} réponses à lire` : 'Une réponse à lire';
+  } else pill.remove();
+  const project = li.querySelector('.project');
+  project.textContent = c.offProject ? '💬 Hors projet' : `📁 ${baseName(c.workspace || '')}`;
+  project.title = c.offProject ? 'Conversation sans dossier de projet' : c.workspace || '';
   li.querySelector('.when').textContent = relativeTime(c.updatedAt);
   li.onclick = () => openConversation(c.id);
   li.querySelector('.ren').onclick = (e) => { e.stopPropagation(); startRename(li, c); };

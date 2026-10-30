@@ -82,7 +82,7 @@ export class ConversationStore {
       if (!name.endsWith('.json')) continue;
       try {
         const c = JSON.parse(fs.readFileSync(path.join(this.dir, name), 'utf8'));
-        out.push({ id: c.id, title: c.title, updatedAt: c.updatedAt, workspace: c.workspace, offProject: Boolean(c.offProject) });
+        out.push({ id: c.id, title: c.title, updatedAt: c.updatedAt, workspace: c.workspace, offProject: Boolean(c.offProject), unread: c.unread || 0 });
       } catch {}
     }
     return out.sort((a, b) => b.updatedAt - a.updatedAt);

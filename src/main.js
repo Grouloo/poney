@@ -91,7 +91,8 @@ class Session {
     this.approvals = new Map(); // id -> { req, resolve }
     this.saveTimer = null;
     this.partial = null; // the answer being written: { id, text, thinking }
-    this.unread = false; // finished in the background, not seen since
+    this.unread = conv?.unread ?? 0; // answers finished in the background, not seen since (saved with the conversation)
+    this.finished = false; // finished while shown: stays with the finished ones until the user leaves it
     this.usedAt = Date.now();
   }
 
@@ -109,6 +110,7 @@ class Session {
         approve: (req) => new Promise((resolve) => {
           this.approvals.set(req.id, { req, resolve });
           if (this === active) send('agent:approval', { ...req, session: this.key });
+          send('sessions:changed');
         }),
       });
       agent.on('event', (ev) => this.onEvent(ev));
@@ -127,7 +129,8 @@ class Session {
     }
     if (this === active) send('agent:event', { ...ev, session: this.key });
     if (ev.type === 'turn_start' || ev.type === 'turn_end') {
-      if (ev.type === 'turn_end' && this !== active) this.unread = true;
+      this.finished = ev.type === 'turn_end';
+      if (this.finished && this !== active) this.unread++;
       send('sessions:changed');
     }
     if (!this.conv) return;
@@ -159,12 +162,14 @@ class Session {
     conv.systemPrompt = agent.systemPrompt;
     conv.checkpoints = agent.checkpoints;
     conv.archives = agent.archives;
+    conv.unread = this.unread;
     store.save(conv);
     send('conversations:changed', conv.id);
   }
 
   resolveApprovals(value) {
     for (const { resolve } of this.approvals.values()) resolve(value);
+    if (this.approvals.size) send('sessions:changed');
     this.approvals.clear();
   }
 
@@ -198,7 +203,12 @@ function activate(s) {
   const prev = active;
   active = s;
   sessions.set(s.key, s);
-  s.unread = false;
+  if (prev && prev !== s) prev.finished = false; // left: read, it goes to the archived ones
+  if (s.unread && s.conv) {
+    s.conv.unread = 0;
+    store.save(s.conv, { touch: false });
+  }
+  s.unread = 0;
   s.usedAt = Date.now();
   if (prev && prev !== s && !prev.conv && !prev.running) prev.close();
   // Idle sessions beyond the limit: saved and dropped (reloaded from disk when opened).
@@ -332,16 +342,20 @@ ipcMain.handle('agent:resumeFrom', (_, actId) => {
   return { events: conv.events };
 });
 
-// Every conversation, with its project (the window groups them by project), and
-// which ones are working or have finished in the background.
-ipcMain.handle('conversations:list', () => ({
-  current: active?.key ?? null,
-  all: store.listAll(),
-  recent: settings.recent || [],
-  running: [...sessions.values()].filter((s) => s.running).map((s) => s.key),
-  unread: [...sessions.values()].filter((s) => s.unread).map((s) => s.key),
-  waiting: [...sessions.values()].filter((s) => s.approvals.size).map((s) => s.key),
-}));
+// Every conversation, with its project, and where it stands: working, waiting for
+// approvals (how many), finished (answers not seen yet), or done and read.
+ipcMain.handle('conversations:list', () => {
+  const all = store.listAll();
+  for (const c of all) {
+    const s = sessions.get(c.id);
+    if (!s) continue;
+    c.unread = s.unread;
+    c.approvals = s.approvals.size;
+    c.running = s.running;
+    c.finished = s.finished;
+  }
+  return { current: active?.key ?? null, all };
+});
 // A new conversation outside any project (the agent works in a folder of its own).
 ipcMain.handle('conversations:newOffProject', () => {
   const id = ConversationStore.newId();

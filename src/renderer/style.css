@@ -241,43 +241,51 @@ body.no-sidebar #sidebar { display: none; }
 .tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
 .pane { flex: 1; overflow-y: auto; padding: 8px; min-height: 0; }
 .new-conv {
-  width: 100%; text-align: left; background: var(--panel-2); border: 1px solid var(--border);
-  border-radius: 8px; padding: 7px 10px; margin-bottom: 8px;
+  display: flex; align-items: center; width: 100%; text-align: left; background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 8px; padding: 7px 10px; margin-bottom: 10px;
 }
 .new-conv:hover { border-color: var(--accent-2); }
+.new-conv .kbd { margin-left: auto; color: var(--muted); font-size: 11px; }
 .groups { list-style: none; margin: 0; padding: 0; }
-.group { margin-bottom: 6px; }
-.group-head { display: flex; align-items: center; gap: 6px; padding: 5px 6px; border-radius: 7px; cursor: pointer; color: var(--muted); font-size: 12px; font-weight: 600; }
-.group-head:hover { background: var(--panel-2); color: var(--text); }
-.group.current > .group-head { color: var(--text); cursor: default; }
-.group-head .chev { width: 10px; transition: transform 0.15s; }
+.group { margin-bottom: 10px; }
+.group-head { display: flex; align-items: center; gap: 6px; padding: 2px 6px 5px; color: var(--muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.group.foldable > .group-head { cursor: pointer; border-radius: 6px; }
+.group.foldable > .group-head:hover { color: var(--text); }
+.group-head .count { font-weight: normal; }
+.group-head .chev { display: none; width: 10px; transition: transform 0.15s; }
+.group.foldable .chev { display: inline; }
 .group.collapsed .chev { transform: rotate(-90deg); }
 .group.collapsed > .list { display: none; }
-.group-head .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.group-head .count { font-weight: normal; }
-.group-head .add { margin-left: auto; background: none; border: none; color: var(--muted); font-size: 14px; padding: 0 4px; border-radius: 5px; }
-.group-head .add:hover { color: var(--text); background: var(--border); }
-.group > .list { padding-left: 10px; }
-.add-project { padding: 6px; color: var(--muted); font-size: 12px; cursor: pointer; border-radius: 7px; }
-.add-project:hover { background: var(--panel-2); color: var(--text); }
-.list { list-style: none; margin: 0; padding: 0; }
-.list li {
-  display: flex; align-items: center; gap: 6px; padding: 7px 8px; border-radius: 7px; cursor: pointer;
+.list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+/* a conversation: a card with its title, its project and its date */
+.conv-card {
+  padding: 7px 9px; border-radius: 9px; cursor: pointer;
+  background: var(--surface-2); border: 1px solid var(--border);
 }
-.list li:hover { background: var(--panel-2); }
-.list li.active { background: color-mix(in srgb, var(--accent-2) 22%, var(--panel)); }
-.list .title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
-.list .when { color: var(--muted); font-size: 11px; flex-shrink: 0; }
-.list .del, .list .ren { visibility: hidden; background: none; border: none; color: var(--muted); padding: 0 2px; }
-.list li:hover .del, .list li:hover .ren { visibility: visible; }
-.list .del:hover { color: var(--err); }
-.list .ren:hover { color: var(--accent); }
-.list li.editing .when, .list li.editing .del, .list li.editing .ren { display: none; }
-.list input.rename {
+.conv-card:hover { border-color: color-mix(in srgb, var(--accent-2) 45%, var(--border)); }
+.conv-card.active { background: color-mix(in srgb, var(--accent-2) 22%, var(--panel)); border-color: color-mix(in srgb, var(--accent-2) 60%, var(--border)); }
+.conv-card.archived:not(.active) .title { color: color-mix(in srgb, var(--text) 78%, var(--muted)); }
+.card-top, .card-meta { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.card-meta { margin-top: 3px; color: var(--muted); font-size: 11px; }
+.conv-card .title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.conv-card .project { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conv-card .when { flex-shrink: 0; }
+.conv-card .pill {
+  flex: none; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; box-sizing: border-box;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--accent-2); color: #fff; font-size: 11px; font-weight: 600;
+}
+.conv-card .pill.warn { background: #e3a008; color: #1a1300; }
+.conv-card .del, .conv-card .ren { display: none; background: none; border: none; color: var(--muted); padding: 0 2px; }
+.conv-card:hover .del, .conv-card:hover .ren { display: inline; }
+.conv-card .del:hover { color: var(--err); }
+.conv-card .ren:hover { color: var(--accent); }
+.conv-card.editing .del, .conv-card.editing .ren, .conv-card.editing .pill { display: none; }
+.conv-card input.rename {
   flex: 1; min-width: 0; font-size: 13px; padding: 2px 6px; border-radius: 5px;
   background: var(--bg); border: 1px solid var(--accent-2); color: var(--text); outline: none;
 }
-.list .empty-note { color: var(--muted); font-size: 12.5px; cursor: default; }
+.groups > .empty-note { color: var(--muted); font-size: 12.5px; padding: 4px 6px; }
 
 .files-head { display: flex; align-items: center; justify-content: space-between; font-size: 12px; padding: 0 2px 4px; }
 .files-head span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -514,12 +522,9 @@ body.running .resume-btn { display: none; }
 .msg.user .recalled blockquote { margin: 4px 0; padding: 2px 10px; border-left: 2px solid var(--border); white-space: pre-wrap; }
 .msg.user .noted { margin: 4px 0 0 15%; font-size: 12px; color: var(--muted); }
 
-/* conversations working in the background, waiting for an approval, or finished unseen */
-.list li .state { width: 0; flex: none; }
-.list li.busy .state, .list li.waiting .state, .list li.unread .state { width: 8px; height: 8px; border-radius: 50%; }
-.list li.busy .state { border: 2px solid var(--accent); border-right-color: transparent; animation: spin 0.9s linear infinite; width: 6px; height: 6px; }
-.list li.waiting .state { background: #e3a008; }
-.list li.unread .state { background: var(--accent); }
+/* a conversation at work: a small spinner before its project */
+.conv-card .state { display: none; }
+.conv-card.busy .state { display: inline-block; flex: none; width: 6px; height: 6px; border-radius: 50%; border: 2px solid var(--accent); border-right-color: transparent; animation: spin 0.9s linear infinite; }
 .msg.user .fetched { margin: 4px 0 0 15%; font-size: 12px; color: var(--muted); white-space: pre-line; }
 .msg.user .triage { margin: 4px 0 0 15%; font-family: var(--ui); font-size: 12px; color: var(--muted); }
 #transcript > .triage, .agent-view .triage { margin: 6px auto; font-family: var(--ui); font-size: 12px; color: var(--muted); }
