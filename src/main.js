@@ -617,9 +617,9 @@ ipcMain.handle('agent:approve', (_, { id, ok, always, reason }) => {
 function createWindow() {
   win = new BrowserWindow({
     icon: path.join(here, '..', 'assets', 'icon-square.png'), // taskbar (Windows, Linux)
-    width: 1200,
+    width: 1280,
     height: 820,
-    minWidth: 1040, // (the two sidebars' deck, the conversation and a side panel, without squeezing them)
+    minWidth: 1200, // (the two sidebars' deck, the conversation and a side panel, without squeezing them)
     minHeight: 500,
     title: 'Poney',
     backgroundColor: '#14161a',
