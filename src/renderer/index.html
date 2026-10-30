@@ -26,9 +26,17 @@
 
   <div class="layout">
   <aside id="sidebar">
+    <div class="project-bar">
+      <button id="projectPicker" class="project-picker" type="button" title="Projet affiché (balayez à deux doigts pour changer)">
+        <span class="picker-icon"></span><span class="picker-name"></span>
+        <svg class="picker-chev" viewBox="0 0 12 12" width="11" height="11" aria-hidden="true"><path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <div id="projectMenu" class="project-menu hidden"></div>
+    </div>
     <div id="convPane" class="pane">
       <ul id="convList" class="groups"></ul>
     </div>
+    <div id="projectDots" class="project-dots"></div>
   </aside>
 
   <section class="chat">

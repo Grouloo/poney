@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, nativeImage } from 'electron';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -47,7 +47,7 @@ function logError(what, detail) {
 
 // ---------- settings ----------
 const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
-let settings = { config: { ...DEFAULT_CONFIG }, workspace: '', recent: [] };
+let settings = { config: { ...DEFAULT_CONFIG }, workspace: '', recent: [], projectIcons: {} };
 
 function loadSettings() {
   try {
@@ -264,6 +264,26 @@ ipcMain.handle('workspace:choose', async () => {
 ipcMain.handle('workspace:set', (_, dir) => {
   setWorkspace(dir);
   activate(new Session({ cwd: settings.workspace }));
+  return publicSettings();
+});
+// A project's icon, shown on its conversations and in the sidebar: an emoji
+// ({ emoji }), a small picture ({ image }: a data URL), or none (null).
+// The key is the project's folder, or '@off-project' for the conversations outside projects.
+ipcMain.handle('project:setIcon', (_, key, icon) => {
+  const emoji = typeof icon?.emoji === 'string' ? [...icon.emoji.trim()].slice(0, 8).join('') : '';
+  settings.projectIcons = { ...settings.projectIcons };
+  if (emoji) settings.projectIcons[key] = { emoji };
+  else delete settings.projectIcons[key];
+  saveSettings();
+  return publicSettings();
+});
+ipcMain.handle('project:pickIcon', async (_, key) => {
+  const r = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'icns'] }] });
+  if (r.canceled || !r.filePaths[0]) return publicSettings();
+  const img = nativeImage.createFromPath(r.filePaths[0]);
+  if (img.isEmpty()) throw new Error('Image illisible.');
+  settings.projectIcons = { ...settings.projectIcons, [key]: { image: img.resize({ width: 64, height: 64, quality: 'best' }).toDataURL() } };
+  saveSettings();
   return publicSettings();
 });
 ipcMain.handle('workspace:reveal', () => activeCwd() && shell.openPath(activeCwd()));

@@ -95,13 +95,13 @@ function renderSettings() {
     recent.innerHTML = '';
     for (const dir of settings.recent || []) {
       const b = document.createElement('button');
-      b.textContent = `📁 ${dir.split(/[\\/]/).filter(Boolean).pop() || dir}`;
+      b.innerHTML = `${projectIcon(dir, '📁')} ${esc(dir.split(/[\\/]/).filter(Boolean).pop() || dir)}`;
       b.title = dir;
       b.onclick = async () => { rememberScroll(); settings = await window.api.setWorkspace(dir); renderSettings(); onWorkspaceChanged(); };
       recent.appendChild(b);
     }
     const off = document.createElement('button');
-    off.textContent = '💬 Hors projet';
+    off.innerHTML = `${projectIcon(OFF_KEY, '💬')} Hors projet`;
     off.title = 'Conversation sans dossier de projet : les fichiers restent dans la conversation';
     off.onclick = () => newConversationIn(null);
     recent.appendChild(off);
@@ -1225,17 +1225,158 @@ let collapsedCategories = new Set();
 try { collapsedCategories = new Set(JSON.parse(localStorage.getItem('collapsedCategories') || '[]')); } catch {}
 const baseName = (p) => p.split(/[\\/]/).filter(Boolean).pop() || p;
 
-async function refreshConversations() {
-  if (renaming) return;
-  const { current, all } = await window.api.listConversations();
+// ---------- projects: the one whose conversations are listed ----------
+// 'Tous', each project (by name), then 'Hors projet'. A two-finger swipe on the
+// sidebar goes from one to the next; the dots at the bottom say where we are.
+const ALL = '@all';
+const OFF_KEY = '@off-project';
+let projectFilter = ALL;
+try { projectFilter = localStorage.getItem('projectFilter') || ALL; } catch {}
+let lastConversations = [];
+
+function projectKeys(all = lastConversations) {
+  const dirs = new Set(settings.recent || []);
+  if (settings.workspace) dirs.add(settings.workspace);
+  for (const c of all) if (!c.offProject && c.workspace) dirs.add(c.workspace);
+  return [ALL, ...[...dirs].sort((a, b) => baseName(a).localeCompare(baseName(b), 'fr')), OFF_KEY];
+}
+const projectLabel = (key) => key === ALL ? 'Tous' : key === OFF_KEY ? 'Hors projet' : baseName(key);
+const projectOf = (c) => c.offProject ? OFF_KEY : c.workspace;
+
+/** A project's icon (emoji or picture) as HTML, or the fallback given. */
+function projectIcon(key, fallback = '') {
+  const icon = settings.projectIcons?.[key];
+  if (icon?.image) return `<img class="proj-icon" src="${esc(icon.image)}" alt="">`;
+  if (icon?.emoji) return `<span class="proj-icon">${esc(icon.emoji)}</span>`;
+  return fallback;
+}
+
+function setProjectFilter(key, dir = 0) {
+  if (key === projectFilter) return;
+  projectFilter = key;
+  try { localStorage.setItem('projectFilter', key); } catch {}
+  refreshConversations({ slide: dir });
+}
+
+function stepProject(dir) {
+  const keys = projectKeys();
+  const i = keys.indexOf(projectFilter);
+  const next = keys[i + dir];
+  if (next) setProjectFilter(next, dir);
+}
+
+function renderProjectBar(keys) {
+  $('projectPicker').querySelector('.picker-icon').innerHTML = projectIcon(projectFilter);
+  $('projectPicker').querySelector('.picker-name').textContent = projectLabel(projectFilter);
+  const dots = $('projectDots');
+  dots.innerHTML = '';
+  for (const key of keys) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = `pdot${key === projectFilter ? ' active' : ''}`;
+    b.title = projectLabel(key);
+    b.innerHTML = key === ALL ? '' : projectIcon(key);
+    if (b.innerHTML) b.classList.add('has-icon');
+    b.onclick = () => setProjectFilter(key, Math.sign(keys.indexOf(key) - keys.indexOf(projectFilter)));
+    dots.appendChild(b);
+  }
+}
+
+function openProjectMenu() {
+  const menu = $('projectMenu');
+  menu.innerHTML = '';
+  for (const key of projectKeys()) {
+    const row = document.createElement('div');
+    row.className = `pm-row${key === projectFilter ? ' selected' : ''}`;
+    row.innerHTML = `<span class="pm-icon">${key === ALL ? '' : projectIcon(key, key === OFF_KEY ? '💬' : '📁')}</span><span class="pm-name"></span>${key === ALL ? '' : '<button class="pm-edit" type="button" title="Choisir une icône pour ce projet">☺︎</button>'}`;
+    row.querySelector('.pm-name').textContent = projectLabel(key);
+    row.title = key === ALL || key === OFF_KEY ? '' : key;
+    row.onclick = () => { closeProjectMenu(); setProjectFilter(key); };
+    const edit = row.querySelector('.pm-edit');
+    if (edit) edit.onclick = (e) => { e.stopPropagation(); editProjectIcon(row, key); };
+    menu.appendChild(row);
+  }
+  menu.classList.remove('hidden');
+  $('projectPicker').classList.add('open');
+}
+function closeProjectMenu() {
+  $('projectMenu').classList.add('hidden');
+  $('projectPicker').classList.remove('open');
+}
+
+/** Under the project's row: an emoji to type, or a picture to choose, or none. */
+function editProjectIcon(row, key) {
+  $('projectMenu').querySelector('.pm-iconedit')?.remove();
+  const box = document.createElement('div');
+  box.className = 'pm-iconedit';
+  box.innerHTML = '<input maxlength="8" placeholder="Émoji…"><button type="button" class="pm-image">Image…</button><button type="button" class="pm-clear" title="Retirer l’icône">✕</button>';
+  box.onclick = (e) => e.stopPropagation();
+  const inp = box.querySelector('input');
+  inp.value = settings.projectIcons?.[key]?.emoji || '';
+  const apply = async (call) => {
+    try {
+      settings = await call();
+    } catch (e) {
+      $('status').textContent = errorText(e);
+      return;
+    }
+    refreshConversations();
+    openProjectMenu();
+  };
+  inp.onkeydown = (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); apply(() => window.api.setProjectIcon(key, { emoji: inp.value })); }
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); box.remove(); }
+  };
+  box.querySelector('.pm-image').onclick = () => apply(() => window.api.pickProjectIcon(key));
+  box.querySelector('.pm-clear').onclick = () => apply(() => window.api.setProjectIcon(key, null));
+  row.after(box);
+  inp.focus();
+}
+
+$('projectPicker').onclick = (e) => {
+  e.stopPropagation();
+  if ($('projectMenu').classList.contains('hidden')) openProjectMenu(); else closeProjectMenu();
+};
+$('projectMenu').onclick = (e) => e.stopPropagation();
+document.addEventListener('click', closeProjectMenu);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeProjectMenu(); });
+
+// Two-finger swipe (horizontal wheel on a trackpad): one project per gesture.
+let swipeSum = 0;
+let swipeDone = false;
+let swipeTimer = null;
+$('sidebar').addEventListener('wheel', (e) => {
+  if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
+  clearTimeout(swipeTimer);
+  swipeTimer = setTimeout(() => { swipeSum = 0; swipeDone = false; }, 200); // (the gesture and its momentum are over)
+  if (swipeDone) return;
+  swipeSum += e.deltaX;
+  if (Math.abs(swipeSum) < 50) return;
+  swipeDone = true;
+  stepProject(swipeSum > 0 ? 1 : -1);
+}, { passive: true });
+
+async function refreshConversations({ slide = 0 } = {}) {
+  if (renaming || !settings) return;
+  const { current, all: every } = await window.api.listConversations();
   currentConversation = current;
+  lastConversations = every;
+  const keys = projectKeys(every);
+  if (!keys.includes(projectFilter)) projectFilter = ALL;
+  renderProjectBar(keys);
+  const all = projectFilter === ALL ? every : every.filter((c) => projectOf(c) === projectFilter);
   const list = $('convList');
   list.innerHTML = '';
+  if (slide) {
+    list.classList.remove('slide-next', 'slide-prev');
+    void list.offsetWidth; // (restarts the animation)
+    list.classList.add(slide > 0 ? 'slide-next' : 'slide-prev');
+  }
   const add = document.createElement('li');
   add.innerHTML = '<button class="new-conv" type="button">＋ Nouvelle conversation<span class="kbd"></span></button>';
   const key = window.api.platform === 'darwin' ? '⌘' : 'Ctrl+';
   add.firstChild.querySelector('.kbd').textContent = `${key}N`;
-  add.firstChild.title = `Nouvelle conversation dans le projet en cours (${key}N ou ${key}T)`;
+  add.firstChild.title = `Nouvelle conversation dans le projet affiché (${key}N ou ${key}T)`;
   add.firstChild.onclick = newConversationHere;
   list.appendChild(add);
   for (const cat of CATEGORIES) {
@@ -1261,13 +1402,16 @@ async function refreshConversations() {
   if (!all.length) {
     const none = document.createElement('li');
     none.className = 'empty-note';
-    none.textContent = 'Aucune conversation.';
+    none.textContent = projectFilter === ALL ? 'Aucune conversation.' : 'Aucune conversation dans ce projet.';
     list.appendChild(none);
   }
 }
 
-/** A new conversation where the one shown works: its project, or outside any project. */
-const newConversationHere = () => newConversationIn(offMode() || !settings.workspace ? null : settings.workspace);
+/** A new conversation in the project listed, or (all listed) where the one shown works. */
+const newConversationHere = () => newConversationIn(
+  projectFilter === OFF_KEY ? null
+    : projectFilter !== ALL ? projectFilter
+      : offMode() || !settings.workspace ? null : settings.workspace);
 
 /** A new conversation in a project folder, or outside any project (dir null). */
 async function newConversationIn(dir) {
@@ -1311,7 +1455,7 @@ function conversationItem(c, current) {
     pill.title = c.unread > 1 ? `${c.unread} réponses à lire` : 'Une réponse à lire';
   } else pill.remove();
   const project = li.querySelector('.project');
-  project.textContent = c.offProject ? '💬 Hors projet' : `📁 ${baseName(c.workspace || '')}`;
+  project.innerHTML = `${projectIcon(projectOf(c), c.offProject ? '💬' : '📁')} ${esc(c.offProject ? 'Hors projet' : baseName(c.workspace || ''))}`;
   project.title = c.offProject ? 'Conversation sans dossier de projet' : c.workspace || '';
   li.querySelector('.when').textContent = relativeTime(c.updatedAt);
   li.onclick = () => openConversation(c.id);

@@ -7,6 +7,8 @@ contextBridge.exposeInMainWorld('api', {
   chooseWorkspace: () => ipcRenderer.invoke('workspace:choose'),
   setWorkspace: (dir) => ipcRenderer.invoke('workspace:set', dir),
   revealWorkspace: () => ipcRenderer.invoke('workspace:reveal'),
+  setProjectIcon: (key, icon) => ipcRenderer.invoke('project:setIcon', key, icon),
+  pickProjectIcon: (key) => ipcRenderer.invoke('project:pickIcon', key),
   listModels: (cfg) => ipcRenderer.invoke('models:list', cfg),
   send: (text, turnId) => ipcRenderer.invoke('agent:send', text, turnId),
   rewind: (turnId) => ipcRenderer.invoke('agent:rewind', turnId),
