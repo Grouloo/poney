@@ -13,10 +13,6 @@
   <header class="topbar">
     <button id="sidebarBtn" class="ghost icon" title="Afficher / masquer le panneau latéral">☰</button>
     <div class="brand">Poney</div>
-    <button id="workspaceBtn" class="chip" title="Changer de dossier de projet">
-      <span class="chip-icon">📁</span><span id="workspaceLabel">Choisir un dossier…</span>
-    </button>
-    <select id="modelSelect" class="chip" title="Modèle"></select>
     <div class="spacer"></div>
     <button id="stepsBtn" class="ghost" title="Étapes que l’agent fait avant et après avoir répondu, dans cette conversation">Étapes<span id="stepsBadge" class="badge hidden">actives</span></button>
     <button id="promptBtn" class="ghost" title="Voir et modifier le prompt système de cette conversation">Prompt système<span id="promptBadge" class="badge hidden">modifié</span></button>
@@ -56,6 +52,7 @@
     </div>
     <div class="composer-box">
       <textarea id="input" rows="1" placeholder="Décrivez une tâche…" title="Entrée pour envoyer, Maj+Entrée pour un retour à la ligne"></textarea>
+      <select id="modelSelect" class="model-select" title="Modèle"></select>
       <button id="sendBtn" class="primary">Envoyer</button>
     </div>
     <div class="statusline">

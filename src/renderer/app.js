@@ -76,9 +76,6 @@ const offMode = () => Boolean(settings.active?.offProject);
 const activeDir = () => settings.active?.cwd || '';
 
 function renderSettings() {
-  $('workspaceLabel').textContent = offMode() ? 'Hors projet' : shortPath(settings.workspace);
-  $('workspaceBtn').querySelector('.chip-icon').textContent = offMode() ? '💬' : '📁';
-  $('workspaceBtn').title = offMode() ? 'Conversation hors projet (cliquer pour choisir un dossier de projet)' : settings.workspace || 'Choisir un dossier';
   const shellOn = settings.config.shellEnabled !== false;
   $('webEnabled').checked = settings.config.webEnabled !== false;
   $('shellEnabled').checked = shellOn;
@@ -198,13 +195,14 @@ $('torTest').onclick = async () => {
 };
 $('settingsBtn').onclick = () => $('settings').classList.toggle('hidden');
 $('closeSettings').onclick = () => $('settings').classList.add('hidden');
-$('workspaceBtn').onclick = async () => {
+/** A new project: a folder to choose, and a new conversation in it. */
+async function addProject() {
   rememberScroll();
   const before = activeDir();
   settings = await window.api.chooseWorkspace();
   renderSettings();
   if (activeDir() !== before) onWorkspaceChanged();
-};
+}
 function onWorkspaceChanged() {
   setRunning(false); // a new conversation there (the one shown before goes on in the background)
   clearTranscript();
@@ -385,7 +383,7 @@ function openWelcomeMenu() {
     row(projectIcon(key, key === OFF_KEY ? '💬' : '📁'), projectLabel(key), key === OFF_KEY ? '' : key,
       () => key !== activeProject() && newConversationIn(key === OFF_KEY ? null : key), key === activeProject());
   }
-  row('＋', 'Ajouter un projet…', 'Choisir un dossier', () => $('workspaceBtn').click());
+  row('＋', 'Ajouter un projet…', 'Choisir un dossier', addProject);
   menu.classList.remove('hidden');
   $('welcomePicker').classList.add('open');
 }
@@ -1374,6 +1372,12 @@ function openProjectMenu() {
     if (edit) edit.onclick = (e) => { e.stopPropagation(); editProjectIcon(row, key); };
     menu.appendChild(row);
   }
+  const add = document.createElement('div');
+  add.className = 'pm-row';
+  add.innerHTML = '<span class="pm-icon">＋</span><span class="pm-name">Ajouter un projet…</span>';
+  add.title = 'Choisir un dossier';
+  add.onclick = () => { closeProjectMenu(); addProject(); };
+  menu.appendChild(add);
   menu.classList.remove('hidden');
   $('projectPicker').classList.add('open');
 }

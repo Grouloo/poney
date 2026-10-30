@@ -90,12 +90,6 @@ button { cursor: pointer; }
 .topbar > * { -webkit-app-region: no-drag; }
 .brand { font-weight: 650; margin-right: 6px; -webkit-app-region: drag; }
 .spacer { flex: 1; -webkit-app-region: drag; align-self: stretch; }
-.chip {
-  background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
-  padding: 5px 10px; max-width: 360px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.chip-icon { margin-right: 6px; }
-select.chip { max-width: 240px; }
 .ghost { background: transparent; border: 1px solid transparent; border-radius: 8px; padding: 5px 10px; color: var(--muted); }
 .ghost:hover { background: var(--panel-2); color: var(--text); }
 .icon { font-size: 16px; padding: 4px 9px; }
@@ -200,6 +194,14 @@ details.thinking div { white-space: pre-wrap; border-left: 2px solid var(--borde
   background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 8px;
 }
 .composer-box:focus-within { border-color: var(--accent-2); }
+/* the model, beside the send button: plain text and a chevron, highlighted on hover */
+.model-select {
+  appearance: none; -webkit-appearance: none; flex: none; align-self: flex-end; margin-bottom: 6px; max-width: 200px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer;
+  background: transparent url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5' fill='none' stroke='%238f8e99' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 7px center / 10px;
+  border: none; border-radius: 7px; padding: 4px 22px 4px 8px; color: var(--muted); font-size: 12px; outline: none;
+}
+.model-select:hover, .model-select:focus-visible { background-color: color-mix(in srgb, var(--text) 9%, transparent); color: var(--text); }
 #input { flex: 1; resize: none; border: none; outline: none; background: transparent; max-height: 220px; padding: 6px; overflow-y: hidden; }
 /* Two lines under the input: tool switches, then context gauge and agent status. */
 .statusline { max-width: 820px; margin: 6px auto 0; display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 12px; }
@@ -615,7 +617,7 @@ body.running .resume-btn { display: none; }
 .empty h1 { font-family: var(--chat); font-weight: 500; letter-spacing: 0.2px; }
 
 /* ---------- liquid glass ---------- */
-.primary, .chip, .approval button, .new-conv, .ghost:hover, .msg-editor button {
+.primary, .approval button, .new-conv, .ghost:hover, .msg-editor button {
   background: var(--glass-sheen), var(--glass);
   border: 1px solid var(--glass-edge);
   box-shadow: var(--glass-light), var(--glass-drop);
@@ -629,8 +631,8 @@ body.running .resume-btn { display: none; }
 .primary:hover, .approval button.yes:hover { background: var(--glass-sheen), color-mix(in srgb, var(--accent) 80%, transparent); }
 .primary.stop { background: var(--glass-sheen), color-mix(in srgb, var(--err) 82%, transparent); border-color: color-mix(in srgb, var(--err) 60%, transparent); }
 .approval.refuse button.no { background: var(--glass-sheen), color-mix(in srgb, var(--err) 75%, transparent); }
-.chip:hover, .new-conv:hover, .approval button:not(.yes):not(.no):hover { background: var(--glass-sheen), color-mix(in srgb, var(--glass) 100%, var(--glass-edge) 40%); }
-.primary, .chip, .ghost, .approval button { border-radius: 10px; }
+.new-conv:hover, .approval button:not(.yes):not(.no):hover { background: var(--glass-sheen), color-mix(in srgb, var(--glass) 100%, var(--glass-edge) 40%); }
+.primary, .ghost, .approval button { border-radius: 10px; }
 .primary { padding: 8px 18px; }
 
 .prompt-dialog, .drawer {
