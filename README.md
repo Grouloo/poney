@@ -114,7 +114,7 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   unread count is saved with the conversation.
 - **Projects**: a picker at the top of the sidebar lists one project's conversations, all of them ("Tous", the
   default) or those outside projects; a two-finger horizontal swipe goes to the next or previous project, and dots
-  at the bottom show where you are. A project can have an emoji or a small picture (its settings): it
+  at the bottom show where you are. A project can have an emoji, an icon in a color (a picker with a search, in its settings) or a small picture: it
   replaces the folder icon on its cards and its dot. "Ajouter un projet…" in the picker's menu.
 - **Right click on the sidebar** (or on a project's dot, or a conversation's card): for that project, a new
   conversation (⌘N, or ⌘T), mark its conversations as read (⇧⌘U), its settings (⇧⌘P: emoji or picture,

@@ -267,12 +267,16 @@ ipcMain.handle('workspace:set', (_, dir) => {
   return publicSettings();
 });
 // A project's icon, shown on its conversations and in the sidebar: an emoji
-// ({ emoji }), a small picture ({ image }: a data URL), or none (null).
+// ({ emoji }), an icon of the window's set in a color ({ icon, color }), a small
+// picture ({ image }: a data URL), or none (null).
 // The key is the project's folder, or '@off-project' for the conversations outside projects.
 ipcMain.handle('project:setIcon', (_, key, icon) => {
   const emoji = typeof icon?.emoji === 'string' ? [...icon.emoji.trim()].slice(0, 8).join('') : '';
+  const name = typeof icon?.icon === 'string' && /^[a-z-]{1,24}$/.test(icon.icon) ? icon.icon : '';
+  const color = typeof icon?.color === 'string' && /^#[0-9a-f]{6}$/i.test(icon.color) ? icon.color : undefined;
   settings.projectIcons = { ...settings.projectIcons };
   if (emoji) settings.projectIcons[key] = { emoji };
+  else if (name) settings.projectIcons[key] = { icon: name, color };
   else delete settings.projectIcons[key];
   saveSettings();
   return publicSettings();

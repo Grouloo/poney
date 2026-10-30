@@ -141,12 +141,23 @@
       <div class="steps-body">
         <div id="projectDialogPath" class="muted project-path"></div>
         <div class="project-field">
-          <span class="project-field-label">Icône</span>
           <div class="project-icon-row">
             <span id="projectIconPreview" class="project-icon-preview"></span>
-            <input id="projectEmoji" maxlength="8" placeholder="Un émoji…" autocomplete="off">
-            <button type="button" id="projectImage" class="ghost">Image…</button>
+            <span class="project-field-label">Icône</span>
+            <div class="spacer"></div>
+            <button type="button" id="projectImage" class="ghost" title="Une image de votre ordinateur">Image…</button>
             <button type="button" id="projectIconClear" class="ghost">Retirer</button>
+          </div>
+          <div class="icon-picker">
+            <div class="ip-head">
+              <div class="ip-tabs" role="tablist">
+                <button type="button" data-tab="emoji" class="active">Émoji</button>
+                <button type="button" data-tab="icon">Icônes</button>
+              </div>
+              <input id="ipSearch" type="search" placeholder="Rechercher, ou coller un émoji…" autocomplete="off">
+            </div>
+            <div id="ipColors" class="ip-colors hidden"></div>
+            <div id="ipGrid" class="ip-grid"></div>
           </div>
         </div>
         <div id="projectDanger" class="project-danger">

@@ -5,6 +5,7 @@ import { parsePlan, taskParts } from '../agent/plan.js';
 import { markdown, esc } from './markdown.js';
 import { documentHtml } from './document.js';
 import { SwipeDetector } from './swipe.js';
+import { EMOJIS, ICONS, ICON_COLORS, iconSvg } from './project-icons.js';
 import DOMPurify from '../../node_modules/dompurify/dist/purify.es.mjs';
 
 const $ = (id) => document.getElementById(id);
@@ -1383,6 +1384,8 @@ window.api.onContextMenu((p) => {
 let settingsProject = null;
 function openProjectSettings(key) {
   settingsProject = key;
+  $('ipSearch').value = '';
+  pickerTab = settings.projectIcons?.[key]?.icon ? 'icon' : 'emoji';
   $('projectDialogTitle').textContent = key === OFF_KEY ? 'Hors projet' : `Projet ${projectLabel(key)}`;
   $('projectDialogPath').textContent = key === OFF_KEY ? 'Les conversations sans dossier de projet.' : shortPath(key);
   $('projectDanger').classList.toggle('hidden', key === OFF_KEY);
@@ -1392,7 +1395,7 @@ function openProjectSettings(key) {
 function renderProjectSettings() {
   const key = settingsProject;
   $('projectIconPreview').innerHTML = projectIcon(key, key === OFF_KEY ? OFF_ICON : '📁');
-  $('projectEmoji').value = settings.projectIcons?.[key]?.emoji || '';
+  renderIconPicker();
 }
 async function applyProjectIcon(call) {
   try {
@@ -1405,8 +1408,63 @@ async function applyProjectIcon(call) {
   refreshConversations();
   renderProjectSettings();
 }
-$('projectEmoji').addEventListener('change', () => applyProjectIcon(() => window.api.setProjectIcon(settingsProject, { emoji: $('projectEmoji').value })));
-$('projectEmoji').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); $('projectEmoji').blur(); } });
+
+// The picker: emoji, or an icon of the set in a color; the search goes through
+// their keywords, and an emoji pasted or typed there can be used as it is.
+let pickerTab = 'emoji';
+let pickerColor = ICON_COLORS[1];
+const EMOJI_RE = /\p{Extended_Pictographic}/u;
+const fold = (t) => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+function renderIconPicker() {
+  const current = settings.projectIcons?.[settingsProject] || {};
+  if (current.icon && ICONS[current.icon]) pickerColor = current.color || pickerColor;
+  for (const b of document.querySelectorAll('.ip-tabs button')) b.classList.toggle('active', b.dataset.tab === pickerTab);
+  const q = fold($('ipSearch').value.trim());
+  const grid = $('ipGrid');
+  grid.innerHTML = '';
+  const cell = (html, tip, selected, pick) => {
+    const b = grid.appendChild(document.createElement('button'));
+    b.type = 'button';
+    b.className = `ip-cell${selected ? ' selected' : ''}`;
+    b.innerHTML = html;
+    b.dataset.tip = tip;
+    b.onclick = pick;
+  };
+  const colors = $('ipColors');
+  colors.classList.toggle('hidden', pickerTab !== 'icon');
+  if (pickerTab === 'emoji') {
+    const typed = $('ipSearch').value.trim();
+    if (EMOJI_RE.test(typed) && !EMOJIS.some(([e]) => e === typed)) {
+      cell(esc([...typed].slice(0, 8).join('')), 'Utiliser cet émoji', current.emoji === typed, () => setPickedIcon({ emoji: typed }));
+    }
+    for (const [e, words] of EMOJIS) {
+      if (q && !fold(words).includes(q)) continue;
+      cell(e, words.split(' ')[0], current.emoji === e, () => setPickedIcon({ emoji: e }));
+    }
+  } else {
+    colors.innerHTML = '';
+    for (const c of ICON_COLORS) {
+      const sw = colors.appendChild(document.createElement('button'));
+      sw.type = 'button';
+      sw.className = `ip-color${c === pickerColor ? ' selected' : ''}`;
+      sw.style.background = c;
+      sw.dataset.tip = c === ICON_COLORS[0] ? 'Gris' : 'Couleur';
+      sw.onclick = () => {
+        pickerColor = c;
+        if (current.icon) setPickedIcon({ icon: current.icon, color: c });
+        else renderIconPicker();
+      };
+    }
+    for (const [name, [words]] of Object.entries(ICONS)) {
+      if (q && !fold(words).includes(q)) continue;
+      cell(iconSvg(name, pickerColor), words.split(' ')[0], current.icon === name, () => setPickedIcon({ icon: name, color: pickerColor }));
+    }
+  }
+  if (!grid.children.length) grid.innerHTML = '<div class="ip-empty muted">Rien ne correspond. Collez un émoji pour l’utiliser tel quel.</div>';
+}
+const setPickedIcon = (icon) => applyProjectIcon(() => window.api.setProjectIcon(settingsProject, icon));
+for (const b of document.querySelectorAll('.ip-tabs button')) b.onclick = () => { pickerTab = b.dataset.tab; renderIconPicker(); };
+$('ipSearch').addEventListener('input', renderIconPicker);
 $('projectImage').onclick = () => applyProjectIcon(() => window.api.pickProjectIcon(settingsProject));
 $('projectIconClear').onclick = () => applyProjectIcon(() => window.api.setProjectIcon(settingsProject, null));
 $('projectDialogClose').onclick = () => $('projectDialog').close();
@@ -1524,6 +1582,7 @@ function projectIcon(key, fallback = '') {
   const icon = settings.projectIcons?.[key];
   if (icon?.image) return `<img class="proj-icon" src="${esc(icon.image)}" alt="">`;
   if (icon?.emoji) return `<span class="proj-icon">${esc(icon.emoji)}</span>`;
+  if (icon?.icon) return iconSvg(icon.icon, icon.color) || fallback;
   return fallback;
 }
 
