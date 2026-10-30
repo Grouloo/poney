@@ -23,14 +23,17 @@ const cards = new Map(); // action id -> card element
 
 // The conversation runs under the input: its end stays above it, whatever its height
 // (the plan showing up, a long message), and in view if it was.
-new ResizeObserver(([{ target }]) => {
-  const atEnd = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 160;
-  transcript.style.setProperty('--composer-h', `${target.offsetHeight}px`);
+const composer = document.querySelector('.composer');
+const fitComposer = () => transcript.style.setProperty('--composer-h', `${composer.offsetHeight}px`);
+new ResizeObserver(() => {
+  const atEnd = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 40;
+  fitComposer();
   if (atEnd) transcript.scrollTop = transcript.scrollHeight;
-}).observe(document.querySelector('.composer'));
+}).observe(composer);
 
 // ---------- helpers ----------
 function scrollDown(force) {
+  if (replaying) return; // (a conversation is drawn at once, and placed once at the end)
   const nearBottom = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 160;
   if (force || nearBottom) transcript.scrollTop = transcript.scrollHeight;
 }
@@ -1866,6 +1869,7 @@ function showSession(view) {
   }
   setRunning(Boolean(view.running));
   for (const req of view.approvals || []) onApproval(req);
+  fitComposer(); // (its plan may be there or not: the position is that of the page at its final height)
   const pos = scrollPos.get(view.session);
   transcript.scrollTop = typeof pos === 'number' ? pos : transcript.scrollHeight;
 }
