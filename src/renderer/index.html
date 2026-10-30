@@ -65,20 +65,20 @@
         <span id="status"></span>
       </div>
       <div class="toggles">
-        <label class="toggle" title="Autoriser l’agent à chercher sur le web et lire des pages">
-          <input type="checkbox" id="webEnabled"> Web
+        <label class="toggle" title="Web : l’agent peut chercher sur le web et lire des pages">
+          <input type="checkbox" id="webEnabled" aria-label="Web"><svg class="toggle-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6"/><ellipse cx="8" cy="8" rx="2.6" ry="6"/><path d="M2.3 6h11.4M2.3 10h11.4"/></svg>
         </label>
-        <label class="toggle" id="torToggleLabel" title="Recherche web et lecture de pages via Tor (réglages : ⚙︎ › Confidentialité)">
-          <input type="checkbox" id="torEnabled"> Tor<span id="torState" class="tor-state disabled"></span>
+        <label class="toggle" id="torToggleLabel" title="Tor : recherche web et lecture de pages via Tor (réglages : ⚙︎ › Confidentialité)">
+          <input type="checkbox" id="torEnabled" aria-label="Tor"><svg class="toggle-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.2c-.3 1.6-1.4 2.3-2.6 3.1C4 6.2 3 7.7 3 9.7 3 12.4 5.2 14 8 14s5-1.6 5-4.3c0-2-1-3.5-2.4-4.4C9.4 4.5 8.3 3.8 8 2.2z"/><path d="M8 6.6c-1.3.9-2.2 2-2.2 3.3S6.8 12 8 12s2.2-.8 2.2-2.1S9.3 7.5 8 6.6z"/><path d="M8 2.2V.9M8 2.2c.5-.8 1.4-1.2 2.3-1.1"/></svg><span id="torState" class="tor-state disabled"></span>
         </label>
-        <label class="toggle" title="Autoriser l’agent à déléguer des tâches indépendantes à des sous-agents qui travaillent en même temps">
-          <input type="checkbox" id="subagentsEnabled"> Sous-agents
+        <label class="toggle" title="Sous-agents : l’agent peut déléguer des tâches indépendantes à des sous-agents qui travaillent en même temps">
+          <input type="checkbox" id="subagentsEnabled" aria-label="Sous-agents"><svg class="toggle-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="3.5" r="1.8"/><circle cx="3.5" cy="12.5" r="1.8"/><circle cx="12.5" cy="12.5" r="1.8"/><path d="M8 5.3v2.2M8 7.5 4.6 10.9M8 7.5l3.4 3.4"/></svg>
         </label>
-        <label class="toggle" title="Autoriser l’agent à lancer des commandes dans le terminal">
-          <input type="checkbox" id="shellEnabled"> Terminal
+        <label class="toggle" title="Terminal : l’agent peut lancer des commandes">
+          <input type="checkbox" id="shellEnabled" aria-label="Terminal"><svg class="toggle-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.8" y="2.8" width="12.4" height="10.4" rx="2"/><path d="m4.6 6.4 2 1.7-2 1.7M8.4 10.2h3"/></svg>
         </label>
-        <label class="toggle" id="autoApproveLabel" title="Exécuter les commandes sans demander">
-          <input type="checkbox" id="autoApprove"> sans confirmation
+        <label class="toggle" id="autoApproveLabel" title="Sans confirmation : les commandes sont lancées sans vous demander">
+          <input type="checkbox" id="autoApprove" aria-label="Sans confirmation"><svg class="toggle-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M9 1.8 3.6 9h3.6L6.8 14.2 12.4 7H8.7z"/></svg>
         </label>
       </div>
     </div>

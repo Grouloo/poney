@@ -154,8 +154,8 @@ function renderTorStatus(s) {
   $('torState').textContent = s.state === 'bootstrapping' || s.state === 'stuck' ? ` ${s.progress} %`
     : s.state === 'reconnecting' ? ' reconnexion' : s.state === 'degraded' ? ' lent' : '';
   $('torToggleLabel').title = s.state === 'disabled'
-    ? 'Recherche web et lecture de pages via Tor (réglages : ⚙︎ › Confidentialité)'
-    : `${s.detail}${s.proxy ? ` — ${s.proxy.replace('socks5h://', '')}` : ''}`;
+    ? 'Tor : recherche web et lecture de pages via Tor (réglages : ⚙︎ › Confidentialité)'
+    : `Tor : ${s.detail}${s.proxy ? ` — ${s.proxy.replace('socks5h://', '')}` : ''}`;
   $('torStatusLine').textContent = s.detail;
 }
 
