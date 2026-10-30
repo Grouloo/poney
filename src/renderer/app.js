@@ -1698,6 +1698,21 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeProje
 const swipe = new SwipeDetector(stepProject);
 $('sidebar').addEventListener('wheel', (e) => swipe.wheel(e.deltaX, e.deltaY, e.timeStamp), { passive: true });
 
+// Anywhere else (not inside the card in front), the same swipe swaps the two cards.
+const deckSwipe = new SwipeDetector(swapDeck);
+/** Over what scrolls sideways (a code block, a table…), a swipe is for it. */
+function scrollsSideways(el) {
+  for (; el && el !== document.body; el = el.parentElement) {
+    if (el.scrollWidth > el.clientWidth + 1 && /auto|scroll/.test(getComputedStyle(el).overflowX)) return true;
+  }
+  return false;
+}
+window.addEventListener('wheel', (e) => {
+  if (Math.abs(e.deltaX) <= Math.abs(e.deltaY) || document.body.classList.contains('no-sidebar')) return;
+  if (e.target.closest?.('.deck .front, dialog, .drawer') || scrollsSideways(e.target)) return;
+  deckSwipe.wheel(e.deltaX, e.deltaY, e.timeStamp);
+}, { passive: true });
+
 async function refreshConversations({ slide = 0 } = {}) {
   if (renaming || !settings) return;
   const { current, all: every } = await window.api.listConversations();
