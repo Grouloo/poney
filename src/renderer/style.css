@@ -106,10 +106,16 @@ select.chip { max-width: 240px; }
 /* ---------- transcript ---------- */
 #transcript { flex: 1; overflow-y: auto; padding: 20px 0 30px; scroll-behavior: smooth; }
 #transcript > * { max-width: 860px; margin-left: auto; margin-right: auto; padding: 0 20px; }
-.empty { text-align: center; margin-top: 12vh !important; color: var(--muted); }
+.empty { text-align: center; color: var(--muted); }
 .empty h1 { color: var(--text); font-weight: 600; font-size: 26px; }
-.recent { display: flex; flex-direction: column; gap: 6px; align-items: center; margin-top: 24px; }
-.recent button { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px; color: var(--text); max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+/* Before the conversation starts: the page and the input just below it, in the upper part of the window. */
+.chat.fresh #transcript { flex: 0 0 auto; overflow: visible; padding-top: 16vh; padding-bottom: 12px; }
+.chat.fresh .composer { margin-bottom: auto; }
+.welcome-project { display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 18px; }
+.welcome-picker-wrap { position: relative; }
+.welcome-picker-wrap .project-picker { width: auto; max-width: 320px; font-size: 15px; }
+.welcome-picker-wrap .project-menu { left: 0; right: auto; min-width: 220px; text-align: left; }
+.welcome-hint { font-size: 12.5px; min-height: 1em; margin: 8px 0 0; }
 
 .msg { margin: 14px auto; }
 .msg.user .bubble {
@@ -609,7 +615,7 @@ body.running .resume-btn { display: none; }
 .empty h1 { font-family: var(--chat); font-weight: 500; letter-spacing: 0.2px; }
 
 /* ---------- liquid glass ---------- */
-.primary, .chip, .approval button, .recent button, .new-conv, .ghost:hover, .msg-editor button {
+.primary, .chip, .approval button, .new-conv, .ghost:hover, .msg-editor button {
   background: var(--glass-sheen), var(--glass);
   border: 1px solid var(--glass-edge);
   box-shadow: var(--glass-light), var(--glass-drop);
@@ -623,8 +629,8 @@ body.running .resume-btn { display: none; }
 .primary:hover, .approval button.yes:hover { background: var(--glass-sheen), color-mix(in srgb, var(--accent) 80%, transparent); }
 .primary.stop { background: var(--glass-sheen), color-mix(in srgb, var(--err) 82%, transparent); border-color: color-mix(in srgb, var(--err) 60%, transparent); }
 .approval.refuse button.no { background: var(--glass-sheen), color-mix(in srgb, var(--err) 75%, transparent); }
-.chip:hover, .recent button:hover, .new-conv:hover, .approval button:not(.yes):not(.no):hover { background: var(--glass-sheen), color-mix(in srgb, var(--glass) 100%, var(--glass-edge) 40%); }
-.primary, .chip, .ghost, .approval button, .recent button { border-radius: 10px; }
+.chip:hover, .new-conv:hover, .approval button:not(.yes):not(.no):hover { background: var(--glass-sheen), color-mix(in srgb, var(--glass) 100%, var(--glass-edge) 40%); }
+.primary, .chip, .ghost, .approval button { border-radius: 10px; }
 .primary { padding: 8px 18px; }
 
 .prompt-dialog, .drawer {

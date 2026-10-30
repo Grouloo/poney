@@ -30,7 +30,10 @@ function scrollDown(force) {
 let target = null;
 
 function add(el) {
-  $('empty')?.remove();
+  if ($('empty')) {
+    $('empty').remove();
+    document.querySelector('.chat').classList.remove('fresh');
+  }
   if (target) {
     // Inside a sub-agent's view: the side panel follows it when it shows it and is at the end.
     const panel = $('agentPanelBody');
@@ -91,22 +94,7 @@ function renderSettings() {
   $('subagentsEnabled').checked = settings.config.subagentsEnabled !== false;
   form.elements.maxParallelAgents.disabled = settings.config.parallelAgents === false; // (one at a time)
   if (Boolean(torTimer) !== Boolean(settings.config.torEnabled)) scheduleTorStatus();
-  const recent = $('recent');
-  if (recent) {
-    recent.innerHTML = '';
-    for (const dir of settings.recent || []) {
-      const b = document.createElement('button');
-      b.innerHTML = `${projectIcon(dir, '📁')} ${esc(dir.split(/[\\/]/).filter(Boolean).pop() || dir)}`;
-      b.title = dir;
-      b.onclick = async () => { rememberScroll(); settings = await window.api.setWorkspace(dir); renderSettings(); onWorkspaceChanged(); };
-      recent.appendChild(b);
-    }
-    const off = document.createElement('button');
-    off.innerHTML = `${projectIcon(OFF_KEY, '💬')} Hors projet`;
-    off.title = 'Conversation sans dossier de projet : les fichiers restent dans la conversation';
-    off.onclick = () => newConversationIn(null);
-    recent.appendChild(off);
-  }
+  renderWelcomeProject();
 }
 
 async function refreshModels() {
@@ -323,10 +311,90 @@ function clearTranscript() {
   transcript.innerHTML = '';
   bubbles.clear();
   cards.clear();
-  transcript.appendChild(div('msg notice', offMode()
-    ? 'Nouvelle conversation hors projet : les fichiers de l’agent restent dans un dossier propre à cette conversation.'
-    : `Nouvelle conversation dans ${esc(shortPath(settings.workspace))}`));
+  renderWelcome();
 }
+
+// ---------- new conversation page ----------
+const CHEVRON = '<svg class="picker-chev" viewBox="0 0 12 12" width="11" height="11" aria-hidden="true"><path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+/** The project of the conversation shown (OFF_KEY outside projects), null if none. */
+const activeProject = () => offMode() ? OFF_KEY : activeDir() || null;
+/** The project of the last conversation looked at, for the next new one. */
+function rememberProject() {
+  const key = activeProject();
+  try { if (key) localStorage.setItem('lastProject', key); } catch {}
+}
+/** Where a new conversation goes: the project listed in the sidebar, else that of the last conversation looked at, else outside projects. */
+function defaultProject() {
+  if (projectFilter !== ALL) return projectFilter;
+  let last = null;
+  try { last = localStorage.getItem('lastProject'); } catch {}
+  return last && projectKeys().includes(last) ? last : OFF_KEY;
+}
+
+// The same at launch and for a new conversation: a title, the project it will
+// work in (a picker like the sidebar's), and the input just below, higher up in
+// the page until the conversation starts.
+function renderWelcome() {
+  const el = document.createElement('div');
+  el.id = 'empty';
+  el.className = 'empty';
+  el.innerHTML = `<h1>Que dois-je construire ?</h1>
+    <p>L’agent lit et modifie les fichiers du projet, lance des commandes, cherche sur le web, et teste son code avant de conclure.</p>
+    <div class="welcome-project"><span class="muted">Dans</span>
+      <div class="welcome-picker-wrap">
+        <button id="welcomePicker" class="project-picker" type="button"><span class="picker-icon"></span><span class="picker-name"></span>${CHEVRON}</button>
+        <div id="welcomeMenu" class="project-menu hidden"></div>
+      </div>
+    </div>
+    <p class="welcome-hint muted"></p>`;
+  transcript.appendChild(el);
+  document.querySelector('.chat').classList.add('fresh');
+  $('welcomePicker').onclick = (e) => {
+    e.stopPropagation();
+    if ($('welcomeMenu').classList.contains('hidden')) openWelcomeMenu(); else closeWelcomeMenu();
+  };
+  $('welcomeMenu').onclick = (e) => e.stopPropagation();
+  renderWelcomeProject();
+}
+
+function renderWelcomeProject() {
+  const picker = $('welcomePicker');
+  if (!picker || !settings) return;
+  const key = activeProject();
+  picker.querySelector('.picker-icon').innerHTML = key ? projectIcon(key, key === OFF_KEY ? '💬' : '📁') : '';
+  picker.querySelector('.picker-name').textContent = key ? projectLabel(key) : 'Choisir un projet…';
+  picker.title = key && key !== OFF_KEY ? key : '';
+  document.querySelector('#empty .welcome-hint').textContent = key === OFF_KEY
+    ? 'Hors projet : les fichiers de l’agent restent dans un dossier propre à cette conversation.'
+    : '';
+}
+
+function openWelcomeMenu() {
+  const menu = $('welcomeMenu');
+  menu.innerHTML = '';
+  const row = (icon, name, title, onclick, selected = false) => {
+    const r = document.createElement('div');
+    r.className = `pm-row${selected ? ' selected' : ''}`;
+    r.innerHTML = `<span class="pm-icon">${icon}</span><span class="pm-name"></span>`;
+    r.querySelector('.pm-name').textContent = name;
+    r.title = title;
+    r.onclick = () => { closeWelcomeMenu(); onclick(); };
+    menu.appendChild(r);
+  };
+  for (const key of projectKeys().filter((k) => k !== ALL)) {
+    row(projectIcon(key, key === OFF_KEY ? '💬' : '📁'), projectLabel(key), key === OFF_KEY ? '' : key,
+      () => key !== activeProject() && newConversationIn(key === OFF_KEY ? null : key), key === activeProject());
+  }
+  row('＋', 'Ajouter un projet…', 'Choisir un dossier', () => $('workspaceBtn').click());
+  menu.classList.remove('hidden');
+  $('welcomePicker').classList.add('open');
+}
+function closeWelcomeMenu() {
+  $('welcomeMenu')?.classList.add('hidden');
+  $('welcomePicker')?.classList.remove('open');
+}
+document.addEventListener('click', closeWelcomeMenu);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeWelcomeMenu(); });
 
 /** A user message: plain text, with the quoted lines ("> …") shown as quotes. */
 function fillUserBubble(bubble, text) {
@@ -437,8 +505,10 @@ function replayTranscript(events) {
   renderPlan([]); // the last plan event of the conversation shows it again
   renderMemory([]); // (same for the memory)
   transcript.innerHTML = '';
+  document.querySelector('.chat').classList.remove('fresh');
   bubbles.clear();
   cards.clear();
+  if (!events.length) renderWelcome();
   replaying = true;
   try {
     for (const ev of events) onEvent(ev);
@@ -481,6 +551,7 @@ async function submit() {
 
 async function sendMessage(text) {
   const turnId = crypto.randomUUID();
+  rememberProject();
   addUserMessage(text, turnId);
   setRunning(true);
   try {
@@ -1258,6 +1329,8 @@ function setProjectFilter(key, dir = 0) {
   if (key === projectFilter) return;
   projectFilter = key;
   try { localStorage.setItem('projectFilter', key); } catch {}
+  // A new conversation not started yet follows the project listed.
+  if ($('empty') && key !== ALL && key !== activeProject()) newConversationIn(key === OFF_KEY ? null : key);
   refreshConversations({ slide: dir });
 }
 
@@ -1399,11 +1472,11 @@ async function refreshConversations({ slide = 0 } = {}) {
   }
 }
 
-/** A new conversation in the project listed, or (all listed) where the one shown works. */
-const newConversationHere = () => newConversationIn(
-  projectFilter === OFF_KEY ? null
-    : projectFilter !== ALL ? projectFilter
-      : offMode() || !settings.workspace ? null : settings.workspace);
+/** A new conversation in the default project (see defaultProject). */
+const newConversationHere = () => {
+  const key = defaultProject();
+  return newConversationIn(key === OFF_KEY ? null : key);
+};
 
 /** A new conversation in a project folder, or outside any project (dir null). */
 async function newConversationIn(dir) {
@@ -1555,6 +1628,7 @@ async function openConversation(id) {
     closeViewer();
   }
   showSession(view);
+  rememberProject();
   refreshConversations();
   refreshPromptBadge();
   refreshGauge();
@@ -1936,4 +2010,6 @@ refreshGauge();
 const session = await window.api.currentSession();
 settings = session.settings;
 if (session.events.length || session.partial) showSession(session);
+else if (activeProject() !== defaultProject()) await newConversationHere(); // (the same page as a new conversation)
+else clearTranscript();
 input.focus();
