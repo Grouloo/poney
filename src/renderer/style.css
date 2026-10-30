@@ -371,8 +371,12 @@ body.no-sidebar .deck { width: 0; margin-right: -12px; opacity: 0; transform: tr
 .deck-tab {
   position: absolute; top: 12px; bottom: 12px; right: 0; width: 22px; z-index: 3; padding: 0; cursor: pointer;
   background: none; border: none; color: var(--muted); font-size: 12.5px; letter-spacing: 0.04em; writing-mode: vertical-rl;
+  transition: color 0.15s, transform 0.15s ease-out;
 }
-.deck-tab:hover { color: var(--text); }
+/* (the text follows the card; the button itself stays, or it would slip from under the pointer) */
+.deck-tab::before { content: ''; position: absolute; inset: 0 -4px 0 0; }
+.deck-tab:hover { color: var(--text); transform: translateX(4px); }
+.deck-tab:hover::before { inset: 0 0 0 -4px; }
 /* The swap: the back card comes out from behind the other, then lands on top of it. */
 .deck.swapping .front { animation: deck-rise 0.34s ease-in-out; }
 .deck.swapping .back { animation: deck-sink 0.34s ease-in-out; }
