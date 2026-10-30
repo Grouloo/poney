@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, ipcMain, dialog, shell, nativeImage } from 'electron';
+import { app, BrowserWindow, Menu, ipcMain, dialog, shell, nativeImage, nativeTheme } from 'electron';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -93,6 +93,8 @@ class Session {
     this.partial = null; // the answer being written: { id, text, thinking }
     this.unread = conv?.unread ?? 0; // answers finished in the background, not seen since (saved with the conversation)
     this.finished = false; // finished while shown: stays with the finished ones until the user leaves it
+    this.draft = conv?.draft ?? ''; // what is typed in the input, not sent
+    this.draftTimer = null;
     this.usedAt = Date.now();
   }
 
@@ -147,24 +149,45 @@ class Session {
     this.saveTimer ??= setTimeout(() => this.save(), 3000);
   }
 
-  save() {
+  save({ touch = true } = {}) {
     clearTimeout(this.saveTimer);
     this.saveTimer = null;
     const { conv, agent } = this;
-    if (!conv || !agent) return;
-    conv.messages = agent.messages;
-    conv.untested = agent.untested;
-    conv.plan = agent.taskPlan;
-    conv.memory = agent.memory;
-    conv.memoryShownAt = agent.memoryShownAt;
-    conv.chapters = agent.chapters;
-    conv.steps = agent.steps;
-    conv.systemPrompt = agent.systemPrompt;
-    conv.checkpoints = agent.checkpoints;
-    conv.archives = agent.archives;
+    if (!conv) return;
+    if (agent) {
+      conv.messages = agent.messages;
+      conv.untested = agent.untested;
+      conv.plan = agent.taskPlan;
+      conv.memory = agent.memory;
+      conv.memoryShownAt = agent.memoryShownAt;
+      conv.chapters = agent.chapters;
+      conv.steps = agent.steps;
+      conv.systemPrompt = agent.systemPrompt;
+      conv.checkpoints = agent.checkpoints;
+      conv.archives = agent.archives;
+    }
+    if (this.draft.trim()) conv.draft = this.draft;
+    else delete conv.draft;
     conv.unread = this.unread;
-    store.save(conv);
+    store.save(conv, { touch });
     send('conversations:changed', conv.id);
+  }
+
+  /** The user leaves it or the app quits: an unsent text keeps it, even if nothing was ever sent. */
+  keepDraft() {
+    clearTimeout(this.draftTimer);
+    if (!this.conv && this.draft.trim()) {
+      this.conv = store.create(this.cwd, this.draft, { id: this.key, offProject: this.offProject });
+      this.conv.titleFromDraft = true;
+    }
+    if (!this.conv) return;
+    const sent = (this.agent?.messages ?? this.conv.messages).length;
+    if (!sent && !this.draft.trim() && !this.running) { // (its text was erased: nothing left of it)
+      store.delete(this.conv.id);
+      this.conv = null;
+      return;
+    }
+    this.save({ touch: false });
   }
 
   resolveApprovals(value) {
@@ -175,7 +198,7 @@ class Session {
 
   /** Gone from memory: idle, saved. Its folder goes too if it is outside projects and was never used. */
   close() {
-    this.save();
+    this.keepDraft();
     this.resolveApprovals(false);
     this.agent?.stop();
     if (this.offProject && !this.conv) removeIfEmpty(this.cwd);
@@ -203,7 +226,10 @@ function activate(s) {
   const prev = active;
   active = s;
   sessions.set(s.key, s);
-  if (prev && prev !== s) prev.finished = false; // left: read, it goes to the archived ones
+  if (prev && prev !== s) {
+    prev.finished = false; // left: read, it goes to the archived ones
+    prev.keepDraft();
+  }
   if (s.unread && s.conv) {
     s.conv.unread = 0;
     store.save(s.conv, { touch: false });
@@ -221,7 +247,7 @@ function activate(s) {
 const activeCwd = () => active?.cwd ?? settings.workspace;
 /** The active session, a new one in the current project if there is none. */
 const current = () => active ?? activate(new Session({ cwd: settings.workspace }));
-const saveAll = () => { for (const s of sessions.values()) s.save(); };
+const saveAll = () => { for (const s of sessions.values()) s.keepDraft(); };
 
 /** The settings, plus where the agent works now (for the window). */
 const publicSettings = () => ({ ...settings, active: { offProject: Boolean(active?.offProject), cwd: activeCwd() || '', session: active?.key ?? null } });
@@ -242,6 +268,7 @@ function sessionView(s) {
     approvals: [...s.approvals.values()].map(({ req }) => ({ ...req, session: s.key })),
     // (from the agent, not the transcript: notes added before the first message left no event there)
     memory: s.agent?.memory ?? s.conv?.memory ?? [],
+    draft: s.draft,
     session: s.key,
     settings: publicSettings(),
   };
@@ -251,6 +278,7 @@ ipcMain.handle('settings:get', () => publicSettings());
 ipcMain.handle('settings:setConfig', (_, patch) => {
   settings.config = { ...settings.config, ...patch };
   saveSettings();
+  nativeTheme.themeSource = settings.config.theme;
   for (const s of sessions.values()) if (s.agent) s.agent.config = { ...DEFAULT_CONFIG, ...settings.config };
   return publicSettings();
 });
@@ -308,6 +336,12 @@ ipcMain.handle('agent:send', async (_, text, turnId) => {
     s.conv = store.create(s.cwd, text, { id: s.key, offProject: s.offProject });
     s.conv.systemPrompt = a.systemPrompt; // edited before the first message
   }
+  if (s.conv.titleFromDraft) {
+    s.conv.title = ConversationStore.cleanTitle(text) || s.conv.title;
+    delete s.conv.titleFromDraft;
+  }
+  s.draft = '';
+  clearTimeout(s.draftTimer);
   store.record(s.conv, { type: 'user_message', text, turnId });
   // Events stream back through 'agent:event'.
   a.send(text, { turnId }).catch((e) => s.onEvent({ type: 'error', message: e.message }));
@@ -385,6 +419,7 @@ ipcMain.handle('conversations:list', () => {
     c.approvals = s.approvals.size;
     c.running = s.running;
     c.finished = s.finished;
+    c.draft = Boolean(s.draft.trim());
   }
   return { current: active?.key ?? null, all };
 });
@@ -397,6 +432,13 @@ ipcMain.handle('conversations:newOffProject', () => {
   return publicSettings();
 });
 ipcMain.handle('session:current', () => sessionView(current()));
+// What is typed in the input of the conversation shown (saved soon, and when the user leaves it).
+ipcMain.handle('session:setDraft', (_, text) => {
+  const s = current();
+  s.draft = String(text ?? '');
+  clearTimeout(s.draftTimer);
+  if (s.conv) s.draftTimer = setTimeout(() => s.save({ touch: false }), 2000);
+});
 ipcMain.handle('conversations:open', (_, id) => {
   // Already open (maybe still working): shown as it is now.
   const open = sessions.get(id);
@@ -434,6 +476,7 @@ ipcMain.handle('conversations:rename', (_, id, title) => {
   if (s?.conv) {
     const clean = ConversationStore.cleanTitle(title);
     if (clean) s.conv.title = clean;
+    delete s.conv.titleFromDraft;
     store.save(s.conv, { touch: false });
     return s.conv.title;
   }
@@ -710,6 +753,7 @@ app.whenReady().then(() => {
   if (process.platform === 'darwin') app.dock?.setIcon(path.join(here, '..', 'assets', 'icon.png'));
   appMenu();
   loadSettings();
+  nativeTheme.themeSource = settings.config.theme;
   store = new ConversationStore(path.join(app.getPath('userData'), 'conversations'));
   pruneOffProject();
   createWindow();

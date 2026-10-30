@@ -449,6 +449,7 @@ img.proj-icon { width: 1.15em; height: 1.15em; object-fit: contain; vertical-ali
 }
 .conv-card:hover { border-color: color-mix(in srgb, var(--accent-2) 45%, var(--border)); }
 .conv-card.active { background: color-mix(in srgb, var(--accent-2) 22%, var(--panel)); border-color: color-mix(in srgb, var(--accent-2) 60%, var(--border)); }
+.group.drafts .conv-card { border-color: #e8871e; }
 .conv-card.archived:not(.active) .title { color: color-mix(in srgb, var(--text) 78%, var(--muted)); }
 .card-top, .card-meta { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .card-top { position: relative; }

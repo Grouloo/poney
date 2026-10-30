@@ -18,6 +18,7 @@ import {
 } from './context.js';
 
 export const DEFAULT_CONFIG = {
+  theme: 'system', // 'system' | 'light' | 'dark'
   provider: 'ollama', // 'ollama' | 'openai'
   baseUrl: 'http://localhost:11434',
   apiKey: '',

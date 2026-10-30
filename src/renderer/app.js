@@ -229,6 +229,7 @@ window.api.onOpenSettings(() => openSettings()); // (the application menu, ⌘,)
 /** A new project: a folder to choose, and a new conversation in it. */
 async function addProject() {
   rememberScroll();
+  await flushDraft();
   const before = activeDir();
   settings = await window.api.chooseWorkspace();
   renderSettings();
@@ -237,6 +238,7 @@ async function addProject() {
 function onWorkspaceChanged() {
   setRunning(false); // a new conversation there (the one shown before goes on in the background)
   clearTranscript();
+  setInput('');
   closeViewer();
   expanded.clear();
   refreshConversations();
@@ -412,7 +414,7 @@ function openWelcomeMenu() {
   };
   for (const key of projectKeys().filter((k) => k !== ALL)) {
     row(projectIcon(key, key === OFF_KEY ? '💬' : '📁'), projectLabel(key), key === OFF_KEY ? '' : key,
-      () => key !== activeProject() && newConversationIn(key === OFF_KEY ? null : key), key === activeProject());
+      () => key !== activeProject() && newConversationIn(key === OFF_KEY ? null : key, { keepText: true }), key === activeProject());
   }
   row('＋', 'Ajouter un projet…', 'Choisir un dossier', addProject);
   menu.classList.remove('hidden');
@@ -550,6 +552,29 @@ function replayTranscript(events) {
   else closeAgentPanel();
 }
 
+// ---------- the text of the input, kept as the conversation's draft ----------
+let draftTimer = null;
+let draftChanged = false;
+/** Sends the main process what is typed, now (before leaving the conversation). */
+function flushDraft() {
+  clearTimeout(draftTimer);
+  if (!draftChanged) return;
+  draftChanged = false;
+  return window.api.setDraft(input.value);
+}
+function noteDraft() {
+  draftChanged = true;
+  clearTimeout(draftTimer);
+  draftTimer = setTimeout(flushDraft, 250);
+}
+function setInput(text) {
+  clearTimeout(draftTimer);
+  draftChanged = false;
+  input.value = text;
+  autosize();
+}
+input.addEventListener('input', noteDraft);
+
 // ---------- sending ----------
 async function submit() {
   if (running) {
@@ -563,18 +588,18 @@ async function submit() {
     renderSettings();
     if (!activeDir()) return;
     onWorkspaceChanged();
+    setInput(text);
   }
   if (!settings.config.model) {
     openSettings('server');
     $('status').textContent = 'Choisissez un modèle dans les réglages.';
     return;
   }
-  input.value = '';
-  autosize();
+  setInput('');
   // Not sent: the text goes back into the box (unless something new was typed).
   if (!(await sendMessage(text)) && !input.value) {
-    input.value = text;
-    autosize();
+    setInput(text);
+    noteDraft();
   }
 }
 
@@ -677,6 +702,7 @@ function quote(range) {
   const sep = !cur ? '' : cur.endsWith('\n\n') ? '' : cur.endsWith('\n') ? '\n' : '\n\n';
   input.value = `${cur}${sep}${quote}\n\n`;
   autosize();
+  noteDraft();
   input.focus();
   input.setSelectionRange(input.value.length, input.value.length);
 }
@@ -1607,12 +1633,14 @@ let renaming = false; // a title is being edited: don't rebuild the list under t
 // Working, waiting for an approval, finished (answers not read yet, or the one
 // shown that just finished), then the archived ones: done and read.
 const CATEGORIES = [
+  { key: 'drafts', label: 'Brouillons' },
   { key: 'busy', label: 'En cours' },
   { key: 'waiting', label: 'Action demandée' },
   { key: 'done', label: 'Terminé' },
   { key: 'archived', label: 'Archivées', foldable: true },
 ];
-const category = (c) => c.approvals ? 'waiting' : c.running ? 'busy' : c.unread || c.finished ? 'done' : 'archived';
+// (the conversation shown stays where it is: its text is a draft once the user leaves it)
+const category = (c) => c.draft && c.id !== currentConversation ? 'drafts' : c.approvals ? 'waiting' : c.running ? 'busy' : c.unread || c.finished ? 'done' : 'archived';
 let collapsedCategories = new Set();
 try { collapsedCategories = new Set(JSON.parse(localStorage.getItem('collapsedCategories') || '[]')); } catch {}
 const baseName = (p) => p.split(/[\\/]/).filter(Boolean).pop() || p;
@@ -1653,7 +1681,7 @@ function setProjectFilter(key, dir = 0) {
   projectFilter = key;
   try { localStorage.setItem('projectFilter', key); } catch {}
   // A new conversation not started yet follows the project listed.
-  if ($('empty') && key !== ALL && key !== activeProject()) newConversationIn(key === OFF_KEY ? null : key);
+  if ($('empty') && key !== ALL && key !== activeProject()) newConversationIn(key === OFF_KEY ? null : key, { keepText: true });
   refreshConversations({ slide: dir });
 }
 
@@ -1750,6 +1778,7 @@ function renderConvHead() {
   $('convHead').title = title;
   $('headRename').classList.toggle('hidden', !c);
 }
+const renameTip = () => `Renommer (${MAC ? '⌘R' : 'Ctrl+R'})`;
 /** Renames the conversation shown, in place at the top of the window. */
 function renameCurrent() {
   const c = lastConversations.find((x) => x.id === currentConversation);
@@ -1757,6 +1786,7 @@ function renameCurrent() {
 }
 $('convHead').querySelector('.head-title').ondblclick = renameCurrent;
 $('headRename').onclick = renameCurrent;
+$('headRename').dataset.tip = renameTip();
 window.api.onRenameConversation(renameCurrent); // (the application menu, ⌘R)
 
 async function refreshConversations({ slide = 0 } = {}) {
@@ -1818,8 +1848,14 @@ const newConversationHere = () => {
 };
 
 /** A new conversation in a project folder, or outside any project (dir null). */
-async function newConversationIn(dir) {
+async function newConversationIn(dir, { keepText = false } = {}) {
   rememberScroll(); // (the conversation shown goes on in the background)
+  // (only another project for the page of a new conversation: what is typed follows)
+  const text = keepText ? input.value : '';
+  if (keepText) {
+    setInput('');
+    await window.api.setDraft('');
+  } else await flushDraft();
   const before = activeDir();
   try {
     if (dir === null) settings = await window.api.newOffProject();
@@ -1838,6 +1874,8 @@ async function newConversationIn(dir) {
     refreshPromptBadge();
     refreshGauge();
   }
+  setInput(text);
+  if (text) noteDraft();
   input.focus();
 }
 
@@ -1846,7 +1884,7 @@ function conversationItem(c, current) {
   li.className = `conv-card ${category(c)}`;
   li.dataset.project = projectOf(c);
   li.classList.toggle('active', c.id === current);
-  li.innerHTML = '<div class="card-top"><span class="title"></span><span class="pill"></span><span class="card-actions"><button class="ren" title="Renommer">✎</button><button class="del" title="Supprimer">✕</button></span></div><div class="card-meta"><span class="state"></span><span class="project"></span><span class="when"></span></div>';
+  li.innerHTML = '<div class="card-top"><span class="title"></span><span class="pill"></span><span class="card-actions"><button class="ren">✎</button><button class="del" title="Supprimer">✕</button></span></div><div class="card-meta"><span class="state"></span><span class="project"></span><span class="when"></span></div>';
   li.querySelector('.title').textContent = c.title;
   li.querySelector('.title').title = c.title;
   // How many things wait for the user: approvals (orange), answers to read (blue).
@@ -1864,6 +1902,7 @@ function conversationItem(c, current) {
   project.title = c.offProject ? 'Conversation sans dossier de projet' : c.workspace || '';
   li.querySelector('.when').textContent = relativeTime(c.updatedAt);
   li.onclick = () => openConversation(c.id);
+  li.querySelector('.ren').dataset.tip = renameTip();
   li.querySelector('.ren').onclick = (e) => { e.stopPropagation(); startRename(li, c); };
   li.querySelector('.title').ondblclick = (e) => { e.stopPropagation(); startRename(li, c); };
   li.querySelector('.del').onclick = (e) => { e.stopPropagation(); deleteConversation(c, current); };
@@ -1896,6 +1935,7 @@ async function deleteConversation(c, current) {
     settings = await window.api.getSettings();
     renderSettings();
     clearTranscript();
+    setInput('');
     refreshTree();
   }
   refreshConversations();
@@ -1959,6 +1999,7 @@ function showSession(view) {
   }
   setRunning(Boolean(view.running));
   for (const req of view.approvals || []) onApproval(req);
+  setInput(view.draft || '');
   fitComposer(); // (its plan may be there or not: the position is that of the page at its final height)
   const pos = scrollPos.get(view.session);
   transcript.scrollTop = typeof pos === 'number' ? pos : transcript.scrollHeight;
@@ -1967,6 +2008,7 @@ function showSession(view) {
 async function openConversation(id) {
   if (id === currentConversation) return;
   rememberScroll(); // (the conversation shown goes on in the background)
+  await flushDraft();
   let view;
   try {
     view = await window.api.openConversation(id);
@@ -2343,5 +2385,8 @@ const session = await window.api.currentSession();
 settings = session.settings;
 if (session.events.length || session.partial) showSession(session);
 else if (activeProject() !== defaultProject()) await newConversationHere(); // (the same page as a new conversation)
-else clearTranscript();
+else {
+  clearTranscript();
+  setInput(session.draft || '');
+}
 input.focus();

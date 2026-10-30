@@ -85,3 +85,17 @@ test('each user message carries its date and time; the system prompt does not ch
   agent.now = () => new Date(2026, 9, 24, 8, 0);
   assert.equal(await agent.defaultSystemPrompt(), a);
 });
+
+test('a draft is listed, and a rename keeps the title from following it', async () => {
+  const store = new ConversationStore(await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-conv-')));
+  const a = store.create('/w', 'typed text');
+  a.draft = 'typed text';
+  a.titleFromDraft = true;
+  store.save(a);
+  assert.equal(store.listAll()[0].draft, true);
+  store.rename(a.id, 'mine');
+  assert.equal(store.load(a.id).titleFromDraft, undefined);
+  delete a.draft;
+  store.save(a);
+  assert.equal(store.listAll()[0].draft, false);
+});

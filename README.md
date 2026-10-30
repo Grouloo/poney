@@ -137,6 +137,8 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   numbered and nested lists, headings, links (opened in the browser), tables (GitHub style, with alignment), code;
   a single line break is kept. LaTeX formulas rendered by KaTeX (`$…$`, `\(…\)` inline; `$$…$$`, `\[…\]` as
   blocks); prices like "$5 and $10" stay text. Raw HTML in an answer is shown as text.
+- **Drafts**: text typed but not sent is kept with its conversation when you leave it or quit, even if nothing was sent yet; the conversation waits under "Brouillons", at the top of the sidebar.
+- **Light or dark theme**, or the system's, in the settings (Apparence).
 - **File browser** stacked with the conversations like a deck of two cards (the button at the top right of the card, its edge behind, or a two-finger swipe outside the card in front, brings it to the front; three fingers too on macOS), that updates when the agent
   writes, and reveals the modified file.
 - **Tool switches** in the input box, as icons (Web, Tor, Sous-agents, Terminal, sans confirmation; green when on,
