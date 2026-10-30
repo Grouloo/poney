@@ -1193,14 +1193,12 @@ let replaying = false;
 let currentConversation = null;
 
 $('sidebarBtn').onclick = () => document.body.classList.toggle('no-sidebar');
-for (const tab of document.querySelectorAll('.tabs button')) {
-  tab.onclick = () => {
-    for (const t of document.querySelectorAll('.tabs button')) {
-      t.classList.toggle('active', t === tab);
-      $(t.dataset.tab).classList.toggle('hidden', t !== tab);
-    }
-  };
-}
+// The files, in their own pane on the right (shown or not: remembered).
+try { if (localStorage.getItem('filesHidden') === '1') document.body.classList.add('no-files'); } catch {}
+$('filesBtn').onclick = () => {
+  const hidden = document.body.classList.toggle('no-files');
+  try { localStorage.setItem('filesHidden', hidden ? '1' : '0'); } catch {}
+};
 
 function relativeTime(ts) {
   const s = (Date.now() - ts) / 1000;

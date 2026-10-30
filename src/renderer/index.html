@@ -21,23 +21,13 @@
     <button id="stepsBtn" class="ghost" title="Étapes que l’agent fait avant et après avoir répondu, dans cette conversation">Étapes<span id="stepsBadge" class="badge hidden">actives</span></button>
     <button id="promptBtn" class="ghost" title="Voir et modifier le prompt système de cette conversation">Prompt système<span id="promptBadge" class="badge hidden">modifié</span></button>
     <button id="settingsBtn" class="ghost icon" title="Réglages">⚙︎</button>
+    <button id="filesBtn" class="ghost icon" title="Afficher / masquer les fichiers">🗂︎</button>
   </header>
 
   <div class="layout">
   <aside id="sidebar">
-    <div class="tabs">
-      <button data-tab="convPane" class="active">Conversations</button>
-      <button data-tab="filesPane">Fichiers</button>
-    </div>
     <div id="convPane" class="pane">
       <ul id="convList" class="groups"></ul>
-    </div>
-    <div id="filesPane" class="pane hidden">
-      <div class="files-head">
-        <span id="filesRoot" class="muted"></span>
-        <button id="refreshFiles" class="ghost icon" title="Rafraîchir">↻</button>
-      </div>
-      <ul id="fileTree" class="tree"></ul>
     </div>
   </aside>
 
@@ -127,6 +117,16 @@
     </div>
     <div id="livePanelBody" class="viewer-body live-panel-body"></div>
   </section>
+  <aside id="filesBar" class="side-pane">
+    <div class="files-head">
+      <span class="files-title">Fichiers</span>
+      <span id="filesRoot" class="muted"></span>
+      <button id="refreshFiles" class="ghost icon" title="Rafraîchir">↻</button>
+    </div>
+    <div class="pane">
+      <ul id="fileTree" class="tree"></ul>
+    </div>
+  </aside>
   </div>
 
   <dialog id="stepsDialog" class="prompt-dialog steps-dialog">
