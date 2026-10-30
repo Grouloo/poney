@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('api', {
   revealWorkspace: () => ipcRenderer.invoke('workspace:reveal'),
   setProjectIcon: (key, icon) => ipcRenderer.invoke('project:setIcon', key, icon),
   pickProjectIcon: (key) => ipcRenderer.invoke('project:pickIcon', key),
+  deleteProject: (dir) => ipcRenderer.invoke('project:delete', dir),
   listModels: (cfg) => ipcRenderer.invoke('models:list', cfg),
   send: (text, turnId) => ipcRenderer.invoke('agent:send', text, turnId),
   rewind: (turnId) => ipcRenderer.invoke('agent:rewind', turnId),
@@ -25,6 +26,7 @@ contextBridge.exposeInMainWorld('api', {
   openConversation: (id) => ipcRenderer.invoke('conversations:open', id),
   renameConversation: (id, title) => ipcRenderer.invoke('conversations:rename', id, title),
   deleteConversation: (id) => ipcRenderer.invoke('conversations:delete', id),
+  markConversationsRead: (ids) => ipcRenderer.invoke('conversations:markRead', ids),
   onConversationsChanged: (fn) => ipcRenderer.on('conversations:changed', (_, id) => fn(id)),
   onSessionsChanged: (fn) => ipcRenderer.on('sessions:changed', () => fn()),
 

@@ -114,8 +114,12 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   unread count is saved with the conversation.
 - **Projects**: a picker at the top of the sidebar lists one project's conversations, all of them ("Tous", the
   default) or those outside projects; a two-finger horizontal swipe goes to the next or previous project, and dots
-  at the bottom show where you are. A project can have an emoji or a small picture (☺ in the picker's menu): it
+  at the bottom show where you are. A project can have an emoji or a small picture (its settings): it
   replaces the folder icon on its cards and its dot. "Ajouter un projet…" in the picker's menu.
+- **Right click on the sidebar** (or on a project's dot, or a conversation's card): for that project, a new
+  conversation (⌘N, or ⌘T), mark its conversations as read (⇧⌘U), its settings (⇧⌘P: emoji or picture,
+  delete the project from the app: its conversations go, its folder and files stay), add a project (⇧⌘O).
+  The shortcuts act on the project listed in the sidebar (Ctrl instead of ⌘ outside macOS).
 - **New conversation** ("＋ Nouvelle conversation", ⌘N or ⌘T): the same page as at launch, with the input in the
   upper part of the window until the conversation starts, and a picker for the project it will work in. By
   default: the project listed in the sidebar, else that of the last conversation looked at, else outside projects.

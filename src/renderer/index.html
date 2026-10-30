@@ -131,6 +131,32 @@
   </aside>
   </div>
 
+  <dialog id="projectDialog" class="prompt-dialog project-dialog">
+    <form method="dialog" class="prompt-form">
+      <div class="prompt-head">
+        <h2 id="projectDialogTitle"></h2>
+        <div class="spacer"></div>
+        <button type="button" id="projectDialogClose" class="ghost icon" title="Fermer">✕</button>
+      </div>
+      <div class="steps-body">
+        <div id="projectDialogPath" class="muted project-path"></div>
+        <div class="project-field">
+          <span class="project-field-label">Icône</span>
+          <div class="project-icon-row">
+            <span id="projectIconPreview" class="project-icon-preview"></span>
+            <input id="projectEmoji" maxlength="8" placeholder="Un émoji…" autocomplete="off">
+            <button type="button" id="projectImage" class="ghost">Image…</button>
+            <button type="button" id="projectIconClear" class="ghost">Retirer</button>
+          </div>
+        </div>
+        <div id="projectDanger" class="project-danger">
+          <div><b>Supprimer le projet</b><div class="muted">Ses conversations sont supprimées de Poney. Le dossier et ses fichiers ne sont pas touchés.</div></div>
+          <button type="button" id="projectDelete" class="danger-btn">Supprimer…</button>
+        </div>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="stepsDialog" class="prompt-dialog steps-dialog">
     <form method="dialog" class="prompt-form">
       <div class="prompt-head">

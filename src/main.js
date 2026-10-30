@@ -454,6 +454,64 @@ ipcMain.handle('conversations:delete', (_, id) => {
   send('sessions:changed');
 });
 
+// Conversations marked as read: no answer left to read, so they go to the archived ones.
+ipcMain.handle('conversations:markRead', (_, ids) => {
+  for (const id of ids) {
+    const s = sessions.get(id);
+    if (s) {
+      s.finished = false;
+      if (s.unread && s.conv) {
+        s.conv.unread = 0;
+        store.save(s.conv, { touch: false });
+      }
+      s.unread = 0;
+      continue;
+    }
+    try {
+      const conv = store.load(id);
+      if (conv.unread) {
+        conv.unread = 0;
+        store.save(conv, { touch: false });
+      }
+    } catch {}
+  }
+  send('sessions:changed');
+});
+
+// A project removed from the app: its conversations are deleted and it leaves the
+// lists. Its folder and files on disk are not touched.
+ipcMain.handle('project:delete', (_, dir) => {
+  const ids = store.listAll().filter((c) => !c.offProject && c.workspace === dir).map((c) => c.id);
+  if (ids.some((id) => sessions.get(id)?.running)) throw new Error('Une conversation de ce projet est en cours : arrêtez-la d’abord.');
+  let shown = false;
+  for (const s of [...sessions.values()]) {
+    if (s.offProject || s.cwd !== dir) continue;
+    if (s.running) throw new Error('Une conversation de ce projet est en cours : arrêtez-la d’abord.');
+    s.resolveApprovals(false);
+    sessions.delete(s.key);
+    if (s === active) shown = true;
+  }
+  for (const id of ids) store.delete(id);
+  settings.recent = (settings.recent || []).filter((d) => d !== dir);
+  settings.projectIcons = { ...settings.projectIcons };
+  delete settings.projectIcons[dir];
+  if (settings.workspace === dir) settings.workspace = settings.recent[0] || '';
+  saveSettings();
+  if (shown) {
+    // The window was in that project: a new conversation elsewhere (outside projects if none is left).
+    active = null;
+    if (settings.workspace) activate(new Session({ cwd: settings.workspace }));
+    else {
+      const id = ConversationStore.newId();
+      const cwd = path.join(offProjectRoot(), id);
+      fs.mkdirSync(cwd, { recursive: true });
+      activate(new Session({ id, cwd, offProject: true }));
+    }
+  }
+  send('sessions:changed');
+  return publicSettings();
+});
+
 // The conversation's memory, seen and edited by the user.
 ipcMain.handle('memory:get', () => (activeCwd() ? current().getAgent().memory : []));
 ipcMain.handle('memory:set', (_, notes) => {
