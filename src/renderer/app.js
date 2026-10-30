@@ -1314,8 +1314,10 @@ function projectKeys(all = lastConversations) {
 }
 const projectLabel = (key) => key === ALL ? 'Tous' : key === OFF_KEY ? 'Hors projet' : baseName(key);
 const projectOf = (c) => c.offProject ? OFF_KEY : c.workspace;
-// 'Tous' among the dots: four small squares, every project at once.
-const ALL_ICON = '<svg class="proj-icon all-icon" viewBox="0 0 12 12" aria-hidden="true"><rect x="1" y="1" width="4" height="4" rx="1.2"/><rect x="7" y="1" width="4" height="4" rx="1.2"/><rect x="1" y="7" width="4" height="4" rx="1.2"/><rect x="7" y="7" width="4" height="4" rx="1.2"/></svg>';
+// Among the dots, 'Tous': four small squares, every project at once…
+const ALL_ICON = '<svg class="proj-icon dot-icon" viewBox="0 0 12 12" aria-hidden="true"><rect x="1" y="1" width="4" height="4" rx="1.2"/><rect x="7" y="1" width="4" height="4" rx="1.2"/><rect x="1" y="7" width="4" height="4" rx="1.2"/><rect x="7" y="7" width="4" height="4" rx="1.2"/></svg>';
+// …and 'Hors projet' (unless it has an icon of its own): a speech bubble.
+const OFF_ICON = '<svg class="proj-icon dot-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 1.5h7a1.5 1.5 0 0 1 1.5 1.5v4a1.5 1.5 0 0 1-1.5 1.5H5.5L3 10.5V8.5h-.5A1.5 1.5 0 0 1 1 7V3a1.5 1.5 0 0 1 1.5-1.5z"/></svg>';
 
 /** A project's icon (emoji or picture) as HTML, or the fallback given. */
 function projectIcon(key, fallback = '') {
@@ -1351,7 +1353,7 @@ function renderProjectBar(keys) {
     b.type = 'button';
     b.className = `pdot${key === projectFilter ? ' active' : ''}`;
     b.title = projectLabel(key);
-    b.innerHTML = key === ALL ? ALL_ICON : projectIcon(key);
+    b.innerHTML = key === ALL ? ALL_ICON : projectIcon(key, key === OFF_KEY ? OFF_ICON : '');
     if (b.innerHTML) b.classList.add('has-icon');
     b.onclick = () => setProjectFilter(key, Math.sign(keys.indexOf(key) - keys.indexOf(projectFilter)));
     dots.appendChild(b);
