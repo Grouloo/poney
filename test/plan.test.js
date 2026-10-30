@@ -240,20 +240,49 @@ test('sub-agents see the conversation before the request (its messages and answe
   assert.doesNotMatch(task.split('[end of the conversation')[0], /<search>|<result/); // its actions are left out
 });
 
-test('the conversation digest keeps the latest messages and says where to read the rest', async () => {
+test('the conversation digest keeps the latest messages and gives all of them, compacted ones included, in parts', async () => {
   const { conversationDigest } = await import('../src/agent/plan.js');
-  const messages = [];
-  for (let i = 1; i <= 6; i++) {
-    messages.push({ role: 'user', content: `[Fri 2026-10-30 10:0${i}] question ${i} ${'q'.repeat(300)}` });
-    messages.push({ role: 'assistant', content: `<read path="f${i}" />` }, { role: 'user', content: `<result tool="read">${'r'.repeat(500)}</result>` });
-    messages.push({ role: 'assistant', content: `<reasoning>hmm</reasoning>answer ${i}` });
-  }
+  const turn = (i) => [
+    { role: 'user', content: `[Fri 2026-10-30 10:0${i}] question ${i} ${'q'.repeat(300)}` },
+    { role: 'assistant', content: `<read path="f${i}" />` }, { role: 'user', content: `<result tool="read">${'r'.repeat(500)}</result>` },
+    { role: 'assistant', content: `<reasoning>hmm</reasoning>answer ${i}` },
+  ];
+  const archived = [1, 2, 3].flatMap(turn);
+  const messages = [{ role: 'user', content: '[CONTEXT SUMMARY]\nthe summary' }, ...[4, 5, 6].flatMap(turn)];
   const outputs = new Map();
-  const d = conversationDigest(messages, { maxChars: 1200, outputs });
-  assert.match(d, /^\[… \d earlier message\(s\) left out: <read path="@conversation" \/> shows the whole conversation\]/);
-  assert.match(d, /question 6[\s\S]*MAIN AGENT:\nanswer 6$/);
+  const d = conversationDigest(messages, { maxChars: 600, outputs, archived, partChars: 500 });
+  assert.match(d, /^\[… \d earlier message\(s\) left out here\]/);
+  assert.match(d, /question 6[\s\S]*answer 6\n\n\[This is only part of the conversation\. All of it, in \d+ part\(s\): <read path="@conversation\/1" \/> to <read path="@conversation\/\d+" \/>/);
   assert.doesNotMatch(d, /question 1 |hmm|<read path="f|<result/);
-  assert.match(outputs.get('@conversation'), /^USER \[Fri 2026-10-30 10:01\] question 1[\s\S]*answer 6$/);
+  const whole = [...outputs.values()].join('\n');
+  for (let i = 1; i <= 6; i++) assert.match(whole, new RegExp(`question ${i} [\\s\\S]*answer ${i}`));
+  assert.doesNotMatch(whole, /the summary|<read path="f|<result/); // (the summary stands for nothing: the messages are there)
+  assert.ok([...outputs.values()].every((t) => t.length <= 500));
+  // Nothing kept from the compacted part: the summary is all there is.
+  assert.match(conversationDigest(messages, { outputs: new Map() }), /the summary/);
+});
+
+test('a sub-agent reads messages that a compaction took out of the context', async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-plan-'));
+  let main = 0;
+  const f = await fake((r) => {
+    if (isSub(r)) return `Did ${taskOf(r)}.`;
+    main++;
+    return main === 1 ? '<plan>\n- Write notes.md\n</plan>' : 'Done.';
+  });
+  const agent = new Agent({ cwd, config: { baseUrl: f.url, model: 'm', shellEnabled: false } });
+  agent.archives = [[{ role: 'user', content: '[Fri 2026-10-30 09:00] the name is ZEBRA-7' }, { role: 'assistant', content: 'Noted.' }]];
+  agent.messages = [{ role: 'user', content: '[CONTEXT SUMMARY]\nnothing precise' }, { role: 'assistant', content: 'Ok.' }];
+  const saw = [];
+  const run = agent.runSubAgents.bind(agent);
+  agent.runSubAgents = (agents, ...rest) => { saw.push(...agents); return run(agents, ...rest); };
+  try {
+    await agent.send('take notes of the conversation');
+  } finally {
+    f.server.close();
+  }
+  assert.match(saw[0].outputs.get('@conversation/1'), /ZEBRA-7/);
+  assert.match(saw[0].args.task, /<read path="@conversation\/1" \/>/);
 });
 
 test('the digest of the turn keeps its latest steps when too long', async () => {

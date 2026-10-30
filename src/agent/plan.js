@@ -186,19 +186,13 @@ export function turnDigest(messages, { maxChars = 6000, task = '', outputs = nul
   return out.join('\n\n');
 }
 
-/** The name under which a sub-agent reads the conversation before the request in full (see conversationDigest). */
-export const CONVERSATION_PATH = '@conversation';
+/** The name under which a sub-agent reads part n of the conversation before the request (see conversationDigest). */
+export const conversationPath = (n) => `@conversation/${n}`;
 const STAMP_RE = /^\[\w{3} \d{4}-\d\d-\d\d \d\d:\d\d\] /; // a user's message (see messageStamp)
+const PART_LINES = 240; // (a <read> shows 250 lines)
 
-/**
- * The conversation before the request, for a sub-agent: the user's messages and
- * the main agent's answers (not its actions and their results), and the summary
- * of the part compacted. Without it, a task like "take notes of the conversation"
- * goes to a sub-agent that knows nothing of it. The latest exchanges first when
- * everything does not fit; the whole text is put in `outputs` under
- * CONVERSATION_PATH, which the sub-agent reads with <read> like a file.
- */
-export function conversationDigest(messages, { maxChars = 6000, outputs = null } = {}) {
+/** The user's messages and the main agent's answers of a history (not its actions and their results). */
+function exchanges(messages) {
   const said = [];
   messages.forEach((m, i) => {
     const text = stripReasoning(String(m.content ?? '')).trim();
@@ -208,21 +202,66 @@ export function conversationDigest(messages, { maxChars = 6000, outputs = null }
     // its answer: the last message before the user's next one (the others are its actions)
     else if (m.role === 'assistant' && (i === messages.length - 1 || STAMP_RE.test(String(messages[i + 1]?.content ?? '').trim()))) said.push(`MAIN AGENT:\n${text}`);
   });
-  if (!said.length) return '';
-  outputs?.set(CONVERSATION_PATH, said.join('\n\n'));
-  const read = outputs ? `: <read path="${CONVERSATION_PATH}" /> shows the whole conversation` : '';
+  return said;
+}
+
+/** A text in parts of at most `maxChars` characters and PART_LINES lines (each part fits in one <read>). */
+function splitParts(text, maxChars) {
+  const parts = [];
+  let lines = [];
+  let size = 0;
+  const flush = () => {
+    if (lines.length) parts.push(lines.join('\n'));
+    lines = [];
+    size = 0;
+  };
+  for (const whole of text.split('\n')) {
+    for (let at = 0; at === 0 || at < whole.length; at += maxChars) { // (a very long line is cut)
+      const line = whole.slice(at, at + maxChars);
+      if (size + line.length + 1 > maxChars || lines.length >= PART_LINES) flush();
+      lines.push(line);
+      size += line.length + 1;
+    }
+  }
+  flush();
+  return parts;
+}
+
+/**
+ * The conversation before the request, for a sub-agent: the user's messages and
+ * the main agent's answers. Without it, a task like "take notes of the
+ * conversation" goes to a sub-agent that knows nothing of it.
+ *
+ * The task message holds what fits of the latest ones. All the rest, the part
+ * compacted included (`archived`, see outOfContext), is put in `outputs` in parts
+ * that each fit in one <read>: such a task is mostly asked when the context is
+ * nearly full, so most of what it is about is what does not fit.
+ */
+export function conversationDigest(messages, { maxChars = 6000, outputs = null, archived = [], partChars = 12000 } = {}) {
+  const said = exchanges(messages);
+  if (!said.length && !archived.length) return '';
+  // (the summary only stands for what is lost: with the messages it summarizes, it says nothing more)
+  const whole = archived.length ? [...exchanges(archived), ...said.filter((t) => !t.startsWith('EARLIER (summary)'))] : said;
+  const parts = splitParts(whole.join('\n\n'), partChars);
+  parts.forEach((t, i) => outputs?.set(conversationPath(i + 1), t));
   const out = [];
   let size = 0;
+  let left = 0;
   for (let k = said.length - 1; k >= 0; k--) {
     const text = cutStep(said[k], 3000, null);
     if (out.length && size + text.length + 2 > maxChars) {
-      out.unshift(`[… ${k + 1} earlier message(s) left out${read}]`);
+      left = k + 1;
       break;
     }
     out.unshift(text);
     size += text.length + 2;
   }
-  if (outputs && said.some((t) => t.length > 3000)) out.push(`[some messages were cut${read}]`);
+  if (left) out.unshift(`[… ${left} earlier message(s) left out here]`);
+  const partial = left || archived.length || said.some((t) => t.length > 3000);
+  if (outputs && partial) {
+    const range = parts.length > 1 ? `<read path="${conversationPath(1)}" /> to <read path="${conversationPath(parts.length)}" />` : `<read path="${conversationPath(1)}" />`;
+    out.push(`[This is only part of the conversation. All of it, in ${parts.length} part(s): ${range}. If your task is about the conversation, read every part, one <read> per message, and write down what you need as you go (in the file of your task if it has one): your context is limited, and what you read first may leave it.]`);
+  }
   return out.join('\n\n');
 }
 

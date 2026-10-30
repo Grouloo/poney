@@ -6,7 +6,7 @@ import { streamChat, complete, serverContextLength } from './llm.js';
 import { liveAction, partialEditPairs, TOOLS, buildSystemPrompt, parseActions, splitThinking, formatResult, isToolEnabled, withReasoning, findRepetition, normalizeToolCalls, stripReasoning, legacyReasoningToNotes, stripChannelMarkers, toolSchemas, answerInReasoning } from './protocol.js';
 import { executeAction, runShell, truncateMiddle, checkOldBlock } from './tools.js';
 import { remember, forget, memoryBlock, standingInstructions, instructionNote, replacedAutoNote } from './memory.js';
-import { recall, autoRecall, recalledBlock, keywordsOf } from './history.js';
+import { recall, autoRecall, recalledBlock, keywordsOf, outOfContext } from './history.js';
 import { linksToRead, readLinks } from './autofetch.js';
 import { TRIAGE_SCHEMA, TRIAGE_ATTEMPTS, TRIAGE_RETRY, TRIAGE_RETRY_CUT, fallbackTriage, ROUTE_SOURCES, SOURCE_TOOLS, MAX_REFUSALS, triageRequest, triageInstruction, triageUpdateInstruction, needsUpdate, parseTriage, triageBlock, triageReminder, triageRefusal } from './triage.js';
 import { parsePlan, taskParts, mergePlan, carryPlan, nextGroup, setStatus, formatPlan, subAgentTask, turnDigest, conversationDigest, stoppedPlanText } from './plan.js';
@@ -657,10 +657,11 @@ export class Agent extends EventEmitter {
       // (compacted during the turn: the summary is its first message)
       const start = this.turnStartIndex ?? 0;
       const earlier = this.messages.slice(0, start || (this.messages[0]?.content?.startsWith(SUMMARY_MARKER) ? 1 : 0));
+      const archived = outOfContext(this.archives, this.messages).map((m) => ({ role: m.role, content: m.text }));
       const agents = group.map((t) => {
         const outputs = new Map();
         const digest = turnDigest(turn, { maxChars, task: `${t.text}\n${this.currentTask ?? ''}`, outputs });
-        const conversation = conversationDigest(earlier, { maxChars: Math.floor(maxChars / 2), outputs });
+        const conversation = conversationDigest(earlier, { maxChars: Math.floor(maxChars / 2), outputs, archived, partChars: Math.floor(this.maxResultChars * 0.9) });
         return { tool: 'agent', args: { title: taskParts(t.text).head.slice(0, 60), task: subAgentTask(plan, t, this.currentTask, digest, conversation) }, outputs };
       });
       let results;
