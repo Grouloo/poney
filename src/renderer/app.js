@@ -1748,7 +1748,16 @@ function renderConvHead() {
   const title = c?.title || 'Nouvelle conversation';
   $('convHead').querySelector('.head-title').textContent = title;
   $('convHead').title = title;
+  $('headRename').classList.toggle('hidden', !c);
 }
+/** Renames the conversation shown, in place at the top of the window. */
+function renameCurrent() {
+  const c = lastConversations.find((x) => x.id === currentConversation);
+  if (c && !document.querySelector('dialog[open]')) startRename($('convHead'), c, $('convHead').querySelector('.head-title'));
+}
+$('convHead').querySelector('.head-title').ondblclick = renameCurrent;
+$('headRename').onclick = renameCurrent;
+window.api.onRenameConversation(renameCurrent); // (the application menu, ⌘R)
 
 async function refreshConversations({ slide = 0 } = {}) {
   if (renaming || !settings) return;
@@ -1837,7 +1846,7 @@ function conversationItem(c, current) {
   li.className = `conv-card ${category(c)}`;
   li.dataset.project = projectOf(c);
   li.classList.toggle('active', c.id === current);
-  li.innerHTML = '<div class="card-top"><span class="title"></span><span class="pill"></span></div><div class="card-meta"><span class="state"></span><span class="project"></span><span class="when"></span><span class="card-actions"><button class="ren" title="Renommer">✎</button><button class="del" title="Supprimer">✕</button></span></div>';
+  li.innerHTML = '<div class="card-top"><span class="title"></span><span class="pill"></span><span class="card-actions"><button class="ren" title="Renommer">✎</button><button class="del" title="Supprimer">✕</button></span></div><div class="card-meta"><span class="state"></span><span class="project"></span><span class="when"></span></div>';
   li.querySelector('.title').textContent = c.title;
   li.querySelector('.title').title = c.title;
   // How many things wait for the user: approvals (orange), answers to read (blue).
@@ -1892,10 +1901,9 @@ async function deleteConversation(c, current) {
   refreshConversations();
 }
 
-function startRename(li, c) {
+function startRename(li, c, span = li.querySelector('.title')) {
   if (renaming) return;
   renaming = true;
-  const span = li.querySelector('.title');
   const inp = document.createElement('input');
   inp.className = 'rename';
   inp.value = c.title;
@@ -1917,6 +1925,8 @@ function startRename(li, c) {
       }
     }
     renaming = false;
+    inp.replaceWith(span);
+    li.classList.remove('editing');
     refreshConversations();
   };
   inp.onclick = (e) => e.stopPropagation();

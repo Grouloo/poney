@@ -660,20 +660,21 @@ function createWindow() {
   });
 }
 
-/** Electron's default menus, with the settings in the application menu. */
-function macMenu() {
-  const openSettings = () => {
-    if (win && !win.isDestroyed()) return send('ui:openSettings');
+/** Electron's default menus, plus the settings and the renaming; ⌘R is the renaming, not a reload. */
+function appMenu() {
+  const toWindow = (channel) => () => {
+    if (win && !win.isDestroyed()) return send(channel);
     createWindow();
-    win.webContents.once('did-finish-load', () => send('ui:openSettings'));
+    win.webContents.once('did-finish-load', () => send(channel));
   };
+  const mac = process.platform === 'darwin';
   Menu.setApplicationMenu(Menu.buildFromTemplate([
-    {
+    ...(mac ? [{
       label: app.name,
       submenu: [
         { role: 'about' },
         { type: 'separator' },
-        { label: 'Réglages…', accelerator: 'Cmd+,', click: openSettings },
+        { label: 'Réglages…', accelerator: 'Cmd+,', click: toWindow('ui:openSettings') },
         { type: 'separator' },
         { role: 'services' },
         { type: 'separator' },
@@ -683,20 +684,31 @@ function macMenu() {
         { type: 'separator' },
         { role: 'quit' },
       ],
-    },
+    }] : []),
     { role: 'fileMenu' },
     { role: 'editMenu' },
-    { role: 'viewMenu' },
+    { label: 'Conversation', submenu: [{ label: 'Renommer', accelerator: 'CmdOrCtrl+R', click: toWindow('ui:renameConversation') }] },
+    {
+      label: 'View',
+      submenu: [
+        { role: 'forceReload' },
+        { role: 'toggleDevTools' },
+        { type: 'separator' },
+        { role: 'resetZoom' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' },
+      ],
+    },
     { role: 'windowMenu' },
     { role: 'help' },
   ]));
 }
 
 app.whenReady().then(() => {
-  if (process.platform === 'darwin') {
-    app.dock?.setIcon(path.join(here, '..', 'assets', 'icon.png'));
-    macMenu();
-  }
+  if (process.platform === 'darwin') app.dock?.setIcon(path.join(here, '..', 'assets', 'icon.png'));
+  appMenu();
   loadSettings();
   store = new ConversationStore(path.join(app.getPath('userData'), 'conversations'));
   pruneOffProject();
