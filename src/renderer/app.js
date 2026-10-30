@@ -12,6 +12,7 @@ import DOMPurify from '../../node_modules/dompurify/dist/purify.es.mjs';
 const $ = (id) => document.getElementById(id);
 const transcript = $('transcript');
 const input = $('input');
+const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const sendBtn = $('sendBtn');
 const modelSelect = $('modelSelect');
 const form = $('settingsForm');
@@ -217,7 +218,19 @@ function navDialog(dialog) {
   show(dialog.querySelector('.dialog-nav button').dataset.page);
   return show;
 }
+/** A click beside a dialog closes it; with changes not saved, it only nudges it. */
+function closeOnOutside(dialog, unsaved = () => false) {
+  let pressed = false; // (a selection dragged out of the dialog is not a click beside it)
+  dialog.addEventListener('mousedown', (e) => { pressed = e.target === dialog; });
+  dialog.addEventListener('click', (e) => {
+    if (e.target !== dialog || !pressed || ctxMenu.matches(':popover-open')) return;
+    if (!unsaved()) return dialog.close();
+    dialog.animate([{ transform: 'none' }, { transform: 'scale(1.015)' }, { transform: 'none' }], { duration: 180, easing: 'ease-out' });
+  });
+}
 const settingsDialog = $('settingsDialog');
+closeOnOutside(settingsDialog);
+closeOnOutside($('projectDialog'));
 const showSettingsPage = navDialog(settingsDialog);
 function openSettings(page) {
   if (page) showSettingsPage(page);
@@ -392,7 +405,7 @@ function renderWelcomeProject() {
   const picker = $('welcomePicker');
   if (!picker || !settings) return;
   const key = activeProject();
-  picker.querySelector('.picker-icon').innerHTML = key ? projectIcon(key, key === OFF_KEY ? '💬' : '📁') : '';
+  picker.querySelector('.picker-icon').innerHTML = key ? projectGlyph(key) : '';
   picker.querySelector('.picker-name').textContent = key ? projectLabel(key) : 'Choisir un projet…';
   picker.title = key && key !== OFF_KEY ? key : '';
   document.querySelector('#empty .welcome-hint').textContent = key === OFF_KEY
@@ -413,7 +426,7 @@ function openWelcomeMenu() {
     menu.appendChild(r);
   };
   for (const key of projectKeys().filter((k) => k !== ALL)) {
-    row(projectIcon(key, key === OFF_KEY ? '💬' : '📁'), projectLabel(key), key === OFF_KEY ? '' : key,
+    row(projectGlyph(key), projectLabel(key), key === OFF_KEY ? '' : key,
       () => key !== activeProject() && newConversationIn(key === OFF_KEY ? null : key, { keepText: true }), key === activeProject());
   }
   row('＋', 'Ajouter un projet…', 'Choisir un dossier', addProject);
@@ -606,7 +619,13 @@ async function submit() {
 async function sendMessage(text) {
   const turnId = crypto.randomUUID();
   rememberProject();
+  const startsHere = document.querySelector('.chat').classList.contains('fresh');
+  const top = composer.getBoundingClientRect().top;
   addUserMessage(text, turnId);
+  if (startsHere) { // (from the middle of the page to its place at the bottom)
+    const from = `translateY(${top - composer.getBoundingClientRect().top}px)`;
+    if (!calm) composer.animate([{ transform: from }, { transform: 'none' }], { duration: 420, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' });
+  }
   setRunning(true);
   try {
     await window.api.send(text, turnId);
@@ -1392,7 +1411,7 @@ $('sidebar').addEventListener('contextmenu', (e) => {
   closeProjectMenu();
   const key = e.target.closest('[data-project]')?.dataset.project || projectFilter;
   const n = toRead(key).length;
-  showContextMenu(e.clientX, e.clientY, key === ALL ? 'Tous les projets' : `${projectIcon(key, key === OFF_KEY ? '💬' : '📁')} ${esc(projectLabel(key))}`, [
+  showContextMenu(e.clientX, e.clientY, key === ALL ? 'Tous les projets' : `${projectGlyph(key)} ${esc(projectLabel(key))}`, [
     { label: 'Nouvelle conversation', action: 'newConversation', run: () => projectActions.newConversation(key) },
     { label: n ? `Marquer comme lues (${n})` : 'Marquer comme lues', action: 'markRead', disabled: !n, run: () => projectActions.markRead(key) },
     '-',
@@ -1455,7 +1474,7 @@ function openProjectSettings(key) {
 }
 function renderProjectSettings() {
   const key = settingsProject;
-  $('projectIconPreview').innerHTML = projectIcon(key, key === OFF_KEY ? OFF_ICON : '📁');
+  $('projectIconPreview').innerHTML = projectGlyph(key);
   renderIconPicker();
 }
 async function applyProjectIcon(call) {
@@ -1667,6 +1686,12 @@ const ALL_ICON = '<svg class="proj-icon dot-icon" viewBox="0 0 12 12" aria-hidde
 // …and 'Hors projet' (unless it has an icon of its own): a speech bubble.
 const OFF_ICON = '<svg class="proj-icon dot-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 1.5h7a1.5 1.5 0 0 1 1.5 1.5v4a1.5 1.5 0 0 1-1.5 1.5H5.5L3 10.5V8.5h-.5A1.5 1.5 0 0 1 1 7V3a1.5 1.5 0 0 1 1.5-1.5z"/></svg>';
 
+// Without an icon of its own: a folder for a project, a speech bubble outside any project.
+const svgIcon = (d) => `<svg class="proj-icon svg-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="${d}"/></svg>`;
+const FOLDER_GLYPH = svgIcon('M2 4.5A1.5 1.5 0 0 1 3.5 3h2.6l1.5 1.7h4.9A1.5 1.5 0 0 1 14 6.2v5.3a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5z');
+const BUBBLE_GLYPH = svgIcon('M3.5 2.8h9A1.5 1.5 0 0 1 14 4.3v5.4a1.5 1.5 0 0 1-1.5 1.5H7l-3 2.3v-2.3h-.5A1.5 1.5 0 0 1 2 9.7V4.3a1.5 1.5 0 0 1 1.5-1.5z');
+const projectGlyph = (key) => projectIcon(key, key === OFF_KEY ? BUBBLE_GLYPH : FOLDER_GLYPH);
+
 /** A project's icon (emoji or picture) as HTML, or the fallback given. */
 function projectIcon(key, fallback = '') {
   const icon = settings.projectIcons?.[key];
@@ -1716,7 +1741,7 @@ function openProjectMenu() {
   for (const key of projectKeys()) {
     const row = document.createElement('div');
     row.className = `pm-row${key === projectFilter ? ' selected' : ''}`;
-    row.innerHTML = `<span class="pm-icon">${key === ALL ? '' : projectIcon(key, key === OFF_KEY ? '💬' : '📁')}</span><span class="pm-name"></span>${key === ALL ? '' : '<button class="pm-edit" type="button" title="Paramètres du projet (icône, suppression)">⋯</button>'}`;
+    row.innerHTML = `<span class="pm-icon">${key === ALL ? '' : projectGlyph(key)}</span><span class="pm-name"></span>${key === ALL ? '' : '<button class="pm-edit" type="button" title="Paramètres du projet (icône, suppression)">⋯</button>'}`;
     row.querySelector('.pm-name').textContent = projectLabel(key);
     row.title = key === ALL || key === OFF_KEY ? '' : key;
     row.onclick = () => { closeProjectMenu(); setProjectFilter(key); };
@@ -1772,7 +1797,7 @@ function renderConvHead() {
   const dir = c ? c.workspace : activeDir();
   const key = off ? OFF_KEY : dir;
   const project = $('convHead').querySelector('.head-project');
-  project.innerHTML = off || dir ? `${projectIcon(key, off ? '💬' : '📁')} ${esc(off ? 'Hors projet' : baseName(dir))}` : '';
+  project.innerHTML = off || dir ? `${projectGlyph(key)} ${esc(off ? 'Hors projet' : baseName(dir))}` : '';
   const title = c?.title || 'Nouvelle conversation';
   $('convHead').querySelector('.head-title').textContent = title;
   $('convHead').title = title;
@@ -1800,6 +1825,7 @@ async function refreshConversations({ slide = 0 } = {}) {
   renderProjectBar(keys);
   const all = projectFilter === ALL ? every : every.filter((c) => projectOf(c) === projectFilter);
   const list = $('convList');
+  const before = slide ? null : sidebarPlaces();
   list.innerHTML = '';
   if (slide) {
     list.classList.remove('slide-next', 'slide-prev');
@@ -1820,6 +1846,7 @@ async function refreshConversations({ slide = 0 } = {}) {
     const li = document.createElement('li');
     li.className = `group ${cat.key}${collapsed ? ' collapsed' : ''}${cat.foldable ? ' foldable' : ''}`;
     li.innerHTML = '<div class="group-head"><span class="name"></span><span class="count"></span><span class="chev">▾</span></div><ul class="list"></ul>';
+    li.querySelector('.group-head').dataset.place = `category ${cat.key}`;
     li.querySelector('.name').textContent = cat.label;
     li.querySelector('.count').textContent = String(items.length);
     if (cat.foldable) {
@@ -1838,6 +1865,42 @@ async function refreshConversations({ slide = 0 } = {}) {
     none.className = 'empty-note';
     none.textContent = projectFilter === ALL ? 'Aucune conversation.' : 'Aucune conversation dans ce projet.';
     list.appendChild(none);
+  }
+  if (before) moveCards(before);
+}
+
+/** Where the cards and the category titles are, to animate what a new list changes. */
+function sidebarPlaces() {
+  if (calm || !$('sidebar').classList.contains('front') || document.body.classList.contains('no-sidebar')) return null;
+  const places = new Map();
+  for (const el of $('convList').querySelectorAll('.conv-card, .group-head')) {
+    const r = el.getBoundingClientRect();
+    if (r.height) places.set(el.dataset.place, { el, r });
+  }
+  return places.size ? places : null;
+}
+const CARD_MOVE = { duration: 300, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' };
+/** The new list starts from where the old one was: moved, appearing, or fading out. */
+function moveCards(before) {
+  const seen = new Set();
+  for (const el of $('convList').querySelectorAll('.conv-card, .group-head')) {
+    const r = el.getBoundingClientRect();
+    if (!r.height) continue;
+    seen.add(el.dataset.place);
+    const old = before.get(el.dataset.place)?.r;
+    if (!old) el.animate([{ opacity: 0, transform: 'scale(0.95)' }, { opacity: 1, transform: 'none' }], CARD_MOVE);
+    else if (old.top !== r.top || old.left !== r.left) {
+      el.animate([{ transform: `translate(${old.left - r.left}px, ${old.top - r.top}px)` }, { transform: 'none' }], CARD_MOVE);
+    }
+  }
+  const pane = $('convPane');
+  const box = pane.getBoundingClientRect();
+  for (const [key, { el, r }] of before) {
+    if (seen.has(key)) continue;
+    el.classList.add('leaving');
+    Object.assign(el.style, { top: `${r.top - box.top + pane.scrollTop}px`, left: `${r.left - box.left}px`, width: `${r.width}px`, height: `${r.height}px` });
+    pane.appendChild(el);
+    el.animate([{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'scale(0.95)' }], { duration: 200, easing: 'ease-in' }).onfinish = () => el.remove();
   }
 }
 
@@ -1882,6 +1945,7 @@ async function newConversationIn(dir, { keepText = false } = {}) {
 function conversationItem(c, current) {
   const li = document.createElement('li');
   li.className = `conv-card ${category(c)}`;
+  li.dataset.place = c.id;
   li.dataset.project = projectOf(c);
   li.classList.toggle('active', c.id === current);
   li.innerHTML = '<div class="card-top"><span class="title"></span><span class="pill"></span><span class="card-actions"><button class="ren">✎</button><button class="del" title="Supprimer">✕</button></span></div><div class="card-meta"><span class="state"></span><span class="project"></span><span class="when"></span></div>';
@@ -1898,7 +1962,7 @@ function conversationItem(c, current) {
     pill.title = c.unread > 1 ? `${c.unread} réponses à lire` : 'Une réponse à lire';
   } else pill.remove();
   const project = li.querySelector('.project');
-  project.innerHTML = `${projectIcon(projectOf(c), c.offProject ? '💬' : '📁')} ${esc(c.offProject ? 'Hors projet' : baseName(c.workspace || ''))}`;
+  project.innerHTML = `${projectGlyph(projectOf(c))} ${esc(c.offProject ? 'Hors projet' : baseName(c.workspace || ''))}`;
   project.title = c.offProject ? 'Conversation sans dossier de projet' : c.workspace || '';
   li.querySelector('.when').textContent = relativeTime(c.updatedAt);
   li.onclick = () => openConversation(c.id);
@@ -2270,6 +2334,8 @@ function updatePromptMeta() {
   $('promptReset').disabled = !custom;
 }
 
+const convUnsaved = () => JSON.stringify(stepsForm()) !== openedSteps || $('promptText').value !== (promptInfo.custom ?? promptInfo.default);
+closeOnOutside(convDialog, convUnsaved);
 const stepsForm = () => ({ before: $('stepsBefore').value, after: $('stepsAfter').value, afterOnlyIfChanged: $('stepsAfterOnlyIfChanged').checked, triage: $('stepsTriage').checked });
 
 $('convSettingsBtn').onclick = async () => {

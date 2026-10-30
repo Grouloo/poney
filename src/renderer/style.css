@@ -187,8 +187,11 @@ details.thinking div { white-space: pre-wrap; border-left: 2px solid var(--borde
 .card.ok .status { color: var(--ok); }
 .card.fail .status { color: var(--err); }
 .card.fail { border-color: color-mix(in srgb, var(--err) 45%, var(--border)); }
-.card-body { border-top: 1px solid var(--border); display: none; }
-.card.open .card-body { display: block; }
+.card-body {
+  border-top: 0 solid var(--border); height: 0; overflow: hidden; visibility: hidden; interpolate-size: allow-keywords;
+  transition: height 0.2s ease, visibility 0.2s;
+}
+.card.open .card-body { border-top-width: 1px; height: auto; visibility: visible; }
 .card-body pre { margin: 0; border: none; border-radius: 0; max-height: 420px; overflow: auto; }
 .spin { display: inline-block; animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -354,8 +357,11 @@ fieldset small { color: var(--muted); font-size: 12.5px; }
 
 /* The conversations and the files, as a deck of two cards: the one in front, and the
    other showing on its right, whose edge brings it to the front (see app.js). */
-.deck { position: relative; flex: none; width: 292px; min-height: 0; z-index: 6; }
-body.no-sidebar .deck { display: none; }
+.deck {
+  position: relative; flex: none; width: 292px; min-height: 0; z-index: 6;
+  transition: width 0.26s ease, margin-right 0.26s ease, transform 0.26s ease, opacity 0.2s ease, visibility 0.26s;
+}
+body.no-sidebar .deck { width: 0; margin-right: -12px; opacity: 0; transform: translateX(-24px); visibility: hidden; }
 #sidebar, #filesBar {
   position: absolute; top: 0; bottom: 0; left: 0; width: 270px;
   display: flex; flex-direction: column; min-height: 0; background: var(--side), var(--sheet-solid);
@@ -382,7 +388,8 @@ body.no-sidebar .deck { display: none; }
   100% { transform: translateX(22px) scale(0.965); z-index: 1; filter: brightness(0.9); }
 }
 .pane { flex: 1; overflow-y: auto; padding: 8px; min-height: 0; }
-#convPane { overflow-x: hidden; } /* (the cards slide in sideways when the project changes) */
+#convPane { position: relative; overflow-x: hidden; }
+.conv-card.leaving, .group-head.leaving { position: absolute; margin: 0; pointer-events: none; list-style: none; } /* (the cards slide in sideways when the project changes) */
 /* the project listed: its name and a chevron, highlighted on hover (no glass) */
 .project-bar { position: relative; display: flex; align-items: center; gap: 4px; padding: 8px 8px 0; }
 .deck-swap { flex: none; display: inline-flex; align-items: center; justify-content: center; }
@@ -807,3 +814,29 @@ body.running .resume-btn { display: none; }
 ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
 ::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--muted) 35%, transparent); border: 3px solid transparent; border-radius: 8px; background-clip: padding-box; }
 ::-webkit-scrollbar-thumb:hover { background-color: color-mix(in srgb, var(--muted) 60%, transparent); }
+
+/* ---------- animations ---------- */
+/* Dialogs: in and out, whatever closes them (the top layer and the display wait for the end). */
+.prompt-dialog {
+  opacity: 0; transform: translateY(10px) scale(0.97);
+  transition: opacity 0.2s ease, transform 0.2s ease, overlay 0.2s allow-discrete, display 0.2s allow-discrete;
+}
+.prompt-dialog[open] { opacity: 1; transform: none; }
+.prompt-dialog::backdrop { opacity: 0; transition: opacity 0.2s ease, overlay 0.2s allow-discrete, display 0.2s allow-discrete; }
+.prompt-dialog[open]::backdrop { opacity: 1; }
+@starting-style {
+  .prompt-dialog[open] { opacity: 0; transform: translateY(10px) scale(0.97); }
+  .prompt-dialog[open]::backdrop { opacity: 0; }
+}
+/* Side panels: they open from nothing and go back to it. */
+.viewer {
+  overflow: hidden;
+  transition: flex-basis 0.26s ease, min-width 0.26s ease, margin-left 0.26s ease, opacity 0.2s ease, display 0.26s allow-discrete;
+}
+.viewer.hidden { flex-basis: 0; min-width: 0; margin-left: -12px; opacity: 0; }
+@starting-style {
+  .viewer:not(.hidden) { flex-basis: 0; min-width: 0; margin-left: -12px; opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::backdrop { transition-duration: 0s !important; animation-duration: 0s !important; }
+}
