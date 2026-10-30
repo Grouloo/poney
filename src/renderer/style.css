@@ -81,18 +81,23 @@ input[type=checkbox], input[type=radio] { accent-color: var(--accent-2); }
 button { cursor: pointer; }
 
 /* ---------- top bar ---------- */
-.platform-darwin .topbar { padding-left: 84px; } /* room for macOS traffic lights */
+.platform-darwin .bar-side:first-child { padding-left: 70px; } /* room for macOS traffic lights */
 .topbar {
-  display: flex; align-items: center; gap: 8px;
+  display: grid; grid-template-columns: minmax(max-content, 1fr) minmax(0, auto) minmax(max-content, 1fr); align-items: center; gap: 8px;
   padding: 10px 14px;
   -webkit-app-region: drag;
 }
-.topbar > * { -webkit-app-region: no-drag; }
-.brand { font-weight: 650; margin-right: 6px; -webkit-app-region: drag; }
-.spacer { flex: 1; -webkit-app-region: drag; align-self: stretch; }
-/* (centered on the window, between what sits on the left and on the right of the bar) */
+/* (the window moves by the bar: nothing that moves it may lie over what is clicked, as the
+   system takes those clicks before the page does; with a dialog open, the bar moves nothing) */
+.bar-side { display: flex; align-items: center; gap: 8px; }
+.bar-side.right { justify-content: flex-end; }
+.topbar button, .topbar .conv-head { -webkit-app-region: no-drag; }
+body:has(dialog[open]) .topbar { -webkit-app-region: no-drag; }
+.brand { font-weight: 650; margin-right: 6px; }
+.spacer { flex: 1; }
+/* (the middle of the bar, centered on the window) */
 .topbar > .conv-head {
-  position: absolute; left: 50%; transform: translateX(-50%); max-width: calc(100% - 720px);
+  max-width: 44vw;
   display: flex; align-items: center; gap: 8px; min-width: 0; white-space: nowrap;
 }
 .head-project { flex: 0 1 auto; min-width: 48px; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }

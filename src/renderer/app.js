@@ -2035,7 +2035,7 @@ async function renderDir(rel, ul) {
 
 let treeRefresh = null;
 async function refreshTree() {
-  $('filesRoot').textContent = offMode() ? 'Dossier de la conversation' : shortPath(activeDir());
+  $('filesRoot').textContent = offMode() ? '' : shortPath(activeDir());
   $('filesRoot').title = activeDir();
   if (!activeDir()) {
     $('fileTree').innerHTML = '';

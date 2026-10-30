@@ -11,12 +11,15 @@
 </head>
 <body>
   <header class="topbar">
+    <div class="bar-side">
     <button id="sidebarBtn" class="ghost icon" title="Afficher / masquer les conversations et les fichiers">☰</button>
     <div class="brand">Poney</div>
+    </div>
     <div id="convHead" class="conv-head"><span class="head-project"></span><span class="head-title"></span><button id="headRename" class="head-rename hidden" type="button" title="Renommer la conversation">✎</button></div>
-    <div class="spacer"></div>
+    <div class="bar-side right">
     <button id="convSettingsBtn" class="ghost with-icon" title="Étapes et prompt système de cette conversation"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M2 4.5h6.5M12 4.5h2M2 11.5h2M7.5 11.5H14"/><circle cx="10.2" cy="4.5" r="1.7"/><circle cx="5.8" cy="11.5" r="1.7"/></svg>Paramètres de la conversation<span id="convBadge" class="badge hidden">modifiés</span></button>
     <button id="settingsBtn" class="ghost icon" title="Réglages">⚙︎</button>
+    </div>
   </header>
 
   <div class="layout">
