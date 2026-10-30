@@ -633,9 +633,11 @@ transcript.addEventListener('mouseup', () => setTimeout(() => {
 document.addEventListener('mousedown', (e) => { if (e.target !== quoteBtn) hideQuoteBtn(); });
 transcript.addEventListener('scroll', hideQuoteBtn);
 quoteBtn.addEventListener('mousedown', (e) => e.preventDefault()); // keep the selection
-quoteBtn.onclick = () => {
-  if (!quoteRange) return;
-  const text = selectionText(quoteRange);
+quoteBtn.onclick = () => quoteRange && quote(quoteRange);
+
+/** The passage (a range of the conversation) goes into the input, as a quote. */
+function quote(range) {
+  const text = selectionText(range);
   hideQuoteBtn();
   window.getSelection()?.removeAllRanges();
   if (!text) return;
@@ -646,7 +648,7 @@ quoteBtn.onclick = () => {
   autosize();
   input.focus();
   input.setSelectionRange(input.value.length, input.value.length);
-};
+}
 
 // ---------- generation timing ----------
 
@@ -1308,9 +1310,9 @@ function showContextMenu(x, y, title, items) {
     if (it === '-') { ctxMenu.appendChild(document.createElement('div')).className = 'ctx-sep'; continue; }
     const row = ctxMenu.appendChild(document.createElement('button'));
     row.type = 'button';
-    row.className = `ctx-item${it.danger ? ' danger' : ''}`;
+    row.className = `ctx-item${it.danger ? ' danger' : ''}${it.strong ? ' strong' : ''}`;
     row.disabled = Boolean(it.disabled);
-    row.innerHTML = `<span class="ctx-label"></span><span class="ctx-kbd">${it.action && SHORTCUTS[it.action] ? shortcutText(SHORTCUTS[it.action]) : ''}</span>`;
+    row.innerHTML = `<span class="ctx-label"></span><span class="ctx-kbd">${it.kbd ?? (it.action && SHORTCUTS[it.action] ? shortcutText(SHORTCUTS[it.action]) : '')}</span>`;
     row.querySelector('.ctx-label').textContent = it.label;
     row.onclick = () => { hideContextMenu(); it.run(); };
   }
@@ -1334,6 +1336,46 @@ $('sidebar').addEventListener('contextmenu', (e) => {
     '-',
     { label: 'Paramètres du projet…', action: 'projectSettings', disabled: key === ALL, run: () => openProjectSettings(key) },
     { label: 'Ajouter un projet…', action: 'addProject', run: addProject },
+  ]);
+});
+
+// Right click on text: in a field, the usual editing (with the spelling
+// suggestions); on a selection of the conversation, copy and quote.
+const editKey = (k) => MAC ? `⌘${k}` : `Ctrl+${k}`;
+window.api.onContextMenu((p) => {
+  const f = p.editFlags || {};
+  const editing = [
+    { label: 'Couper', kbd: editKey('X'), disabled: !f.canCut, run: () => window.api.edit('cut') },
+    { label: 'Copier', kbd: editKey('C'), disabled: !f.canCopy, run: () => window.api.edit('copy') },
+    { label: 'Coller', kbd: editKey('V'), disabled: !f.canPaste, run: () => window.api.edit('paste') },
+  ];
+  if (p.isEditable) {
+    const spelling = p.misspelledWord ? [
+      ...(p.suggestions?.length
+        ? p.suggestions.slice(0, 5).map((w) => ({ label: w, strong: true, run: () => window.api.edit('replace', w) }))
+        : [{ label: 'Aucune suggestion', disabled: true, run() {} }]),
+      { label: `Ajouter « ${p.misspelledWord} » au dictionnaire`, run: () => window.api.edit('learn', p.misspelledWord) },
+      '-',
+    ] : [];
+    showContextMenu(p.x, p.y, null, [
+      ...spelling,
+      { label: 'Annuler', kbd: editKey('Z'), disabled: !f.canUndo, run: () => window.api.edit('undo') },
+      '-',
+      ...editing,
+      '-',
+      { label: 'Tout sélectionner', kbd: editKey('A'), disabled: !f.canSelectAll, run: () => window.api.edit('selectAll') },
+    ]);
+    return;
+  }
+  if (!p.selectionText?.trim()) return;
+  const sel = window.getSelection();
+  const range = sel?.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
+  const inConversation = range && transcript.contains(range.commonAncestorContainer);
+  hideQuoteBtn();
+  showContextMenu(p.x, p.y, null, [
+    ...editing,
+    '-',
+    { label: 'Citer dans le message', kbd: '❝', disabled: !inConversation, run: () => quote(range) },
   ]);
 });
 
@@ -1665,26 +1707,39 @@ function conversationItem(c, current) {
   li.onclick = () => openConversation(c.id);
   li.querySelector('.ren').onclick = (e) => { e.stopPropagation(); startRename(li, c); };
   li.querySelector('.title').ondblclick = (e) => { e.stopPropagation(); startRename(li, c); };
-  li.querySelector('.del').onclick = async (e) => {
+  li.querySelector('.del').onclick = (e) => { e.stopPropagation(); deleteConversation(c, current); };
+  // Right click: this conversation's actions.
+  li.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
     e.stopPropagation();
-    if (!confirm(c.offProject
-      ? `Supprimer la conversation « ${c.title} » et les fichiers de son dossier ?`
-      : `Supprimer la conversation « ${c.title} » ?`)) return;
-    try {
-      await window.api.deleteConversation(c.id);
-    } catch (err) {
-      alert(err.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''));
-      return;
-    }
-    if (c.id === current) {
-      settings = await window.api.getSettings();
-      renderSettings();
-      clearTranscript();
-      refreshTree();
-    }
-    refreshConversations();
-  };
+    closeProjectMenu();
+    showContextMenu(e.clientX, e.clientY, esc(c.title), [
+      { label: 'Marquer comme lue', disabled: !(c.unread || c.finished), run: () => window.api.markConversationsRead([c.id]) },
+      { label: 'Renommer', run: () => startRename(li, c) },
+      '-',
+      { label: 'Supprimer…', danger: true, run: () => deleteConversation(c, current) },
+    ]);
+  });
   return li;
+}
+
+async function deleteConversation(c, current) {
+  if (!confirm(c.offProject
+    ? `Supprimer la conversation « ${c.title} » et les fichiers de son dossier ?`
+    : `Supprimer la conversation « ${c.title} » ?`)) return;
+  try {
+    await window.api.deleteConversation(c.id);
+  } catch (err) {
+    alert(err.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''));
+    return;
+  }
+  if (c.id === current) {
+    settings = await window.api.getSettings();
+    renderSettings();
+    clearTranscript();
+    refreshTree();
+  }
+  refreshConversations();
 }
 
 function startRename(li, c) {

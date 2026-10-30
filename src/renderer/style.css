@@ -247,6 +247,7 @@ details.thinking div { white-space: pre-wrap; border-left: 2px solid var(--borde
 .ctx-item:hover:not(:disabled) { background: color-mix(in srgb, var(--accent-2) 70%, transparent); color: #fff; }
 .ctx-item:disabled { color: var(--muted); opacity: 0.6; cursor: default; }
 .ctx-item.danger { color: var(--err); }
+.ctx-item.strong { font-weight: 600; }
 .ctx-label { flex: 1; }
 .ctx-kbd { color: var(--muted); font-size: 12px; letter-spacing: 0.05em; }
 .ctx-item:hover:not(:disabled) .ctx-kbd { color: rgba(255, 255, 255, 0.8); }

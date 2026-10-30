@@ -286,6 +286,14 @@ ipcMain.handle('project:pickIcon', async (_, key) => {
   saveSettings();
   return publicSettings();
 });
+// The text menu's commands, on the focused field or the selection.
+ipcMain.handle('ui:edit', (_, cmd, arg) => {
+  const wc = win?.webContents;
+  if (!wc) return;
+  if (['undo', 'redo', 'cut', 'copy', 'paste', 'selectAll'].includes(cmd)) wc[cmd]();
+  else if (cmd === 'replace') wc.replaceMisspelling(String(arg));
+  else if (cmd === 'learn') wc.session.addWordToSpellCheckerDictionary(String(arg));
+});
 ipcMain.handle('workspace:reveal', () => activeCwd() && shell.openPath(activeCwd()));
 ipcMain.handle('models:list', async (_, cfg) => listModels({ ...settings.config, ...cfg }));
 ipcMain.handle('agent:send', async (_, text, turnId) => {
@@ -632,6 +640,12 @@ function createWindow() {
   win.webContents.on('console-message', (_, level, message, line, source) => {
     if (level >= 3) logError('renderer', `${message} (${source}:${line})`);
   });
+  // Right click on text (a selection, the input): the window draws its own menu,
+  // with the spelling suggestions only this side knows.
+  win.webContents.on('context-menu', (_, p) => send('ui:contextMenu', {
+    x: p.x, y: p.y, isEditable: p.isEditable, selectionText: p.selectionText,
+    misspelledWord: p.misspelledWord, suggestions: p.dictionarySuggestions, editFlags: p.editFlags,
+  }));
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:/.test(url)) shell.openExternal(url);
     return { action: 'deny' };
