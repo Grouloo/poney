@@ -77,6 +77,8 @@ function setRunning(v) {
   else {
     stopRunTimer();
     $('status').textContent = '';
+    // (stopped or interrupted: nothing goes on)
+    document.querySelectorAll('.plan-list li.running').forEach((li) => li.classList.replace('running', 'pending'));
   }
 }
 
@@ -260,23 +262,48 @@ function onWorkspaceChanged() {
   refreshGauge();
 }
 
-/** The agent's task list, pinned above the input (hidden when there is none). */
-const PLAN_ICON = { pending: '○', running: '<span class="spin">◌</span>', done: '✓', failed: '✕' };
-function renderPlan(tasks = []) {
-  const panel = $('planPanel');
-  panel.classList.toggle('hidden', !tasks.length);
-  if (!tasks.length) return;
+// A plan, in the conversation: its tasks, with the state of each. The sub-agent that
+// carries out a task has no card of its own: a click on the task shows its work.
+let planBlock = null; // the plan being carried out: { el, tasks, agents (title -> action id) }
+const planTitle = (t) => taskParts(t.text).head.slice(0, 60); // (the title of its sub-agent)
+
+function startPlanBlock(card) {
+  const el = div('plan-panel', '<div class="plan-head" role="button"><span class="plan-title">Plan</span><span class="plan-count"></span><span class="plan-chev">▾</span></div><ol class="plan-list"></ol>');
+  const resume = card.querySelector('.resume-btn');
+  if (resume) el.querySelector('.plan-head').append(resume);
+  el.querySelector('.plan-head').onclick = () => el.classList.toggle('collapsed');
+  el.querySelector('.plan-list').onclick = (e) => {
+    const li = e.target.closest('li[data-agent]');
+    if (!li) return;
+    if (e.target.closest('.resume-btn')) resumeFromAction(Number(li.dataset.agent));
+    else openAgentPanel(Number(li.dataset.agent));
+  };
+  add(el);
+  planBlock = { el, tasks: [], agents: new Map() };
+}
+
+function renderPlan(tasks) {
+  if (!planBlock) return;
+  planBlock.tasks = tasks;
+  const { el, agents } = planBlock;
   const done = tasks.filter((t) => t.status === 'done').length;
-  panel.querySelector('.plan-count').textContent = `${done}/${tasks.length}`;
-  panel.querySelector('.plan-list').innerHTML = tasks.map((t) => {
+  el.querySelector('.plan-count').textContent = `${done}/${tasks.length}`;
+  el.querySelector('.plan-list').innerHTML = tasks.map((t) => {
     // (the commands of a step, which parsePlan puts in its task, as a list under it)
     const { head, parts } = taskParts(t.text);
     const sub = parts.length ? `<ul class="plan-parts">${parts.map((p) => `<li>${esc(p)}</li>`).join('')}</ul>` : '';
-    return `<li class="${t.status}"><span class="plan-box">${PLAN_ICON[t.status] || '○'}</span><div class="plan-text"><span>${esc(head)}</span>${sub}</div>${t.parallel ? '<span class="tag">en parallèle</span>' : ''}</li>`;
+    const agent = agents.get(planTitle(t));
+    const resume = agent !== undefined && cards.get(agent)?.querySelector('.resume-btn') ? '<button class="resume-btn" type="button" title="Relancer cette action et reprendre la conversation à partir d’elle (la suite est retirée)">↻ Reprendre d’ici</button>' : '';
+    return `<li class="${t.status}${agent === panelAgent && agent !== undefined ? ' shown' : ''}"${agent === undefined ? '' : ` data-agent="${agent}" title="Voir son travail dans le panneau de droite"`}><span class="plan-dot"></span><div class="plan-text"><span>${esc(head)}</span>${sub}</div>${t.parallel ? '<span class="tag">en parallèle</span>' : ''}${resume}</li>`;
   }).join('');
-  panel.classList.toggle('all-done', done === tasks.length);
+  markWaiting();
 }
-$('planPanel').querySelector('.plan-head').onclick = () => $('planPanel').classList.toggle('collapsed');
+/** A sub-agent waiting for an approval: the state of its task says so. */
+function markWaiting() {
+  for (const li of document.querySelectorAll('.plan-list li[data-agent]')) {
+    li.classList.toggle('waiting', Boolean(agentViews.get(Number(li.dataset.agent))?.querySelector('.approval')));
+  }
+}
 
 // ---------- a sub-agent's work, in the side panel ----------
 const agentViews = new Map(); // sub-agent action id -> its view (task, log, report)
@@ -288,6 +315,7 @@ function renderAgentPanelHead() {
   $('agentPanelInfo').textContent = card ? (card.classList.contains('running') ? 'en cours' : card.classList.contains('ok') ? 'terminé' : 'échec') : '';
   document.querySelectorAll('.card.subagent.shown').forEach((c) => c.classList.remove('shown'));
   card?.classList.add('shown');
+  for (const li of document.querySelectorAll('.plan-list li[data-agent]')) li.classList.toggle('shown', Number(li.dataset.agent) === panelAgent);
   renderGauge(agentContext.get(panelAgent), $('agentPanelGauge'), { sub: true });
 }
 
@@ -308,7 +336,7 @@ function closeAgentPanel() {
   panelAgent = null;
   $('agentPanel').classList.add('hidden');
   $('agentPanelBody').replaceChildren();
-  document.querySelectorAll('.card.subagent.shown').forEach((c) => c.classList.remove('shown'));
+  document.querySelectorAll('.card.subagent.shown, .plan-list li.shown').forEach((c) => c.classList.remove('shown'));
 }
 $('agentPanelClose').onclick = closeAgentPanel;
 
@@ -351,7 +379,7 @@ function clearTranscript() {
   agentViews.clear();
   agentContext.clear();
   renderMemory([]);
-  renderPlan([]);
+  planBlock = null;
   transcript.innerHTML = '';
   bubbles.clear();
   cards.clear();
@@ -459,7 +487,7 @@ function fillUserBubble(bubble, text) {
 }
 
 function addUserMessage(text, turnId) {
-  if (!target) renderPlan([]); // a plan is the plan of one request
+  if (!target) planBlock = null; // a plan is the plan of one request
   const m = div('msg user');
   fillUserBubble(m.appendChild(div('bubble')), text);
   if (turnId) {
@@ -546,7 +574,7 @@ function replayTranscript(events) {
   const shownAgent = panelAgent;
   agentViews.clear();
   agentContext.clear();
-  renderPlan([]); // the last plan event of the conversation shows it again
+  planBlock = null;
   renderMemory([]); // (same for the memory)
   transcript.innerHTML = '';
   document.querySelector('.chat').classList.remove('fresh');
@@ -983,6 +1011,7 @@ function onEvent(ev) {
     target = log;
     try {
       onEvent({ ...ev, agentId: undefined });
+      markWaiting();
     } finally {
       target = saved;
     }
@@ -1079,7 +1108,10 @@ function onEvent(ev) {
         card.dataset.tool = 'agent';
         addResumeButton(card, ev);
         cards.set(ev.id, card);
-        add(card);
+        if (!target && planBlock?.tasks.some((t) => planTitle(t) === ev.args.title)) { // (shown by its task)
+          planBlock.agents.set(ev.args.title, ev.id);
+          renderPlan(planBlock.tasks);
+        } else add(card);
         break;
       }
       const card = div('card running');
@@ -1101,7 +1133,8 @@ function onEvent(ev) {
       card.dataset.path = ev.args.path || '';
       addResumeButton(card, ev);
       cards.set(ev.id, card);
-      add(card);
+      if (ev.tool === 'plan' && !target) startPlanBlock(card);
+      else add(card);
       break;
     }
     case 'action_output': {
@@ -1292,6 +1325,7 @@ function onApproval(req) {
   // A sub-agent's command: its view is shown, or the question would go unseen.
   for (const [id, view] of agentViews) if (view.contains(card) && panelAgent !== id) openAgentPanel(id);
   card.classList.add('open');
+  setTimeout(markWaiting);
   const bar = div('approval');
   bar.innerHTML = '<span></span><button class="no">Refuser</button><button class="always">Toujours autoriser</button><button class="yes">Exécuter</button>';
   bar.querySelector('span').textContent = req.agentTitle ? `Sous-agent « ${req.agentTitle} » : exécuter cette commande ?` : 'Exécuter cette commande ?';

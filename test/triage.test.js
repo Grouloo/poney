@@ -369,3 +369,25 @@ test('a server too old for "think": the assessment is asked again without it', a
   assert.deepEqual(f.requests.map((r) => [isTriage(r), 'think' in r, Boolean(r.format)]), [[true, true, true], [true, false, true], [false, false, false]]);
   assert.equal(events.find((e) => e.type === 'triage').route, 'direct');
 });
+
+test('what the sub-agents of a plan read counts for the route: their answer is not refused', async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-triage-'));
+  await fs.writeFile(path.join(cwd, 'a.txt'), 'alpha');
+  await fs.writeFile(path.join(cwd, 'b.txt'), 'beta');
+  let reads = 0;
+  const f = await fake((r) => {
+    if (isTriage(r)) return JSON.stringify({ known: [], doubts: [], unknowns: [{ point: 'what the files hold', why: 'never read' }] });
+    if (r.messages[0].content.startsWith('You are a sub-agent')) return ['<read path="a.txt" />', '<read path="b.txt" />'][reads++] ?? 'Alpha and beta.';
+    return /<result tool="plan"/.test(lastUser(r)) ? 'They hold alpha and beta.' : '<plan>\n- read the files\n</plan>';
+  });
+  const agent = new Agent({ cwd, triage: true, config: { baseUrl: f.url, model: 'm', shellEnabled: false, subagentsEnabled: true } });
+  const events = [];
+  agent.on('event', (e) => events.push(e));
+  try {
+    await agent.send('What do the files hold?');
+  } finally {
+    f.server.close();
+  }
+  assert.equal(events.filter((e) => e.type === 'notice' && /refusée/.test(e.text)).length, 0);
+  assert.equal(events.filter((e) => e.type === 'final' && !e.agentId).pop().text, 'They hold alpha and beta.');
+});

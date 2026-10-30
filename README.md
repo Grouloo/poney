@@ -250,7 +250,7 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   says), the plan with its task marked, the
   reports of the tasks already done, and what the earlier sub-agents actually changed (files written or edited,
   commands run), with the instruction to do only what is still missing (one may have gone beyond its task). A failed task stops the plan there; the model gets the reports
-  and may write a new plan, which runs only what is left. The plan is pinned above the input; a new message starts
+  and may write a new plan, which runs only what is left. The plan is shown in the conversation, a click on a task shows the work of its sub-agent; a new message starts
   without one. Without sub-agents, the plan is a list the model follows itself.
 - **Viewer** with syntax highlighting and image preview; paths in the agent's actions are clickable. Markdown
   documents open formatted (GitHub Markdown, LaTeX formulas, highlighted code, project images; links to project

@@ -161,6 +161,7 @@ export class Agent extends EventEmitter {
     this.checkpoints = []; // [{ turnId, archive: index | null (current history), length, untested }]
     this.archives = []; // pre-compaction histories (null once no checkpoint needs them)
     this.parentHistory = []; // a sub-agent: the conversation of its parent, for <recall>
+    this.subSources = 0; // sources its sub-agents have read, not counted yet in the turn
     this.serverCtx = null; // context length actually loaded on the server, if it says
     this.serverCtxKey = null;
     this.serverCtxAt = 0;
@@ -579,6 +580,7 @@ export class Agent extends EventEmitter {
       if (ev.type === 'action_start') started.set(ev.id, ev);
       if (ev.type === 'action_end' && ev.ok) {
         const a = started.get(ev.id);
+        if (SOURCE_TOOLS.has(a?.tool)) this.subSources++;
         if (a?.tool === 'write' || a?.tool === 'edit') work.push(`${a.tool === 'write' ? 'wrote' : 'edited'} ${String(a.args.path || '').trim()}`);
         if (a?.tool === 'run') work.push(`ran \`${String(a.args.command || '').replace(/\s+/g, ' ').slice(0, 160)}\`${ev.meta?.exit !== undefined ? ` (exit ${ev.meta.exit})` : ''}`);
       }
@@ -1346,7 +1348,8 @@ export class Agent extends EventEmitter {
             const ids = toRun.map(() => nextId++);
             resumePoint(ids, 0); // resuming any member re-runs the whole group
             results.push(...await this.runSubAgents(toRun, signal, ids));
-            sourcesRead += toRun.length;
+            sourcesRead += this.subSources; // (what they read, for the route of the assessment)
+            this.subSources = 0;
             changedThisTurn = true; // sub-agents may have changed files
           }
           toRun.length = 0;
@@ -1419,7 +1422,8 @@ export class Agent extends EventEmitter {
               if (e.planText) e.partialResults = [...results, formatResult('plan', {}, e.planText)];
               throw e;
             }
-            sourcesRead++;
+            sourcesRead += this.subSources;
+            this.subSources = 0;
             this.emit('event', { type: 'action_end', id: actId, ok: out.ok, output: out.text, meta: { tasks: this.taskPlan?.tasks.length ?? 0 } });
             results.push(out.result);
             continue;
