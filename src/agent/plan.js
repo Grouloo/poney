@@ -1,3 +1,6 @@
+import { stripReasoning } from './protocol.js';
+import { SUMMARY_MARKER } from './context.js';
+
 // The agent's plan (<plan>): the list of tasks of a request, each one carried out
 // by a sub-agent. The model only writes the list; a task is done when its
 // sub-agent stops (the model never has to keep its list up to date, which small
@@ -183,6 +186,46 @@ export function turnDigest(messages, { maxChars = 6000, task = '', outputs = nul
   return out.join('\n\n');
 }
 
+/** The name under which a sub-agent reads the conversation before the request in full (see conversationDigest). */
+export const CONVERSATION_PATH = '@conversation';
+const STAMP_RE = /^\[\w{3} \d{4}-\d\d-\d\d \d\d:\d\d\] /; // a user's message (see messageStamp)
+
+/**
+ * The conversation before the request, for a sub-agent: the user's messages and
+ * the main agent's answers (not its actions and their results), and the summary
+ * of the part compacted. Without it, a task like "take notes of the conversation"
+ * goes to a sub-agent that knows nothing of it. The latest exchanges first when
+ * everything does not fit; the whole text is put in `outputs` under
+ * CONVERSATION_PATH, which the sub-agent reads with <read> like a file.
+ */
+export function conversationDigest(messages, { maxChars = 6000, outputs = null } = {}) {
+  const said = [];
+  messages.forEach((m, i) => {
+    const text = stripReasoning(String(m.content ?? '')).trim();
+    if (!text) return;
+    if (m.role === 'user' && text.startsWith(SUMMARY_MARKER)) said.push(`EARLIER (summary):\n${text}`);
+    else if (m.role === 'user' && STAMP_RE.test(text)) said.push(`USER ${text}`);
+    // its answer: the last message before the user's next one (the others are its actions)
+    else if (m.role === 'assistant' && (i === messages.length - 1 || STAMP_RE.test(String(messages[i + 1]?.content ?? '').trim()))) said.push(`MAIN AGENT:\n${text}`);
+  });
+  if (!said.length) return '';
+  outputs?.set(CONVERSATION_PATH, said.join('\n\n'));
+  const read = outputs ? `: <read path="${CONVERSATION_PATH}" /> shows the whole conversation` : '';
+  const out = [];
+  let size = 0;
+  for (let k = said.length - 1; k >= 0; k--) {
+    const text = cutStep(said[k], 3000, null);
+    if (out.length && size + text.length + 2 > maxChars) {
+      out.unshift(`[… ${k + 1} earlier message(s) left out${read}]`);
+      break;
+    }
+    out.unshift(text);
+    size += text.length + 2;
+  }
+  if (outputs && said.some((t) => t.length > 3000)) out.push(`[some messages were cut${read}]`);
+  return out.join('\n\n');
+}
+
 /** A step cut to `limit` characters in the middle, saying what was cut and where to read it. */
 function cutStep(text, limit, readPath) {
   if (text.length <= limit) return text;
@@ -220,16 +263,17 @@ function isRelevant(text, { files, words }) {
 }
 
 /**
- * What a sub-agent gets: the request, what the main agent did in this turn
+ * What a sub-agent gets: the conversation before the request, the request, what the main agent did in this turn
  * before the plan, the whole plan (its task marked), the reports of the tasks
  * already done (it may build on them), its task.
  */
-export function subAgentTask(plan, task, request, digest = '') {
+export function subAgentTask(plan, task, request, digest = '', conversation = '') {
   const req = String(request || '').trim();
   const before = plan.tasks.filter((t) => t.status === 'done' && t.report);
   const work = (plan.work || []).slice(-12).map((w) => `- ${w.task}: ${w.items.slice(-15).join('; ')}`);
   return [
     'You are one of several agents carrying out a plan, one task each. Do ONLY your task; the others are done by other agents.',
+    conversation ? `\nThe conversation before this request (you cannot see it otherwise):\n${conversation}\n[end of the conversation before the request]` : '',
     req ? `\nThe user's request:\n${req.length > 3000 ? `${req.slice(0, 3000)}…` : req}` : '',
     digest ? `\nWhat the main agent did in this turn before the plan (what it read and found: do not redo it):\n${digest}\n[end of the main agent's steps]` : '',
     // (numbered, without "- [ ]" or @parallel: not a <plan> to write again)

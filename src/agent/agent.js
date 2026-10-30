@@ -9,7 +9,7 @@ import { remember, forget, memoryBlock, standingInstructions, instructionNote, r
 import { recall, autoRecall, recalledBlock, keywordsOf } from './history.js';
 import { linksToRead, readLinks } from './autofetch.js';
 import { TRIAGE_SCHEMA, TRIAGE_ATTEMPTS, TRIAGE_RETRY, TRIAGE_RETRY_CUT, fallbackTriage, ROUTE_SOURCES, SOURCE_TOOLS, MAX_REFUSALS, triageRequest, triageInstruction, triageUpdateInstruction, needsUpdate, parseTriage, triageBlock, triageReminder, triageRefusal } from './triage.js';
-import { parsePlan, taskParts, mergePlan, carryPlan, nextGroup, setStatus, formatPlan, subAgentTask, turnDigest, stoppedPlanText } from './plan.js';
+import { parsePlan, taskParts, mergePlan, carryPlan, nextGroup, setStatus, formatPlan, subAgentTask, turnDigest, conversationDigest, stoppedPlanText } from './plan.js';
 import {
   summaryTokens, summaryWords, mechanicalSummary, DEFAULT_CHARS_PER_TOKEN,
   makeEstimator, contextPlan, answerTokens, isValidSample, historyTokens, splitForCompaction, extractFacts, buildSummaryRequest, cleanSummary,
@@ -653,10 +653,15 @@ export class Agent extends EventEmitter {
       // Sized from the window (the same model), and every step readable in full.
       const turn = this.messages.slice((this.turnStartIndex ?? this.messages.length) + 1, -1);
       const maxChars = Math.max(6000, Math.min(40000, Math.floor(this.cfg.numCtx * this.charsPerToken * 0.25)));
+      // And the conversation before the request: a task may be about it ("take notes of it").
+      // (compacted during the turn: the summary is its first message)
+      const start = this.turnStartIndex ?? 0;
+      const earlier = this.messages.slice(0, start || (this.messages[0]?.content?.startsWith(SUMMARY_MARKER) ? 1 : 0));
       const agents = group.map((t) => {
         const outputs = new Map();
         const digest = turnDigest(turn, { maxChars, task: `${t.text}\n${this.currentTask ?? ''}`, outputs });
-        return { tool: 'agent', args: { title: taskParts(t.text).head.slice(0, 60), task: subAgentTask(plan, t, this.currentTask, digest) }, outputs };
+        const conversation = conversationDigest(earlier, { maxChars: Math.floor(maxChars / 2), outputs });
+        return { tool: 'agent', args: { title: taskParts(t.text).head.slice(0, 60), task: subAgentTask(plan, t, this.currentTask, digest, conversation) }, outputs };
       });
       let results;
       try {

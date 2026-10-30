@@ -217,6 +217,45 @@ test('sub-agents see what the main agent did in this turn before its plan', asyn
   assert.doesNotMatch(task.split('[end of the main agent')[0], /<plan>/); // not the message with the plan itself
 });
 
+test('sub-agents see the conversation before the request (its messages and answers, not the actions)', async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-plan-'));
+  let main = 0;
+  const f = await fake((r) => {
+    if (isSub(r)) return `Did ${taskOf(r)}.`;
+    main++;
+    if (main === 1) return '<search>falafel</search>';
+    if (main === 2) return 'We settled on the falafel stand for Friday.';
+    if (main === 3) return '<plan>\n- Write notes.md with the notes of the conversation\n</plan>';
+    return 'Done.';
+  });
+  const agent = new Agent({ cwd, config: { baseUrl: f.url, model: 'm', shellEnabled: false } });
+  try {
+    await agent.send('where do we eat on Friday?');
+    await agent.send('take notes of this conversation');
+  } finally {
+    f.server.close();
+  }
+  const task = f.requests.find(isSub).messages.at(-1).content;
+  assert.match(task, /The conversation before this request \(you cannot see it otherwise\):\nUSER \[\w{3} [^\]]+\] where do we eat on Friday\?\n\nMAIN AGENT:\nWe settled on the falafel stand for Friday\.\n\[end of the conversation before the request\]/);
+  assert.doesNotMatch(task.split('[end of the conversation')[0], /<search>|<result/); // its actions are left out
+});
+
+test('the conversation digest keeps the latest messages and says where to read the rest', async () => {
+  const { conversationDigest } = await import('../src/agent/plan.js');
+  const messages = [];
+  for (let i = 1; i <= 6; i++) {
+    messages.push({ role: 'user', content: `[Fri 2026-10-30 10:0${i}] question ${i} ${'q'.repeat(300)}` });
+    messages.push({ role: 'assistant', content: `<read path="f${i}" />` }, { role: 'user', content: `<result tool="read">${'r'.repeat(500)}</result>` });
+    messages.push({ role: 'assistant', content: `<reasoning>hmm</reasoning>answer ${i}` });
+  }
+  const outputs = new Map();
+  const d = conversationDigest(messages, { maxChars: 1200, outputs });
+  assert.match(d, /^\[… \d earlier message\(s\) left out: <read path="@conversation" \/> shows the whole conversation\]/);
+  assert.match(d, /question 6[\s\S]*MAIN AGENT:\nanswer 6$/);
+  assert.doesNotMatch(d, /question 1 |hmm|<read path="f|<result/);
+  assert.match(outputs.get('@conversation'), /^USER \[Fri 2026-10-30 10:01\] question 1[\s\S]*answer 6$/);
+});
+
 test('the digest of the turn keeps its latest steps when too long', async () => {
   const { turnDigest } = await import('../src/agent/plan.js');
   const d = turnDigest([1, 2, 3, 4].map((i) => ({ role: i % 2 ? 'assistant' : 'user', content: `step ${i} ${'x'.repeat(400)}` })), 900);
