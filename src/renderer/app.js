@@ -1243,6 +1243,8 @@ function projectKeys(all = lastConversations) {
 }
 const projectLabel = (key) => key === ALL ? 'Tous' : key === OFF_KEY ? 'Hors projet' : baseName(key);
 const projectOf = (c) => c.offProject ? OFF_KEY : c.workspace;
+// 'Tous' among the dots: four small squares, every project at once.
+const ALL_ICON = '<svg class="proj-icon all-icon" viewBox="0 0 12 12" aria-hidden="true"><rect x="1" y="1" width="4" height="4" rx="1.2"/><rect x="7" y="1" width="4" height="4" rx="1.2"/><rect x="1" y="7" width="4" height="4" rx="1.2"/><rect x="7" y="7" width="4" height="4" rx="1.2"/></svg>';
 
 /** A project's icon (emoji or picture) as HTML, or the fallback given. */
 function projectIcon(key, fallback = '') {
@@ -1276,7 +1278,7 @@ function renderProjectBar(keys) {
     b.type = 'button';
     b.className = `pdot${key === projectFilter ? ' active' : ''}`;
     b.title = projectLabel(key);
-    b.innerHTML = key === ALL ? '' : projectIcon(key);
+    b.innerHTML = key === ALL ? ALL_ICON : projectIcon(key);
     if (b.innerHTML) b.classList.add('has-icon');
     b.onclick = () => setProjectFilter(key, Math.sign(keys.indexOf(key) - keys.indexOf(projectFilter)));
     dots.appendChild(b);

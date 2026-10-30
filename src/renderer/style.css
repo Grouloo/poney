@@ -277,6 +277,7 @@ img.proj-icon { width: 1.15em; height: 1.15em; object-fit: contain; vertical-ali
 .pdot.has-icon.active { opacity: 1; filter: none; }
 .pdot:hover { opacity: 1; }
 .pdot:not(.has-icon):hover { background: var(--text); }
+.all-icon { width: 11px; height: 11px; display: block; fill: var(--text); }
 #convList.slide-next { animation: slide-next 0.22s ease-out; }
 #convList.slide-prev { animation: slide-prev 0.22s ease-out; }
 @keyframes slide-next { from { transform: translateX(28px); opacity: 0; } }
