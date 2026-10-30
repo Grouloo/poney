@@ -153,7 +153,7 @@ function renderTorStatus(s) {
   for (const id of ['torState', 'torStateBig']) $(id).className = `tor-state ${s.state}`;
   $('torState').textContent = s.state === 'bootstrapping' || s.state === 'stuck' ? ` ${s.progress} %`
     : s.state === 'reconnecting' ? ' reconnexion' : s.state === 'degraded' ? ' lent' : '';
-  $('torToggleLabel').title = s.state === 'disabled'
+  $('torToggleLabel').dataset.tip = s.state === 'disabled'
     ? 'Tor : recherche web et lecture de pages via Tor (réglages : ⚙︎ › Confidentialité)'
     : `Tor : ${s.detail}${s.proxy ? ` — ${s.proxy.replace('socks5h://', '')}` : ''}`;
   $('torStatusLine').textContent = s.detail;
@@ -1257,6 +1257,37 @@ window.addEventListener('keydown', (e) => {
   e.preventDefault();
   newConversationHere();
 });
+
+// ---------- tooltips ----------
+// Elements with data-tip: their tooltip shows at once on hover (the browser's waits).
+const tip = document.body.appendChild(document.createElement('div'));
+tip.className = 'tip';
+tip.setAttribute('role', 'tooltip');
+let tipFor = null;
+function showTip(el) {
+  tip.textContent = el.dataset.tip;
+  tip.classList.add('show');
+  const r = el.getBoundingClientRect();
+  const t = tip.getBoundingClientRect();
+  const top = r.top - t.height - 8 >= 4 ? r.top - t.height - 8 : r.bottom + 8; // above, else below
+  const left = Math.max(6, Math.min(r.left + r.width / 2 - t.width / 2, innerWidth - t.width - 6));
+  tip.style.top = `${top}px`;
+  tip.style.left = `${left}px`;
+}
+function hideTip() {
+  tipFor = null;
+  tip.classList.remove('show');
+}
+document.addEventListener('mouseover', (e) => {
+  const el = e.target.closest?.('[data-tip]');
+  if (el === tipFor) return;
+  if (!el?.dataset.tip) return hideTip();
+  tipFor = el;
+  showTip(el);
+});
+document.addEventListener('mousedown', hideTip);
+document.addEventListener('scroll', hideTip, true);
+window.addEventListener('blur', hideTip);
 
 // ---------- sidebar ----------
 let replaying = false;
