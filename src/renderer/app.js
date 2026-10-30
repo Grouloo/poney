@@ -4,6 +4,7 @@ import { fmtNum, fmtDuration } from './format.js';
 import { parsePlan, taskParts } from '../agent/plan.js';
 import { markdown, esc } from './markdown.js';
 import { documentHtml } from './document.js';
+import { SwipeDetector } from './swipe.js';
 import DOMPurify from '../../node_modules/dompurify/dist/purify.es.mjs';
 
 const $ = (id) => document.getElementById(id);
@@ -1341,20 +1342,9 @@ $('projectMenu').onclick = (e) => e.stopPropagation();
 document.addEventListener('click', closeProjectMenu);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeProjectMenu(); });
 
-// Two-finger swipe (horizontal wheel on a trackpad): one project per gesture.
-let swipeSum = 0;
-let swipeDone = false;
-let swipeTimer = null;
-$('sidebar').addEventListener('wheel', (e) => {
-  if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
-  clearTimeout(swipeTimer);
-  swipeTimer = setTimeout(() => { swipeSum = 0; swipeDone = false; }, 200); // (the gesture and its momentum are over)
-  if (swipeDone) return;
-  swipeSum += e.deltaX;
-  if (Math.abs(swipeSum) < 50) return;
-  swipeDone = true;
-  stepProject(swipeSum > 0 ? 1 : -1);
-}, { passive: true });
+// Two-finger swipe (horizontal wheel on a trackpad): one project per swipe.
+const swipe = new SwipeDetector(stepProject);
+$('sidebar').addEventListener('wheel', (e) => swipe.wheel(e.deltaX, e.deltaY, e.timeStamp), { passive: true });
 
 async function refreshConversations({ slide = 0 } = {}) {
   if (renaming || !settings) return;
