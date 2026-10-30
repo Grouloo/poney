@@ -1737,11 +1737,25 @@ window.addEventListener('wheel', (e) => {
   deckSwipe.wheel(e.deltaX, e.deltaY, e.timeStamp);
 }, { passive: true });
 
+/** At the top of the window: the project and the title of the conversation shown. */
+function renderConvHead() {
+  const c = lastConversations.find((x) => x.id === currentConversation);
+  const off = c ? c.offProject : offMode();
+  const dir = c ? c.workspace : activeDir();
+  const key = off ? OFF_KEY : dir;
+  const project = $('convHead').querySelector('.head-project');
+  project.innerHTML = off || dir ? `${projectIcon(key, off ? '💬' : '📁')} ${esc(off ? 'Hors projet' : baseName(dir))}` : '';
+  const title = c?.title || 'Nouvelle conversation';
+  $('convHead').querySelector('.head-title').textContent = title;
+  $('convHead').title = title;
+}
+
 async function refreshConversations({ slide = 0 } = {}) {
   if (renaming || !settings) return;
   const { current, all: every } = await window.api.listConversations();
   currentConversation = current;
   lastConversations = every;
+  renderConvHead();
   const keys = projectKeys(every);
   if (!keys.includes(projectFilter)) projectFilter = ALL;
   renderProjectBar(keys);

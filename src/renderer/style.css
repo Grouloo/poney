@@ -90,6 +90,15 @@ button { cursor: pointer; }
 .topbar > * { -webkit-app-region: no-drag; }
 .brand { font-weight: 650; margin-right: 6px; -webkit-app-region: drag; }
 .spacer { flex: 1; -webkit-app-region: drag; align-self: stretch; }
+/* (centered on the window, between what sits on the left and on the right of the bar) */
+.topbar > .conv-head {
+  position: absolute; left: 50%; transform: translateX(-50%); max-width: calc(100% - 720px);
+  display: flex; align-items: center; gap: 8px; min-width: 0; white-space: nowrap; -webkit-app-region: drag;
+}
+.head-project { flex: 0 1 auto; min-width: 48px; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+.head-project:empty { display: none; }
+.head-project:not(:empty)::after { content: '/'; margin-left: 8px; opacity: 0.6; }
+.head-title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
 .ghost { background: transparent; border: 1px solid transparent; border-radius: 8px; padding: 5px 10px; color: var(--muted); }
 .ghost:hover { background: var(--panel-2); color: var(--text); }
 .icon { font-size: 16px; padding: 4px 9px; }
