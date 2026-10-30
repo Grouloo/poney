@@ -51,10 +51,11 @@ test('a skill is chosen only on one of its exact phrases, whole words, without a
 
 test('the skills that come with the app: valid, short, sources given, none chosen for ordinary messages', () => {
   const all = builtIn();
-  assert.equal(all.length, 10);
+  assert.equal(all.length, 11);
   for (const s of all) {
     assert.ok(s.description, s.name);
     assert.ok(s.body.length < 1700, `${s.name}: ${s.body.length}`);
+    if (s.name === 'synthese') continue; // (written for Poney: nothing borrowed)
     assert.match(s.source, /^https:\/\/github\.com\//, s.name);
     assert.ok(s.author && s.license, s.name);
   }
@@ -62,6 +63,7 @@ test('the skills that come with the app: valid, short, sources given, none chose
     assert.deepEqual(matchingSkills(text, all), [], text);
   }
   assert.equal(all.find((s) => s.name === 'wait-what').auto, false);
+  assert.deepEqual(matchingSkills('Fais-moi une synthèse de ces trois documents', all).map((s) => s.name), ['synthese']);
   assert.ok(skillBlock(all[0], 50).length < 120);
 });
 
