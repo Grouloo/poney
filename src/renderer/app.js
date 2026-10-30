@@ -6,6 +6,7 @@ import { markdown, esc } from './markdown.js';
 import { documentHtml } from './document.js';
 import { SwipeDetector } from './swipe.js';
 import { EMOJIS, ICONS, ICON_COLORS, iconSvg } from './project-icons.js';
+import { fileIconSvg, folderIconSvg } from './file-icons.js';
 import DOMPurify from '../../node_modules/dompurify/dist/purify.es.mjs';
 
 const $ = (id) => document.getElementById(id);
@@ -1942,7 +1943,7 @@ async function renderDir(rel, ul) {
     const li = document.createElement('li');
     const node = div(`node${e.ignored ? ' ignored' : ''}${e.path === openPath ? ' active' : ''}`);
     node.dataset.path = e.path;
-    node.innerHTML = `<span class="caret">${e.dir ? (expanded.has(e.path) ? '▾' : '▸') : ''}</span><span>${e.dir ? '📁' : fileIcon(e.name)}</span><span class="name"></span>`;
+    node.innerHTML = `<span class="caret">${e.dir ? (expanded.has(e.path) ? '▾' : '▸') : ''}</span>${e.dir ? folderIconSvg(expanded.has(e.path)) : fileIconSvg(e.name)}<span class="name"></span>`;
     node.querySelector('.name').textContent = e.name;
     node.title = e.path;
     li.appendChild(node);
@@ -1966,13 +1967,6 @@ async function renderDir(rel, ul) {
     ul.appendChild(li);
   }
   if (!entries.length && rel === '.') ul.innerHTML = '<li class="node muted">Dossier vide</li>';
-}
-
-function fileIcon(name) {
-  const ext = name.split('.').pop().toLowerCase();
-  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp'].includes(ext)) return '🖼';
-  if (['md', 'txt', 'rst'].includes(ext)) return '📝';
-  return '📄';
 }
 
 let treeRefresh = null;
