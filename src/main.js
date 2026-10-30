@@ -619,7 +619,7 @@ function createWindow() {
     icon: path.join(here, '..', 'assets', 'icon-square.png'), // taskbar (Windows, Linux)
     width: 1200,
     height: 820,
-    minWidth: 720,
+    minWidth: 1040, // (the two sidebars' deck, the conversation and a side panel, without squeezing them)
     minHeight: 500,
     title: 'Poney',
     backgroundColor: '#14161a',
@@ -646,6 +646,10 @@ function createWindow() {
   });
   // Right click on text (a selection, the input): the window draws its own menu,
   // with the spelling suggestions only this side knows.
+  // Three fingers (macOS, when the system's "Swipe between pages" allows them): one sidebar or the other.
+  win.on('swipe', (_, direction) => {
+    if (direction === 'left' || direction === 'right') send('ui:swipe', direction);
+  });
   win.webContents.on('context-menu', (_, p) => send('ui:contextMenu', {
     x: p.x, y: p.y, isEditable: p.isEditable, selectionText: p.selectionText,
     misspelledWord: p.misspelledWord, suggestions: p.dictionarySuggestions, editFlags: p.editFlags,

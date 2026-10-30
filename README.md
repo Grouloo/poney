@@ -137,7 +137,7 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   numbered and nested lists, headings, links (opened in the browser), tables (GitHub style, with alignment), code;
   a single line break is kept. LaTeX formulas rendered by KaTeX (`$…$`, `\(…\)` inline; `$$…$$`, `\[…\]` as
   blocks); prices like "$5 and $10" stay text. Raw HTML in an answer is shown as text.
-- **File browser** stacked with the conversations like a deck of two cards (the edge of the card behind brings it to the front), that updates when the agent
+- **File browser** stacked with the conversations like a deck of two cards (the edge of the card behind, or a three-finger swipe on macOS, brings it to the front), that updates when the agent
   writes, and reveals the modified file.
 - **Tool switches** in the input box, as icons (Web, Tor, Sous-agents, Terminal, sans confirmation; green when on,
   their names in instant tooltips), on one row with the model picker and the send button (`--no-web` /

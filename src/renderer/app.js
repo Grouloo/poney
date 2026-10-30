@@ -1566,6 +1566,7 @@ $('filesBtn').onclick = () => {
   document.body.classList.remove('no-sidebar'); // (hidden: shown, with the files on top)
   if (!filesInFront) swapDeck();
 };
+window.api.onSwipe(() => $('filesBtn').click());
 
 function relativeTime(ts) {
   const s = (Date.now() - ts) / 1000;
