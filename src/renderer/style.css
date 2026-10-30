@@ -228,6 +228,17 @@ details.thinking div { white-space: pre-wrap; border-left: 2px solid var(--borde
   background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 8px;
 }
 .composer-box:focus-within { border-color: var(--accent-2); }
+.composer-box { position: relative; }
+/* /skill: what can be called, above the input */
+.skill-menu {
+  position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); z-index: 20; padding: 4px; border-radius: 10px; max-height: 248px; overflow-y: auto;
+  background: var(--sheet-solid); border: 1px solid var(--glass-edge); box-shadow: var(--float); font: 14px var(--ui);
+}
+.skill-row { display: flex; align-items: baseline; gap: 10px; width: 100%; padding: 5px 9px; border: none; border-radius: 7px; background: none; color: var(--text); text-align: left; }
+.skill-row.active, .skill-row:hover { background: color-mix(in srgb, var(--accent-2) 22%, transparent); }
+.skill-name { flex: none; font-family: var(--mono); font-size: 13px; }
+.skill-desc { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 13px; }
+.skill-author { flex: none; color: var(--muted); font-size: 12px; opacity: 0.8; }
 /* The memory sits right on the input, as one block (nothing of the conversation between them). */
 .memory-panel:not(.hidden) ~ .composer-box { border-top-left-radius: 0; border-top-right-radius: 0; }
 /* the model, beside the send button: plain text and a chevron, highlighted on hover */
@@ -728,6 +739,8 @@ body.running .resume-btn { display: none; }
 .memory-add input { flex: 1; background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; color: var(--text); padding: 4px 8px; }
 
 /* passages of the older history attached to a message (automatic recall) */
+.msg.user .skills-used { margin: 4px 0 0 15%; font-family: var(--ui); font-size: 13px; color: var(--muted); }
+.msg.user .skills-used a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
 .msg.user .recalled { margin: 4px 0 0 15%; font-size: 13px; color: var(--muted); }
 .msg.user .recalled summary { cursor: pointer; }
 .msg.user .recalled blockquote { margin: 4px 0; padding: 2px 10px; border-left: 2px solid var(--border); white-space: pre-wrap; }

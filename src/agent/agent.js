@@ -6,6 +6,7 @@ import { streamChat, complete, serverContextLength } from './llm.js';
 import { liveAction, partialEditPairs, TOOLS, buildSystemPrompt, parseActions, splitThinking, formatResult, isToolEnabled, withReasoning, findRepetition, normalizeToolCalls, stripReasoning, legacyReasoningToNotes, stripChannelMarkers, toolSchemas, answerInReasoning } from './protocol.js';
 import { executeAction, runShell, truncateMiddle, checkOldBlock } from './tools.js';
 import { remember, forget, memoryBlock, standingInstructions, instructionNote, replacedAutoNote } from './memory.js';
+import { loadSkills, skillDirs, mentionedSkills, matchingSkills, skillBlock } from './skills.js';
 import { recall, autoRecall, recalledBlock, keywordsOf, outOfContext } from './history.js';
 import { linksToRead, readLinks } from './autofetch.js';
 import { TRIAGE_SCHEMA, TRIAGE_ATTEMPTS, TRIAGE_RETRY, TRIAGE_RETRY_CUT, fallbackTriage, ROUTE_SOURCES, SOURCE_TOOLS, MAX_REFUSALS, triageRequest, triageInstruction, triageUpdateInstruction, needsUpdate, parseTriage, triageBlock, triageReminder, triageRefusal } from './triage.js';
@@ -18,6 +19,7 @@ import {
 } from './context.js';
 
 export const DEFAULT_CONFIG = {
+  autoSkills: true, // skills added by the app when a message calls for them
   theme: 'system', // 'system' | 'light' | 'dark'
   provider: 'ollama', // 'ollama' | 'openai'
   baseUrl: 'http://localhost:11434',
@@ -125,7 +127,7 @@ export function messageStamp(d) {
 let nextId = Date.now(); // unique across restarts, since saved conversations are replayed by id
 
 export class Agent extends EventEmitter {
-  constructor({ cwd, config, approve, shared, role = 'main', offProject = false, triage = false }) {
+  constructor({ cwd, config, approve, shared, role = 'main', offProject = false, triage = false, skillsDir = null }) {
     super();
     this.triageByDefault = triage; // the assessment before acting when the steps do not say (the app: on)
     this.cwd = cwd;
@@ -162,6 +164,7 @@ export class Agent extends EventEmitter {
     this.archives = []; // pre-compaction histories (null once no checkpoint needs them)
     this.parentHistory = []; // a sub-agent: the conversation of its parent, for <recall>
     this.subSources = 0; // sources its sub-agents have read, not counted yet in the turn
+    this.skillsDir = skillsDir; // the user's skills (see skills.js)
     this.serverCtx = null; // context length actually loaded on the server, if it says
     this.serverCtxKey = null;
     this.serverCtxAt = 0;
@@ -1086,6 +1089,19 @@ export class Agent extends EventEmitter {
           content += `\n\n${recalledBlock(passages)}`;
           preRead++;
           this.emit('event', { type: 'recalled', turnId, passages });
+        }
+      }
+      // Skills: the ones the user names, or the one the message calls for (not twice in view).
+      if (this.role === 'main') {
+        const skills = loadSkills(skillDirs(this.cwd, this.skillsDir));
+        const named = mentionedSkills(userText, skills).slice(0, 3);
+        const inView = (s) => this.messages.some((m) => m.content.includes(`(Skill "${s.name}"`));
+        const found = config.autoSkills === false ? [] : matchingSkills(userText, skills).filter((s) => !named.includes(s) && !inView(s));
+        const maxChars = Math.floor(Math.min(3200, this.cfg.numCtx * this.charsPerToken * 0.1));
+        for (const s of [...named, ...found]) content += `\n\n${skillBlock(s, maxChars)}`;
+        if (named.length || found.length) {
+          const shown = (auto) => (s) => ({ name: s.name, description: s.description, author: s.author, source: s.source, auto });
+          this.emit('event', { type: 'skill', turnId, skills: [...named.map(shown(false)), ...found.map(shown(true))] });
         }
       }
       // Links of the message read by the app (marked as page content), so that the model

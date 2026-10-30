@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Agent, DEFAULT_CONFIG } from './agent/agent.js';
+import { loadSkills, skillDirs } from './agent/skills.js';
 import { listModels } from './agent/llm.js';
 import { ConversationStore, moveAppData } from './conversations.js';
 import { listDir, readFileForViewer } from './files.js';
@@ -79,6 +80,7 @@ const MAX_IDLE_SESSIONS = 8; // sessions kept in memory while idle (the others a
 
 const send = (channel, payload) => win && !win.isDestroyed() && win.webContents.send(channel, payload);
 
+const userSkills = () => path.join(app.getPath('userData'), 'skills');
 const offProjectRoot = () => path.join(app.getPath('userData'), 'off-project');
 
 class Session {
@@ -108,6 +110,7 @@ class Session {
         cwd: this.cwd,
         offProject: this.offProject,
         triage: true, // the assessment before acting, on unless the conversation's steps turn it off
+        skillsDir: userSkills(),
         config: settings.config,
         approve: (req) => new Promise((resolve) => {
           this.approvals.set(req.id, { req, resolve });
@@ -432,6 +435,8 @@ ipcMain.handle('conversations:newOffProject', () => {
   return publicSettings();
 });
 ipcMain.handle('session:current', () => sessionView(current()));
+// The skills for the menu of the input (what /name can call here).
+ipcMain.handle('skills:list', () => loadSkills(skillDirs(activeCwd(), userSkills())).map(({ name, description, author, origin }) => ({ name, description, author, origin })));
 // What is typed in the input of the conversation shown (saved soon, and when the user leaves it).
 ipcMain.handle('session:setDraft', (_, text) => {
   const s = current();

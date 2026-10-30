@@ -667,10 +667,75 @@ async function sendMessage(text) {
 
 sendBtn.onclick = submit;
 input.addEventListener('keydown', (e) => {
+  if (skillKey(e)) return;
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
     e.preventDefault();
     submit();
   }
+});
+
+// ---------- /skill: suggestions while typing ----------
+const skillMenu = document.querySelector('.composer-box').appendChild(div('skill-menu hidden'));
+let skillMatches = [];
+let skillPick = 0;
+let skillList = null;
+
+/** The /word being typed where the cursor is, if any. */
+function skillToken() {
+  const before = input.value.slice(0, input.selectionStart);
+  const m = before.match(/(?:^|\s)\/([a-z0-9-]*)$/i);
+  return m ? { query: m[1].toLowerCase(), start: before.length - m[1].length - 1 } : null;
+}
+function hideSkillMenu() {
+  skillMenu.classList.add('hidden');
+  skillList = null; // (read again next time: the project may have changed)
+}
+async function updateSkillMenu() {
+  const token = skillToken();
+  if (!token) return hideSkillMenu();
+  skillList ??= await window.api.listSkills().catch(() => []);
+  const { query } = token;
+  skillMatches = [
+    ...skillList.filter((s) => s.name.startsWith(query)),
+    ...skillList.filter((s) => !s.name.startsWith(query) && query && `${s.name} ${s.description}`.toLowerCase().includes(query)),
+  ];
+  if (!skillMatches.length) return skillMenu.classList.add('hidden');
+  skillPick = 0;
+  renderSkillMenu();
+  skillMenu.classList.remove('hidden');
+}
+function renderSkillMenu() {
+  skillMenu.innerHTML = skillMatches.map((s, i) => `<button type="button" class="skill-row${i === skillPick ? ' active' : ''}" data-i="${i}"><span class="skill-name">/${esc(s.name)}</span><span class="skill-desc">${esc(s.description)}</span>${s.author ? `<span class="skill-author">${esc(s.author)}</span>` : ''}</button>`).join('');
+  skillMenu.querySelector('.active')?.scrollIntoView({ block: 'nearest' });
+}
+function acceptSkill(i) {
+  const token = skillToken();
+  if (!token) return hideSkillMenu();
+  input.setRangeText(`/${skillMatches[i].name} `, token.start, input.selectionStart, 'end');
+  hideSkillMenu();
+  autosize();
+  noteDraft();
+  input.focus();
+}
+/** The keys of the open menu; true when it used the key. */
+function skillKey(e) {
+  if (skillMenu.classList.contains('hidden') || e.isComposing) return false;
+  const moves = { ArrowDown: 1, ArrowUp: -1 };
+  if (e.key in moves) {
+    skillPick = (skillPick + moves[e.key] + skillMatches.length) % skillMatches.length;
+    renderSkillMenu();
+  } else if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) acceptSkill(skillPick);
+  else if (e.key === 'Escape') hideSkillMenu();
+  else return false;
+  e.preventDefault();
+  return true;
+}
+input.addEventListener('input', updateSkillMenu);
+input.addEventListener('blur', hideSkillMenu);
+skillMenu.addEventListener('mousedown', (e) => {
+  e.preventDefault(); // (the input keeps the focus)
+  const row = e.target.closest('.skill-row');
+  if (row) acceptSkill(Number(row.dataset.i));
 });
 function autosize() {
   input.style.height = 'auto';
@@ -1259,6 +1324,26 @@ function onEvent(ev) {
       d.textContent = `🧠 Noté dans la mémoire : ${ev.notes.map((n) => `« ${n} »`).join(', ')}`;
       d.title = 'Gardé pour toute la conversation (malgré le compactage). Retirable via 🧠 sous la zone de saisie.';
       msg.appendChild(d);
+      break;
+    }
+    case 'skill': {
+      // The skills added to the last user message.
+      const msg = [...(target || transcript).querySelectorAll('.msg.user')].pop();
+      if (!msg) break;
+      const d = div('skills-used');
+      for (const s of ev.skills) {
+        const name = document.createElement(s.source ? 'a' : 'span');
+        name.textContent = s.name;
+        if (s.source) {
+          name.href = s.source;
+          name.onclick = (e) => { e.preventDefault(); window.open(s.source); }; // (in the browser: the window stays on the app)
+        }
+        name.title = [s.description, s.author ? `par ${s.author}` : '', s.auto ? 'Ajouté automatiquement' : ''].filter(Boolean).join('\n');
+        d.append(name, ' ');
+      }
+      d.prepend(ev.skills.length > 1 ? 'Skills : ' : 'Skill : ');
+      msg.appendChild(d);
+      scrollDown();
       break;
     }
     case 'recalled': {
