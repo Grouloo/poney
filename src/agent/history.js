@@ -61,7 +61,7 @@ function excerpts(text, terms, radius) {
 }
 
 /** The result of <recall>: the best matching messages (in conversation order), as excerpts. */
-export function recall(archives, current, query, { maxChars = 3000, maxMessages = 6 } = {}) {
+export function recall(archives, current, query, { maxChars = 3000, maxMessages = 6, assistant = 'you' } = {}) {
   const terms = [...new Set(searchTerms(query).map(stem))];
   if (!terms.length) return { ok: false, text: 'Give keywords to search for, like <recall>database migration</recall>.' };
   const pool = outOfContext(archives, current);
@@ -81,7 +81,7 @@ export function recall(archives, current, query, { maxChars = 3000, maxMessages 
   const radius = Math.max(120, Math.floor(maxChars / best.length / 3));
   let out = `${best.length} earlier message(s) out of ${pool.length} match:`;
   for (const m of best) {
-    const piece = `\n[message ${m.n}, ${m.role === 'assistant' ? 'you' : 'user'}] ${excerpts(m.text, terms, radius)}`;
+    const piece = `\n[message ${m.n}, ${m.role === 'assistant' ? assistant : 'user'}] ${excerpts(m.text, terms, radius)}`;
     if (out.length + piece.length > maxChars) break;
     out += piece;
   }

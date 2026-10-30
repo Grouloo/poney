@@ -161,7 +161,9 @@ export function buildSystemPrompt({ cwd, offProject = false, memory = true, para
     tools.push('<remember>one short fact to keep</remember>    note it in your memory of this conversation');
     tools.push('<forget>2</forget>                       remove note 2 from your memory');
   }
-  if (!subagentRole) tools.push('<recall>keywords</recall>               search the earlier part of this conversation (no longer in view)');
+  tools.push(subagentRole
+    ? '<recall>keywords</recall>               search the conversation between the user and the main agent'
+    : '<recall>keywords</recall>               search the earlier part of this conversation (no longer in view)');
   if (!subagentRole) tools.push(subagents && parallel
     ? '<plan>\n- first task (goal, files)\n- @parallel a task independent of the next one\n- @parallel the next one\n- last task\n</plan>                                 a plan: each task is done by a sub-agent'
     : subagents

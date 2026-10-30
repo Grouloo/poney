@@ -159,6 +159,7 @@ export class Agent extends EventEmitter {
     // replaces is archived and the checkpoints taken before it point there.
     this.checkpoints = []; // [{ turnId, archive: index | null (current history), length, untested }]
     this.archives = []; // pre-compaction histories (null once no checkpoint needs them)
+    this.parentHistory = []; // a sub-agent: the conversation of its parent, for <recall>
     this.serverCtx = null; // context length actually loaded on the server, if it says
     this.serverCtxKey = null;
     this.serverCtxAt = 0;
@@ -559,6 +560,7 @@ export class Agent extends EventEmitter {
     });
     child.serverCtx = this.serverCtx;
     child.virtualFiles = action.outputs ?? null; // the main agent's steps in full (see turnDigest)
+    child.parentHistory = [...this.archives, [...this.messages]];
     child.serverCtxKey = this.serverCtxKey;
     child.serverCtxAt = this.serverCtxAt;
     let report = null;
@@ -1378,7 +1380,10 @@ export class Agent extends EventEmitter {
             }
           }
           if (action.tool === 'recall') {
-            const r = recall(this.archives, this.messages, action.args.query, { maxChars: Math.min(3000, this.maxResultChars) });
+            const r = recall([...this.parentHistory, ...this.archives], this.messages, action.args.query, {
+              maxChars: Math.min(3000, this.maxResultChars),
+              assistant: this.role === 'sub' ? 'main agent' : 'you',
+            });
             if (r.ok) sourcesRead++;
             this.emit('event', { type: 'action_end', id: actId, ok: r.ok, output: r.text, meta: {} });
             results.push(formatResult('recall', { query: action.args.query }, r.text));

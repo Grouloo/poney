@@ -107,3 +107,37 @@ test('automatic recall: words also in the summary do not block it; what was said
   assert.match(got.map((p) => p.excerpt).join(' '), /port 5433/);
   assert.doesNotMatch(got[0].excerpt, /^\[Mon/); // (the stamp is not content)
 });
+
+test('a sub-agent recalls the conversation of its parent, compacted part included', async () => {
+  const http = await import('node:http');
+  const fs = await import('node:fs/promises');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { Agent } = await import('../src/agent/agent.js');
+  const { buildSystemPrompt } = await import('../src/agent/protocol.js');
+  const subs = [];
+  let main = 0;
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (d) => (body += d));
+    req.on('end', () => {
+      const d = JSON.parse(body);
+      let content;
+      if (d.messages[0].content.startsWith('You are a sub-agent')) {
+        subs.push(d);
+        content = subs.length === 1 ? '<recall>asyncpg</recall>' : 'Report.';
+      } else content = ++main === 1 ? '<agent title="notes">Note the database choice.</agent>' : 'Done.';
+      res.end(`${JSON.stringify({ message: { content }, done: true, prompt_eval_count: 0, eval_count: 1 })}\n`);
+    });
+  });
+  await new Promise((r) => server.listen(0, r));
+  const agent = new Agent({ cwd: await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-rec-')), config: { baseUrl: `http://localhost:${server.address().port}`, model: 'm', numCtx: 16384, maxTokens: 1024, subagentsEnabled: true } });
+  agent.archives = [old];
+  agent.messages = [{ role: 'user', content: 'in view' }, { role: 'assistant', content: 'yes' }];
+  await agent.send('take notes');
+  server.close();
+  const result = subs[1].messages.at(-1).content;
+  assert.match(result, /asyncpg/);
+  assert.match(result, /main agent\]/);
+  assert.match(buildSystemPrompt({ cwd: '/p', platform: 'x', subagentRole: true }), /<recall>/);
+});
