@@ -2488,17 +2488,6 @@ function conversationItem(c, current) {
     when.textContent = workTime(Date.now() - c.workingSince);
   } else when.textContent = relativeTime(c.updatedAt);
   li.onclick = () => openConversation(c.id);
-  if (category(c) === 'failed') {
-    const retry = li.appendChild(document.createElement('button'));
-    retry.type = 'button';
-    retry.className = 'card-retry';
-    retry.textContent = '↻ Reprendre';
-    retry.onclick = async (e) => {
-      e.stopPropagation();
-      await openConversation(c.id);
-      retryTurn();
-    };
-  }
   li.querySelector('.ren').dataset.tip = renameTip();
   li.querySelector('.ren').onclick = (e) => { e.stopPropagation(); startRename(li, c); };
   li.querySelector('.title').ondblclick = (e) => { e.stopPropagation(); startRename(li, c); };
@@ -3263,21 +3252,19 @@ function renderGauge(c, g = $('ctxGauge'), { sub = false } = {}) {
   ].filter(Boolean).join('\n');
 }
 
-// With a Claude model: how much of the plan's limits is used.
+// With a Claude model: how much of the plan's session (5 hours) is used.
 const inTime = (iso) => new Date(iso).toLocaleString('fr-FR', { weekday: 'short', hour: '2-digit', minute: '2-digit' });
 async function refreshUsage() {
   const g = $('usageGauge');
   const usage = usesClaude() ? await window.api.claudeUsage().catch(() => null) : null;
   g.classList.toggle('hidden', !usage || !usesClaude());
   if (!usage) return;
-  const { fiveHour: five, sevenDay: week } = usage;
-  const top = Math.max(five?.utilization ?? 0, week?.utilization ?? 0);
-  g.querySelector('.gauge-fill').style.width = `${Math.min(100, top)}%`;
-  g.classList.toggle('warn', top >= 80);
-  g.classList.toggle('full', top >= 100);
-  g.querySelector('.gauge-text').textContent = [five && `5 h ${Math.round(five.utilization)} %`, week && `7 j ${Math.round(week.utilization)} %`].filter(Boolean).join(' · ');
-  g.title = ['Utilisation de votre abonnement', five && `Sur 5 heures : ${Math.round(five.utilization)} %${five.resetsAt ? `, remise à zéro ${inTime(five.resetsAt)}` : ''}`,
-    week && `Sur 7 jours : ${Math.round(week.utilization)} %${week.resetsAt ? `, remise à zéro ${inTime(week.resetsAt)}` : ''}`].filter(Boolean).join('\n');
+  const used = Math.round(usage.utilization);
+  g.querySelector('.gauge-fill').style.width = `${Math.min(100, used)}%`;
+  g.classList.toggle('warn', used >= 80);
+  g.classList.toggle('full', used >= 100);
+  g.querySelector('.gauge-text').textContent = `session ${used} %`;
+  g.title = `Utilisation de la session de votre abonnement : ${used} %${usage.resetsAt ? `\nRemise à zéro ${inTime(usage.resetsAt)}` : ''}`;
 }
 setInterval(refreshUsage, 5 * 60 * 1000);
 

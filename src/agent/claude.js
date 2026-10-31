@@ -65,8 +65,8 @@ export async function claudeModels(executable, { query } = {}) {
 }
 
 /**
- * How much of the plan's limits is used: { fiveHour, sevenDay }, each
- * { utilization (0-100), resetsAt }, or null where plan limits do not apply.
+ * How much of the plan's session (its 5-hour window) is used: { utilization (0-100),
+ * resetsAt }, or null where plan limits do not apply.
  * (The SDK marks this call as experimental: anything else than the expected shape counts as null.)
  */
 export async function claudeUsage(executable, { query } = {}) {
@@ -76,9 +76,8 @@ export async function claudeUsage(executable, { query } = {}) {
   try {
     const r = await q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?.({ skipBehaviors: true });
     if (!r?.rate_limits_available) return null;
-    const window = (w) => (typeof w?.utilization === 'number' ? { utilization: w.utilization, resetsAt: w.resets_at ?? null } : null);
-    const usage = { fiveHour: window(r.rate_limits?.five_hour), sevenDay: window(r.rate_limits?.seven_day) };
-    return usage.fiveHour || usage.sevenDay ? usage : null;
+    const session = r.rate_limits?.five_hour;
+    return typeof session?.utilization === 'number' ? { utilization: session.utilization, resetsAt: session.resets_at ?? null } : null;
   } finally {
     q.close();
   }

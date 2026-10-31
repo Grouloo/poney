@@ -416,8 +416,6 @@ body.no-sidebar .deck { width: 0; margin-right: -12px; opacity: 0; transform: tr
 }
 .pane { flex: 1; overflow-y: auto; padding: 8px; min-height: 0; }
 #convPane { position: relative; overflow-x: hidden; }
-.card-retry { display: block; margin-top: 6px; padding: 3px 9px; border-radius: 7px; border: 1px solid color-mix(in srgb, var(--err) 45%, var(--border)); background: none; color: var(--text); font-size: 13px; }
-.card-retry:hover { background: color-mix(in srgb, var(--err) 16%, transparent); }
 .retry-row { margin: 6px 0 12px; }
 #usageGauge { cursor: default; }
 .conv-card.leaving, .group-head.leaving { position: absolute; margin: 0; pointer-events: none; list-style: none; } /* (the cards slide in sideways when the project changes) */

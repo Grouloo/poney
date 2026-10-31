@@ -210,12 +210,12 @@ test('stopped while asleep, it does not stay asleep', async () => {
   assert.equal(events.at(-1).reason, 'stopped');
 });
 
-test('the plan\'s usage, or nothing where limits do not apply or the call has changed', async () => {
+test('the plan\'s session usage, or nothing where limits do not apply or the call has changed', async () => {
   const call = 'usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET';
   let closed = 0;
   const query = (answer) => () => ({ [call]: async () => answer, close() { closed++; } });
   const usage = await claudeUsage('/bin/claude', { query: query({ rate_limits_available: true, rate_limits: { five_hour: { utilization: 22, resets_at: 'r5' }, seven_day: { utilization: 56, resets_at: 'r7' } } }) });
-  assert.deepEqual(usage, { fiveHour: { utilization: 22, resetsAt: 'r5' }, sevenDay: { utilization: 56, resetsAt: 'r7' } });
+  assert.deepEqual(usage, { utilization: 22, resetsAt: 'r5' });
   assert.equal(await claudeUsage('/bin/claude', { query: query({ rate_limits_available: false, rate_limits: null }) }), null);
   assert.equal(await claudeUsage('/bin/claude', { query: () => ({ close() { closed++; } }) }), null);
   assert.equal(closed, 3);

@@ -205,9 +205,8 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   optional reason that is passed on to the model, so it can change its approach.
 
 ![A command waiting for approval; the sidebar sorts the conversations by state](docs/screenshots/approval.png)
-- **A turn ended by an error** puts its conversation under "Erreur", with "Reprendre" on its card and in the
-  transcript: the conversation goes on from where it stopped.
-- **Plan usage** beside the context gauge with a Claude model: the 5-hour and 7-day limits (the SDK marks this call
+- **A turn ended by an error** puts its conversation under "Erreur", with "Reprendre" in the transcript: the conversation goes on from where it stopped.
+- **Plan usage** beside the context gauge with a Claude model: how much of the session (5 hours) is used (the SDK marks this call
   as experimental; without an answer the gauge does not show).
 - **Context gauge** under the input (the tick marks the compaction threshold); a click compacts on demand. With a
   Claude model it shows the API's counts, from the first message on, and the Claude harness compacts by itself.
