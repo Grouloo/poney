@@ -313,8 +313,8 @@ details.thinking div { white-space: pre-wrap; border-left: 2px solid var(--borde
 .project-row.hidden-project .project-open { opacity: 0.5; }
 .dialog-nav .project-eye { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); display: flex; padding: 4px; border-radius: 6px; visibility: hidden; }
 .project-row:hover .project-eye, .project-row.hidden-project .project-eye, .project-eye:focus-visible { visibility: visible; }
-#projectName { padding: 6px 9px; border-radius: 8px; border: 1px solid var(--border); color: var(--text); font: inherit; outline: none; }
-#projectName:focus { border-color: var(--accent-2); }
+#projectName , #projectRemoteUrl { padding: 6px 9px; border-radius: 8px; border: 1px solid var(--border); color: var(--text); font: inherit; outline: none; }
+#projectName:focus , #projectRemoteUrl:focus { border-color: var(--accent-2); }
 .project-path { font-family: var(--mono); font-size: 13px; word-break: break-all; }
 .project-field { display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
 .project-icon-row { display: flex; align-items: center; gap: 8px; }
@@ -549,7 +549,10 @@ img.proj-icon { width: 1.15em; height: 1.15em; object-fit: contain; vertical-ali
 .remote-page label:not(.remote-check) { display: flex; flex-direction: column; gap: 4px; font-size: 13.5px; }
 .remote-page input[type="text"], .remote-page input[type="password"] { padding: 7px 9px; border: 1px solid var(--border); border-radius: 8px; color: var(--text); font: 13.5px var(--mono); background: color-mix(in srgb, var(--bg) 55%, transparent); }
 .remote-page p { margin: 0; font-size: 13px; }
-.remote-body .git-error { margin: 0; }
+.remote-body .git-error, #githubError, #projectRemoteError { margin: 0; }
+.github-line { margin: 0; font-size: 14px; }
+.github-actions { display: flex; gap: 8px; }
+.github-actions button:disabled { opacity: 0.45; cursor: default; }
 .git-counts { color: var(--muted); font-weight: normal; font-size: 13px; font-variant-numeric: tabular-nums; }
 .git-error { margin: -6px 2px 12px; color: var(--err); font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .git-empty { padding: 14px 8px; text-align: center; font-size: 13.5px; }

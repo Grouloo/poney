@@ -394,6 +394,7 @@ closeOnOutside(settingsDialog);
 closeOnOutside($('projectDialog'));
 const showSettingsPage = navDialog(settingsDialog);
 function openSettings(page) {
+  changeGithub(window.api.githubStatus);
   if (page) showSettingsPage(page);
   renderProviders();
   if (!settingsDialog.open) settingsDialog.showModal();
@@ -1778,10 +1779,46 @@ function openProjectSettings(key) {
   $('projectName').value = settings.projectNames?.[key] ?? '';
   $('projectName').placeholder = key === OFF_KEY ? '' : baseName(key);
   renderProjectSettings();
+  loadProjectRemote(key);
   if (!$('projectDialog').open) $('projectDialog').showModal();
   $('projectDialog').querySelector('.nav-pages').scrollTop = 0;
   $('projectNav').querySelector('.active')?.scrollIntoView({ block: 'nearest' });
 }
+// The project's remote (no field outside a repository).
+let projectRemote = '';
+async function loadProjectRemote(key) {
+  $('projectRemoteError').textContent = '';
+  const url = key === OFF_KEY ? null : await window.api.gitRemote(key).catch(() => null);
+  if (key !== settingsProject) return; // (another project chosen meanwhile)
+  projectRemote = url ?? '';
+  $('projectRemote').classList.toggle('hidden', url === null);
+  $('projectRemoteUrl').value = projectRemote;
+  $('projectRemoteRemove').disabled = !projectRemote;
+  showRemoteChange();
+}
+function showRemoteChange() {
+  const changed = $('projectRemoteUrl').value.trim();
+  $('projectRemoteSave').disabled = !changed || changed === projectRemote;
+}
+async function changeProjectRemote(change) {
+  const key = settingsProject;
+  $('projectRemoteError').textContent = '';
+  try {
+    await change();
+  } catch (e) {
+    if (key === settingsProject) $('projectRemoteError').textContent = errorText(e);
+    return;
+  }
+  lastFetch.delete(key);
+  if (key === settingsProject) await loadProjectRemote(key);
+  refreshGit();
+}
+$('projectRemoteUrl').addEventListener('input', showRemoteChange);
+$('projectRemoteSave').onclick = () => changeProjectRemote(() => window.api.gitSetRemote(settingsProject, $('projectRemoteUrl').value));
+$('projectRemoteRemove').onclick = () => {
+  if (confirm(`Retirer le dépôt distant de ce projet ?\n\n${projectRemote}\n\nLe dépôt lui-même n’est pas touché, et l’historique local reste.`)) changeProjectRemote(() => window.api.gitRemoveRemote(settingsProject));
+};
+
 function renderProjectSettings() {
   const key = settingsProject;
   $('projectDialogTitle').textContent = projectLabel(key);
@@ -2824,11 +2861,13 @@ async function openRemoteDialog() {
   $('remoteSubmit').disabled = false;
   remoteDialog.showModal();
   showRemoteKind();
-  const gh = await window.api.gitGhReady().catch(() => false);
-  $('remoteTokenRow').classList.toggle('hidden', gh);
-  $('remoteNote').textContent = gh
+  const gh = await window.api.githubStatus().catch(() => null);
+  $('remoteTokenRow').classList.toggle('hidden', Boolean(gh?.gh || gh?.tokenSaved));
+  $('remoteNote').textContent = gh?.gh
     ? 'Le dépôt est créé avec le compte connecté à gh, puis la branche y est envoyée.'
-    : 'gh n’est pas disponible : il faut un jeton GitHub pouvant créer des dépôts. Il sert à cette création, sans être enregistré. La branche est ensuite envoyée avec votre connexion Git habituelle.';
+    : gh?.tokenSaved
+      ? 'Le dépôt est créé avec le jeton des réglages, puis la branche y est envoyée avec votre connexion Git habituelle.'
+      : 'gh n’est pas disponible : il faut un jeton GitHub pouvant créer des dépôts (à enregistrer dans Réglages › GitHub, ou pour cette fois ici). La branche est ensuite envoyée avec votre connexion Git habituelle.';
 }
 
 for (const radio of remoteDialog.querySelectorAll('[name=remoteKind]')) radio.onchange = showRemoteKind;
@@ -2859,6 +2898,33 @@ $('remoteForm').addEventListener('submit', async (e) => {
   refreshGit();
   onFilesChanged();
 });
+
+// The GitHub page of the settings.
+function showGithub(st) {
+  $('githubGh').textContent = st.gh ? `gh : connecté${st.gh === '?' ? '' : ` en tant que ${st.gh}`} (utilisé en premier).`
+    : st.ghInstalled ? 'gh : installé, mais pas connecté. Lancez « gh auth login » dans un terminal.' : 'gh : pas installé.';
+  $('githubSaved').textContent = !st.tokenSaved ? 'Jeton : aucun.' : st.token ? `Jeton : enregistré, compte ${st.token}.` : 'Jeton : enregistré, mais son compte n’a pas pu être vérifié.';
+  $('githubRemove').disabled = !st.tokenSaved;
+  $('githubSave').disabled = !st.canSave;
+}
+async function changeGithub(change) {
+  $('githubError').textContent = '';
+  try {
+    showGithub(await change());
+    $('githubToken').value = '';
+  } catch (e) {
+    $('githubError').textContent = errorText(e);
+  }
+}
+const saveGithubToken = () => changeGithub(() => window.api.githubSetToken($('githubToken').value));
+$('githubSave').onclick = saveGithubToken;
+$('githubRemove').onclick = () => { if (confirm('Retirer le jeton GitHub de Poney ? Il reste valide chez GitHub tant que vous ne l’y révoquez pas.')) changeGithub(window.api.githubRemoveToken); };
+$('githubToken').addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault(); // (not the settings' form)
+  saveGithubToken();
+});
+settingsDialog.addEventListener('close', () => { $('githubToken').value = ''; });
 
 // The diff of a file, in its own side panel.
 function closeDiffPanel() {

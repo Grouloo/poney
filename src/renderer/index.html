@@ -177,6 +177,16 @@
             <label id="projectNameField">Nom
               <input id="projectName" maxlength="80" autocomplete="off">
             </label>
+            <div id="projectRemote" class="project-field hidden">
+              <label>Dépôt distant
+                <input id="projectRemoteUrl" spellcheck="false" autocomplete="off" placeholder="git@github.com:moi/projet.git">
+              </label>
+              <div class="github-actions">
+                <button type="button" id="projectRemoteSave" class="ghost">Enregistrer</button>
+                <button type="button" id="projectRemoteRemove" class="ghost">Retirer</button>
+              </div>
+              <div id="projectRemoteError" class="git-error"></div>
+            </div>
             <div class="project-field">
               <div class="project-icon-row">
                 <span id="projectIconPreview" class="project-icon-preview"></span>
@@ -291,6 +301,7 @@
         <button type="button" data-page="providers">Fournisseurs</button>
         <button type="button" data-page="generation">Génération</button>
         <button type="button" data-page="tools">Outils</button>
+        <button type="button" data-page="github">GitHub</button>
         <button type="button" data-page="privacy">Confidentialité</button>
       </nav>
       <div class="nav-pages">
@@ -343,6 +354,20 @@
         <label class="check"><input name="autoFetch" type="checkbox" checked> Lire automatiquement les liens de mes messages
           <small>Pages web publiques seulement (pas localhost ni le réseau local), 2 au plus, tronquées, avant que le modèle réponde. Via Tor s’il est activé.</small>
         </label>
+      </fieldset>
+      <fieldset class="nav-page" data-page="github">
+        <legend>GitHub</legend>
+        <p id="githubGh" class="github-line"></p>
+        <p id="githubSaved" class="github-line"></p>
+        <label>Jeton GitHub
+          <input id="githubToken" type="password" autocomplete="off" placeholder="github_pat_…">
+        </label>
+        <small>Sert à créer des dépôts quand gh n’est pas connecté, avec le droit de créer des dépôts. Il est vérifié auprès de GitHub, puis chiffré par le système. Les envois (push) gardent votre connexion Git habituelle.</small>
+        <div class="github-actions">
+          <button type="button" id="githubSave" class="ghost">Enregistrer le jeton</button>
+          <button type="button" id="githubRemove" class="ghost">Retirer le jeton</button>
+        </div>
+        <div id="githubError" class="git-error"></div>
       </fieldset>
       <fieldset class="nav-page" data-page="privacy">
         <legend>Confidentialité</legend>

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, ipcMain, dialog, shell, nativeImage, nativeTheme } from 'electron';
+import { app, BrowserWindow, Menu, ipcMain, dialog, safeStorage, shell, nativeImage, nativeTheme } from 'electron';
 import { execFile, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -14,7 +14,7 @@ import { scanModels, sameModelFile } from './engine/models.js';
 import { addServer, loadProviders, modelConfig, providerOf, removeProvider, savedConfig, unavailable, updateProvider } from './providers.js';
 import { ConversationStore, moveAppData } from './conversations.js';
 import { listDir, readFileForViewer } from './files.js';
-import { createGithubRepo, gitStatus, gitConnect, gitDiff, gitFetch, gitSync, readyGh } from './git.js';
+import { createGithubRepo, findGh, gitChangeRemote, githubAccount, gitStatus, gitConnect, gitDiff, gitFetch, gitRemote, gitRemoveRemote, gitSync, readyGh } from './git.js';
 import { migrateLegacy, rebuildHistory, rebuildForAction } from './agent/rebuild.js';
 import { checkTor, torStatus, newCircuits, findTorProxy, requireTor, proxyEnv } from './agent/tor.js';
 
@@ -870,13 +870,55 @@ ipcMain.handle('git:diff', (_, file, opts) => gitDiff(activeCwd(), file, opts));
 ipcMain.handle('git:fetch', async () => gitFetch(activeCwd(), await gitEnv()));
 ipcMain.handle('git:sync', async () => gitSync(activeCwd(), await gitEnv()));
 ipcMain.handle('git:connect', async (_, url) => gitConnect(activeCwd(), url, await gitEnv()));
-ipcMain.handle('git:ghReady', async () => Boolean(await readyGh()));
+ipcMain.handle('git:remote', (_, dir) => gitRemote(dir));
+ipcMain.handle('git:setRemote', async (_, dir, url) => gitChangeRemote(dir, url, await gitEnv()));
+ipcMain.handle('git:removeRemote', (_, dir) => gitRemoveRemote(dir));
+
+// ---------- GitHub ----------
+// The token is encrypted by the system, in a file of its own: the settings go to the
+// interface, it never does.
+const githubTokenFile = () => path.join(app.getPath('userData'), 'github-token');
+const savedGithubToken = () => {
+  try {
+    return safeStorage.decryptString(fs.readFileSync(githubTokenFile()));
+  } catch {
+    return '';
+  }
+};
+// (a token goes through this process, which no proxy covers)
+const noDirectGithub = () => settings.config.torEnabled && settings.config.torShell;
+async function githubStatus() {
+  const env = await gitEnv().catch(() => ({}));
+  const gh = await readyGh();
+  const token = savedGithubToken();
+  const account = (o) => githubAccount({ ...o, env }).catch(() => null);
+  return {
+    ghInstalled: Boolean(findGh()),
+    gh: gh ? await account({ gh }) ?? '?' : null, // (logged in: its account, if it answers)
+    tokenSaved: Boolean(token),
+    token: token && !noDirectGithub() ? await account({ token }) : null,
+    canSave: safeStorage.isEncryptionAvailable(),
+  };
+}
+ipcMain.handle('github:status', githubStatus);
+ipcMain.handle('github:setToken', async (_, token) => {
+  if (noDirectGithub()) throw new Error('Un jeton ne peut pas être vérifié à travers Tor : utilisez gh.');
+  if (!safeStorage.isEncryptionAvailable()) throw new Error('Le chiffrement du système n’est pas disponible : le jeton ne peut pas être enregistré.');
+  const clean = String(token ?? '').trim();
+  if (!clean) throw new Error('Collez un jeton GitHub.');
+  await githubAccount({ token: clean });
+  fs.writeFileSync(githubTokenFile(), safeStorage.encryptString(clean), { mode: 0o600 });
+  return githubStatus();
+});
+ipcMain.handle('github:removeToken', () => {
+  fs.rmSync(githubTokenFile(), { force: true });
+  return githubStatus();
+});
 ipcMain.handle('git:createGithub', async (_, { name, isPrivate, token }) => {
   const env = await gitEnv();
   const gh = await readyGh();
-  // (a token goes through this process, which no proxy covers)
-  if (!gh && settings.config.torEnabled && settings.config.torShell) throw new Error('La création sur GitHub avec un jeton ne passe pas par Tor : installez gh, ou raccordez un dépôt existant.');
-  const url = await createGithubRepo({ name, isPrivate, gh, token, env });
+  if (!gh && noDirectGithub()) throw new Error('La création sur GitHub avec un jeton ne passe pas par Tor : installez gh, ou raccordez un dépôt existant.');
+  const url = await createGithubRepo({ name, isPrivate, gh, token: token || savedGithubToken(), env });
   await gitConnect(activeCwd(), url, env, { keep: true });
 });
 ipcMain.handle('agent:approve', (_, { id, ok, always, reason }) => {

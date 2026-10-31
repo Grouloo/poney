@@ -71,6 +71,11 @@ contextBridge.exposeInMainWorld('api', {
   gitFetch: () => ipcRenderer.invoke('git:fetch'),
   gitSync: () => ipcRenderer.invoke('git:sync'),
   gitConnect: (url) => ipcRenderer.invoke('git:connect', url),
-  gitGhReady: () => ipcRenderer.invoke('git:ghReady'),
+  gitRemote: (dir) => ipcRenderer.invoke('git:remote', dir),
+  gitSetRemote: (dir, url) => ipcRenderer.invoke('git:setRemote', dir, url),
+  gitRemoveRemote: (dir) => ipcRenderer.invoke('git:removeRemote', dir),
+  githubStatus: () => ipcRenderer.invoke('github:status'),
+  githubSetToken: (token) => ipcRenderer.invoke('github:setToken', token),
+  githubRemoveToken: () => ipcRenderer.invoke('github:removeToken'),
   gitCreateGithub: (repo) => ipcRenderer.invoke('git:createGithub', repo),
 });

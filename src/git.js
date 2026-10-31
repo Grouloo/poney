@@ -1,6 +1,6 @@
 // Git for the sidebar: the state of the repository, a file's diff, and the sync.
 // No Electron here. Nothing prompts, no credential is read here (GitHub goes through
-// gh's own login, or a token given for one call), and reading a repository runs none of the
+// gh's own login, or a token the caller gives), and reading a repository runs none of the
 // programs its config can name (fsmonitor, external diff, textconv).
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
@@ -153,6 +153,43 @@ export async function gitConnect(cwd, url, env, { keep = false } = {}) {
   }
 }
 
+const firstRemote = async (cwd) => {
+  const list = await remotes(cwd);
+  return list.includes(REMOTE) ? REMOTE : list[0] ?? null;
+};
+
+/** The remote of a project: its address, '' without one, null outside a repository. */
+export async function gitRemote(cwd) {
+  if (!cwd) return null;
+  try {
+    await git(cwd, ['rev-parse', '--show-toplevel']);
+  } catch {
+    return null;
+  }
+  const name = await firstRemote(cwd);
+  return name ? (await git(cwd, ['remote', 'get-url', name])).trim() : '';
+}
+
+/** Moves a project to another address, once it answers there (or sets its first remote, see gitConnect). */
+export async function gitChangeRemote(cwd, url, env) {
+  const name = await firstRemote(cwd);
+  if (!name) return gitConnect(cwd, url, env);
+  const target = String(url ?? '').trim();
+  if (!target || target.startsWith('-')) throw plain('Indiquez l’adresse du dépôt distant.');
+  try {
+    await git(cwd, ['ls-remote', '--quiet', target, 'HEAD'], { timeout: 60000, env });
+  } catch (e) {
+    throw plain(`Dépôt inaccessible : ${reason(e)}`);
+  }
+  await git(cwd, ['remote', 'set-url', name, target]);
+}
+
+/** Removes the remote: nothing changes on its side, nor in the local history. */
+export async function gitRemoveRemote(cwd) {
+  const name = await firstRemote(cwd);
+  if (name) await git(cwd, ['remote', 'remove', name]);
+}
+
 /** The gh program, or null. (From the Finder, the PATH lacks the usual folders.) */
 export function findGh(env = process.env) {
   const dirs = [...(env.PATH || '').split(path.delimiter), '/opt/homebrew/bin', '/usr/local/bin'];
@@ -181,8 +218,8 @@ export async function readyGh(gh = findGh()) {
 
 /**
  * Creates an empty repository on GitHub and returns the address to push to.
- * name: "repo", or "organization/repo". With gh, its login; else the token, for
- * this call only (the push then uses git's own login: https).
+ * name: "repo", or "organization/repo". With gh, its login; else the token (the
+ * push then uses git's own login: https).
  */
 export async function createGithubRepo({ name, isPrivate = true, gh = null, token = '', fetchFn = fetch, env }) {
   const m = String(name ?? '').trim().match(/^(?:([\w-]+)\/)?([\w.][\w.-]*)$/);
@@ -210,6 +247,18 @@ export async function createGithubRepo({ name, isPrivate = true, gh = null, toke
   const text = await res.text();
   if (!res.ok) throw plain(`Création impossible : ${githubMessage(text) || `HTTP ${res.status}`}`);
   return JSON.parse(text).clone_url;
+}
+
+/** The account behind gh or a token: its login. Throws when GitHub refuses it. */
+export async function githubAccount({ gh = null, token = '', fetchFn = fetch, env }) {
+  if (gh) return JSON.parse(await runGh(gh, ['api', 'user'], env)).login;
+  const res = await fetchFn('https://api.github.com/user', {
+    headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' },
+    signal: AbortSignal.timeout(15000),
+  });
+  const text = await res.text();
+  if (!res.ok) throw plain(`Jeton refusé par GitHub : ${githubMessage(text) || `HTTP ${res.status}`}`);
+  return JSON.parse(text).login;
 }
 
 /** What GitHub says went wrong, from its JSON. ("name already exists" comes in errors.) */
