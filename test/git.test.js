@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseStatus, parseLog, gitStatus, gitDiff, gitSync } from '../src/git.js';
+import { parseStatus, parseLog, gitStatus, gitDiff, gitSync, gitConnect, createGithubRepo, readyGh } from '../src/git.js';
 
 const run = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
 const write = (dir, name, text) => fs.writeFileSync(path.join(dir, name), text);
@@ -160,4 +160,113 @@ test('without a remote, the sync says so', async () => {
   const dir = repo();
   commit(dir, 'a.txt', 'a\n');
   await assert.rejects(gitSync(dir), /Aucun dépôt distant/);
+});
+
+// ---------- setting a remote ----------
+const bareRepo = () => {
+  const bare = fs.mkdtempSync(path.join(os.tmpdir(), 'poney-bare-'));
+  run(bare, 'init', '-q', '--bare', '-b', 'main');
+  return bare;
+};
+const remoteLog = (bare, ref = 'main') => run(bare, 'log', '--format=%s', ref).trim().split('\n');
+
+test('an empty remote gets the branch, which then follows it', async () => {
+  const dir = repo();
+  commit(dir, 'a.txt', 'a\n');
+  const bare = bareRepo();
+  await gitConnect(dir, bare);
+  const st = await gitStatus(dir);
+  assert.equal(st.hasRemote, true);
+  assert.equal(st.upstream, 'origin/main');
+  assert.deepEqual(remoteLog(bare), ['add a.txt']);
+});
+
+test('a remote with history: nothing is sent, the branch follows its namesake and the difference shows', async () => {
+  const { bare } = withRemote();
+  const dir = repo();
+  commit(dir, 'mine.txt', 'x\n');
+  await gitConnect(dir, bare);
+  const st = await gitStatus(dir);
+  assert.equal(st.upstream, 'origin/main');
+  assert.deepEqual([st.ahead, st.behind], [1, 1]);
+  assert.deepEqual(remoteLog(bare), ['add a.txt']);
+});
+
+test('a remote whose branches have other names gets nothing either', async () => {
+  const { bare } = withRemote();
+  const dir = repo();
+  run(dir, 'checkout', '-q', '-b', 'other');
+  commit(dir, 'mine.txt', 'x\n');
+  await gitConnect(dir, bare);
+  const st = await gitStatus(dir);
+  assert.equal(st.upstream, null);
+  assert.equal(run(bare, 'branch', '--list', 'other'), '');
+});
+
+test('a repository without a commit takes the history of the remote', async () => {
+  const { bare } = withRemote();
+  const dir = repo();
+  await gitConnect(dir, bare);
+  assert.equal(fs.readFileSync(path.join(dir, 'a.txt'), 'utf8'), 'a\n');
+  assert.equal((await gitStatus(dir)).upstream, 'origin/main');
+});
+
+test('a remote out of reach is not kept, unless it was just created', async () => {
+  const dir = repo();
+  commit(dir, 'a.txt', 'a\n');
+  await assert.rejects(gitConnect(dir, '/nonexistent/repo.git'), /inaccessible/);
+  assert.equal((await gitStatus(dir)).hasRemote, false);
+  await assert.rejects(gitConnect(dir, '/nonexistent/repo.git', undefined, { keep: true }), /créé et raccordé/);
+  assert.equal((await gitStatus(dir)).hasRemote, true);
+});
+
+test('a remote is never replaced, and an address cannot be an option', async () => {
+  const { a, bare } = withRemote();
+  await assert.rejects(gitConnect(a, bare), /déjà/);
+  const dir = repo();
+  await assert.rejects(gitConnect(dir, '--upload-pack=touch x'), /adresse/);
+  await assert.rejects(gitConnect(dir, '  '), /adresse/);
+  assert.equal((await gitStatus(dir)).hasRemote, false);
+});
+
+const answer = (status, body) => ({ ok: status < 400, status, text: async () => JSON.stringify(body) });
+
+test('a token creates the repository through the API, and stays out of the messages', async () => {
+  const calls = [];
+  const fetchFn = async (url, o) => { calls.push({ url, o }); return answer(201, { clone_url: 'https://github.com/me/p.git', ssh_url: 'git@github.com:me/p.git' }); };
+  assert.equal(await createGithubRepo({ name: 'p', token: 'tok', fetchFn }), 'https://github.com/me/p.git');
+  assert.equal(calls[0].url, 'https://api.github.com/user/repos');
+  assert.equal(calls[0].o.headers.Authorization, 'Bearer tok');
+  assert.deepEqual(JSON.parse(calls[0].o.body), { name: 'p', private: true });
+  await createGithubRepo({ name: 'org/p', isPrivate: false, token: 'tok', fetchFn });
+  assert.equal(calls[1].url, 'https://api.github.com/orgs/org/repos');
+  assert.equal(JSON.parse(calls[1].o.body).private, false);
+  const taken = async () => answer(422, { message: 'Repository creation failed.', errors: [{ message: 'name already exists on this account' }] });
+  await assert.rejects(createGithubRepo({ name: 'p', token: 'tok', fetchFn: taken }), (e) => /already exists/.test(e.message) && !e.message.includes('tok'));
+});
+
+test('nothing goes to GitHub without a valid name and a way in', async () => {
+  const fetchFn = async () => assert.fail('called');
+  await assert.rejects(createGithubRepo({ name: 'a b', token: 't', fetchFn }), /invalide/);
+  await assert.rejects(createGithubRepo({ name: '-x', token: 't', fetchFn }), /invalide/);
+  await assert.rejects(createGithubRepo({ name: 'p', fetchFn }), /jeton/);
+});
+
+test('gh, logged in, creates it with its own login and says which protocol to use', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'poney-gh-'));
+  const gh = path.join(dir, 'gh');
+  const log = path.join(dir, 'log');
+  fs.writeFileSync(gh, `#!/bin/sh
+echo "$@" >> "${log}"
+case "$1" in
+  auth) [ -f "${dir}/in" ] ;;
+  api) echo '{"clone_url":"https://github.com/me/p.git","ssh_url":"git@github.com:me/p.git"}' ;;
+  config) echo ssh ;;
+esac
+`, { mode: 0o755 });
+  assert.equal(await readyGh(gh), null);
+  fs.writeFileSync(path.join(dir, 'in'), '');
+  assert.equal(await readyGh(gh), gh);
+  assert.equal(await createGithubRepo({ name: 'p', gh }), 'git@github.com:me/p.git');
+  assert.match(fs.readFileSync(log, 'utf8'), /api --method POST user\/repos -f name=p -F private=true/);
 });

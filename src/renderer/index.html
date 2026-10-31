@@ -246,6 +246,38 @@
     </form>
   </dialog>
 
+  <dialog id="remoteDialog" class="prompt-dialog remote-dialog">
+    <form class="prompt-form" id="remoteForm">
+      <div class="prompt-head">
+        <h2>Dépôt distant</h2>
+        <div class="spacer"></div>
+        <button type="button" id="remoteClose" class="ghost icon" title="Fermer">✕</button>
+      </div>
+      <div class="remote-body">
+        <div class="remote-tabs">
+          <label><input type="radio" name="remoteKind" value="existing" checked> Raccorder un dépôt existant</label>
+          <label><input type="radio" name="remoteKind" value="github"> Créer sur GitHub</label>
+        </div>
+        <div id="remoteExisting" class="remote-page">
+          <label>Adresse du dépôt <input id="remoteUrl" type="text" spellcheck="false" autocomplete="off" placeholder="git@github.com:moi/projet.git"></label>
+          <p class="muted">Vos commits ne sont pas envoyés si le dépôt contient déjà quelque chose : la branche suit celle du même nom, et « Synchroniser » fait le reste.</p>
+        </div>
+        <div id="remoteGithub" class="remote-page hidden">
+          <label>Nom du dépôt <input id="remoteName" type="text" spellcheck="false" autocomplete="off" placeholder="projet ou organisation/projet"></label>
+          <label class="remote-check"><input id="remotePrivate" type="checkbox" checked> Dépôt privé</label>
+          <label id="remoteTokenRow">Jeton GitHub <input id="remoteToken" type="password" autocomplete="off" placeholder="github_pat_…"></label>
+          <p id="remoteNote" class="muted"></p>
+        </div>
+        <div id="remoteError" class="git-error"></div>
+      </div>
+      <div class="prompt-foot">
+        <div class="spacer"></div>
+        <button type="button" id="remoteCancel" class="ghost">Annuler</button>
+        <button type="submit" id="remoteSubmit" class="primary">Raccorder</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="settingsDialog" class="prompt-dialog nav-dialog settings-dialog">
     <form id="settingsForm" class="prompt-form">
       <div class="prompt-head">

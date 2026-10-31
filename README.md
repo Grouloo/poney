@@ -127,7 +127,9 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   conversations and the files.
 - **Git**, the second section of the files' card (selector at the top, icons at the bottom, a two-finger swipe, or ⇧⌘F for the files and ⇧⌘G for Git):
   "Synchroniser" with what goes up and down (fast-forward only: a diverged branch is refused; a branch without
-  upstream is published), the staged files, the tracked changes, recent commits. A click on a file opens its diff
+  upstream is published; without a remote, the button sets one: an existing repository, whose branch is then followed
+  and to which nothing is sent unless it is empty, or a new one on GitHub, private by default, through `gh` or a token
+  that is not kept), the staged files, the tracked changes, recent commits. A click on a file opens its diff
   in a side panel. The remote is fetched at most every 5 minutes while this section is shown, or on ↻; through
   Tor when commands are.
 - **Right click on a conversation's card**: mark it as read, rename it, delete it.

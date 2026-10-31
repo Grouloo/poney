@@ -2751,15 +2751,15 @@ function renderGit() {
   const sync = document.createElement('button');
   sync.type = 'button';
   sync.className = 'git-sync';
-  sync.disabled = gitSyncing || !st.hasRemote || !st.branch;
-  sync.textContent = gitSyncing ? 'Synchronisation…' : 'Synchroniser';
+  sync.disabled = gitSyncing || (st.hasRemote && !st.branch);
+  sync.textContent = !st.hasRemote ? 'Configurer un dépôt distant' : gitSyncing ? 'Synchronisation…' : 'Synchroniser';
   if (st.upstream) {
     const counts = sync.appendChild(document.createElement('span'));
     counts.className = 'git-counts';
     counts.textContent = `↑${st.ahead} ↓${st.behind}`;
   }
-  sync.dataset.tip = !st.hasRemote ? 'Aucun dépôt distant' : !st.branch ? 'Aucune branche : la tête est détachée' : st.upstream ? `Avec ${st.upstream}` : 'Publier la branche';
-  sync.onclick = syncGit;
+  sync.dataset.tip = !st.hasRemote ? 'Raccorder un dépôt existant, ou en créer un sur GitHub' : !st.branch ? 'Aucune branche : la tête est détachée' : st.upstream ? `Avec ${st.upstream}` : 'Publier la branche';
+  sync.onclick = st.hasRemote ? syncGit : openRemoteDialog;
   const items = [sync];
   if (gitError) {
     const error = div('git-error');
@@ -2798,6 +2798,67 @@ async function syncGit() {
   renderGit();
   onFilesChanged(); // (what came down changed the files)
 }
+
+// A remote for a repository without one: an existing one, or a new one on GitHub.
+const remoteDialog = $('remoteDialog');
+closeOnOutside(remoteDialog, () => Boolean($('remoteUrl').value || $('remoteToken').value));
+const remoteKind = () => remoteDialog.querySelector('[name=remoteKind]:checked').value;
+let remoteDir = '';
+
+function showRemoteKind() {
+  const github = remoteKind() === 'github';
+  $('remoteExisting').classList.toggle('hidden', github);
+  $('remoteGithub').classList.toggle('hidden', !github);
+  $('remoteSubmit').textContent = github ? 'Créer sur GitHub' : 'Raccorder';
+  $('remoteError').textContent = '';
+  (github ? $('remoteName') : $('remoteUrl')).focus();
+}
+
+async function openRemoteDialog() {
+  remoteDir = activeDir();
+  $('remoteUrl').value = '';
+  $('remoteToken').value = '';
+  $('remoteName').value = baseName(remoteDir).replace(/[^\w.-]+/g, '-');
+  $('remotePrivate').checked = true;
+  remoteDialog.querySelector('[value=existing]').checked = true;
+  $('remoteSubmit').disabled = false;
+  remoteDialog.showModal();
+  showRemoteKind();
+  const gh = await window.api.gitGhReady().catch(() => false);
+  $('remoteTokenRow').classList.toggle('hidden', gh);
+  $('remoteNote').textContent = gh
+    ? 'Le dépôt est créé avec le compte connecté à gh, puis la branche y est envoyée.'
+    : 'gh n’est pas disponible : il faut un jeton GitHub pouvant créer des dépôts. Il sert à cette création, sans être enregistré. La branche est ensuite envoyée avec votre connexion Git habituelle.';
+}
+
+for (const radio of remoteDialog.querySelectorAll('[name=remoteKind]')) radio.onchange = showRemoteKind;
+for (const id of ['remoteCancel', 'remoteClose']) $(id).onclick = () => remoteDialog.close();
+remoteDialog.addEventListener('close', () => { $('remoteToken').value = ''; });
+$('remoteForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const github = remoteKind() === 'github';
+  $('remoteSubmit').disabled = true;
+  $('remoteError').textContent = '';
+  let failure = '';
+  try {
+    if (github) await window.api.gitCreateGithub({ name: $('remoteName').value, isPrivate: $('remotePrivate').checked, token: $('remoteToken').value });
+    else await window.api.gitConnect($('remoteUrl').value);
+  } catch (err) {
+    failure = errorText(err);
+  }
+  $('remoteSubmit').disabled = false;
+  const st = await window.api.gitStatus().catch(() => null);
+  if (failure && !st?.hasRemote) {
+    $('remoteError').textContent = failure;
+    return;
+  }
+  // (the remote is set: what went wrong after that shows in the panel)
+  gitError = failure;
+  remoteDialog.close();
+  lastFetch.set(remoteDir, Date.now());
+  refreshGit();
+  onFilesChanged();
+});
 
 // The diff of a file, in its own side panel.
 function closeDiffPanel() {

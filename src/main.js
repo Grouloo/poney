@@ -14,7 +14,7 @@ import { scanModels, sameModelFile } from './engine/models.js';
 import { addServer, loadProviders, modelConfig, providerOf, removeProvider, savedConfig, unavailable, updateProvider } from './providers.js';
 import { ConversationStore, moveAppData } from './conversations.js';
 import { listDir, readFileForViewer } from './files.js';
-import { gitStatus, gitDiff, gitFetch, gitSync } from './git.js';
+import { createGithubRepo, gitStatus, gitConnect, gitDiff, gitFetch, gitSync, readyGh } from './git.js';
 import { migrateLegacy, rebuildHistory, rebuildForAction } from './agent/rebuild.js';
 import { checkTor, torStatus, newCircuits, findTorProxy, requireTor, proxyEnv } from './agent/tor.js';
 
@@ -869,6 +869,16 @@ ipcMain.handle('git:status', () => gitStatus(activeCwd()));
 ipcMain.handle('git:diff', (_, file, opts) => gitDiff(activeCwd(), file, opts));
 ipcMain.handle('git:fetch', async () => gitFetch(activeCwd(), await gitEnv()));
 ipcMain.handle('git:sync', async () => gitSync(activeCwd(), await gitEnv()));
+ipcMain.handle('git:connect', async (_, url) => gitConnect(activeCwd(), url, await gitEnv()));
+ipcMain.handle('git:ghReady', async () => Boolean(await readyGh()));
+ipcMain.handle('git:createGithub', async (_, { name, isPrivate, token }) => {
+  const env = await gitEnv();
+  const gh = await readyGh();
+  // (a token goes through this process, which no proxy covers)
+  if (!gh && settings.config.torEnabled && settings.config.torShell) throw new Error('La création sur GitHub avec un jeton ne passe pas par Tor : installez gh, ou raccordez un dépôt existant.');
+  const url = await createGithubRepo({ name, isPrivate, gh, token, env });
+  await gitConnect(activeCwd(), url, env, { keep: true });
+});
 ipcMain.handle('agent:approve', (_, { id, ok, always, reason }) => {
   if (always) {
     settings.config.approval = 'auto';

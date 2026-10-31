@@ -70,4 +70,7 @@ contextBridge.exposeInMainWorld('api', {
   gitDiff: (file, opts) => ipcRenderer.invoke('git:diff', file, opts),
   gitFetch: () => ipcRenderer.invoke('git:fetch'),
   gitSync: () => ipcRenderer.invoke('git:sync'),
+  gitConnect: (url) => ipcRenderer.invoke('git:connect', url),
+  gitGhReady: () => ipcRenderer.invoke('git:ghReady'),
+  gitCreateGithub: (repo) => ipcRenderer.invoke('git:createGithub', repo),
 });
