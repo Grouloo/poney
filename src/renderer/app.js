@@ -14,7 +14,6 @@ const transcript = $('transcript');
 const input = $('input');
 const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const sendBtn = $('sendBtn');
-const modelSelect = $('modelSelect');
 const form = $('settingsForm');
 
 let settings = null;
@@ -108,6 +107,23 @@ function renderSettings() {
   form.elements.maxParallelAgents.disabled = settings.config.parallelAgents === false; // (one at a time)
   if (Boolean(torTimer) !== Boolean(settings.config.torEnabled)) scheduleTorStatus();
   renderWelcomeProject();
+  renderChoice();
+}
+
+// ---------- the model of the conversation ----------
+const LOCAL_ICON = '<svg class="engine-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="3" width="12" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M5.5 13.5h5M8 11v2.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
+const CLAUDE_ICON = `<svg class="engine-icon" viewBox="0 0 16 16" aria-hidden="true"><g stroke="#d97757" stroke-width="1.5" stroke-linecap="round">${[0, 30, 60, 90, 120, 150].map((a) => `<path d="M8 1.5v13" transform="rotate(${a} 8 8)"/>`).join('')}</g></svg>`;
+const engineIcon = (engine) => (engine === 'claude' ? CLAUDE_ICON : LOCAL_ICON);
+const EFFORT_LABEL = { low: 'Faible', medium: 'Moyen', high: 'Élevé', xhigh: 'Très élevé', max: 'Maximum' };
+let localModels = [];
+let claude = { available: false, models: [] };
+const choice = () => settings.active?.choice ?? { engine: 'local', model: null };
+const usesClaude = () => choice().engine === 'claude';
+const claudeModel = () => claude.models.find((m) => m.value === choice().model) ?? claude.models[0];
+
+async function setChoice(patch) {
+  settings = await window.api.setChoice(patch);
+  renderSettings();
 }
 
 async function refreshModels() {
@@ -119,16 +135,73 @@ async function refreshModels() {
   }
   const current = settings.config.model;
   if (current && !models.includes(current)) models.unshift(current);
-  modelSelect.innerHTML = models.length
-    ? models.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join('')
-    : '<option value="">aucun modèle</option>';
-  modelSelect.value = current || models[0] || '';
+  localModels = models;
   $('modelList').innerHTML = models.map((m) => `<option value="${esc(m)}">`).join('');
-  if (!current && models[0]) {
-    settings = await window.api.setConfig({ model: models[0] });
-    renderSettings();
-  }
+  if (!current && models[0]) settings = await window.api.setConfig({ model: models[0] });
+  renderChoice();
+  claude = await window.api.claudeStatus().catch(() => claude);
+  renderChoice();
 }
+
+/** The input follows the model: its name, and what can be set for it. */
+function renderChoice() {
+  const c = choice();
+  const isClaude = c.engine === 'claude';
+  const picker = $('modelPicker');
+  picker.querySelector('.model-icon').innerHTML = engineIcon(c.engine);
+  picker.querySelector('.model-name').textContent = isClaude ? claudeModel()?.name ?? c.model ?? 'Claude' : c.model || settings.config.model || 'aucun modèle';
+  document.body.classList.toggle('claude-mode', isClaude);
+  $('claudeControls').classList.toggle('hidden', !isClaude);
+  document.querySelector('.toggles').classList.toggle('hidden', isClaude);
+  if (!isClaude) return;
+  const levels = claudeModel()?.efforts ?? [];
+  $('effortSelect').innerHTML = levels.map((l) => `<option value="${l}">${EFFORT_LABEL[l] ?? l}</option>`).join('');
+  $('effortSelect').classList.toggle('hidden', !levels.length);
+  $('effortSelect').value = levels.includes(c.effort) ? c.effort : levels.includes('high') ? 'high' : levels[0] ?? '';
+  $('modeSelect').querySelector('[value="auto"]').disabled = claudeModel()?.auto === false;
+  $('modeSelect').value = c.mode ?? 'manual';
+}
+$('effortSelect').addEventListener('change', (e) => setChoice({ effort: e.target.value }));
+$('modeSelect').addEventListener('change', (e) => setChoice({ mode: e.target.value }));
+
+function openModelMenu() {
+  const menu = $('modelMenu');
+  const c = choice();
+  menu.innerHTML = '';
+  const row = (engine, model, name, off) => {
+    const r = menu.appendChild(document.createElement('button'));
+    r.type = 'button';
+    r.className = `pm-row model-row${engine === c.engine && model === (c.model ?? (engine === 'local' ? settings.config.model : claudeModel()?.value)) ? ' selected' : ''}`;
+    r.innerHTML = `<span class="pm-icon">${engineIcon(engine)}</span><span class="pm-name">${esc(name)}</span>`;
+    r.disabled = off;
+    if (off) r.title = 'Une conversation commencée garde son type de modèle';
+    r.onclick = () => {
+      closeModelMenu();
+      const m = claude.models.find((x) => x.value === model);
+      setChoice(engine === 'claude' ? { engine, model, effort: c.effort ?? (m?.efforts.includes('high') ? 'high' : m?.efforts[0]), mode: c.mode ?? 'manual' } : { engine, model });
+    };
+  };
+  const started = settings.active?.started;
+  for (const m of localModels) row('local', m, m, started && c.engine !== 'local');
+  if (!localModels.length) menu.appendChild(div('pm-row muted', 'aucun modèle local'));
+  if (claude.available || claude.installed) menu.appendChild(div('ctx-sep'));
+  for (const m of claude.models) row('claude', m.value, m.name, started && c.engine !== 'claude');
+  if (claude.installed && !claude.available) {
+    menu.appendChild(div('pm-row muted model-hint', `<span class="pm-icon">${CLAUDE_ICON}</span><span class="pm-name">Pour les modèles Claude : lancez « claude auth login » dans un terminal</span>`));
+  }
+  menu.classList.remove('hidden');
+}
+function closeModelMenu() { $('modelMenu').classList.add('hidden'); }
+$('modelPicker').onclick = async (e) => {
+  e.stopPropagation();
+  if (!$('modelMenu').classList.contains('hidden')) return closeModelMenu();
+  settings = await window.api.getSettings(); // (has it started since?)
+  if (!claude.available) claude = await window.api.claudeStatus().catch(() => claude); // (logged in since?)
+  openModelMenu();
+};
+$('modelMenu').onclick = (e) => e.stopPropagation();
+document.addEventListener('click', closeModelMenu);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModelMenu(); });
 
 form.addEventListener('change', async (e) => {
   const el = e.target;
@@ -147,10 +220,6 @@ form.addEventListener('change', async (e) => {
   if (el.name === 'model') refreshModels();
 });
 
-modelSelect.addEventListener('change', async () => {
-  settings = await window.api.setConfig({ model: modelSelect.value });
-  renderSettings();
-});
 $('refreshModels').onclick = refreshModels;
 $('autoApprove').onchange = async (e) => {
   settings = await window.api.setConfig({ approval: e.target.checked ? 'auto' : 'ask' });
@@ -631,7 +700,7 @@ async function submit() {
     onWorkspaceChanged();
     setInput(text);
   }
-  if (!settings.config.model) {
+  if (!usesClaude() && !settings.config.model) {
     openSettings('server');
     $('status').textContent = 'Choisissez un modèle dans les réglages.';
     return;
@@ -1413,7 +1482,8 @@ function onApproval(req) {
   setTimeout(markWaiting);
   const bar = div('approval');
   bar.innerHTML = '<span></span><button class="no">Refuser</button><button class="always">Toujours autoriser</button><button class="yes">Exécuter</button>';
-  bar.querySelector('span').textContent = req.agentTitle ? `Sous-agent « ${req.agentTitle} » : exécuter cette commande ?` : 'Exécuter cette commande ?';
+  if (req.claude) bar.querySelector('.always').remove(); // (its own rules are the mode's)
+  bar.querySelector('span').textContent = req.claude ? 'Autoriser cette action ?' : req.agentTitle ? `Sous-agent « ${req.agentTitle} » : exécuter cette commande ?` : 'Exécuter cette commande ?';
   bar.querySelector('.yes').onclick = () => { bar.remove(); window.api.approve(req.id, true, false); };
   // Refusing asks why (optional): the model is told, and can change its approach.
   bar.querySelector('.no').onclick = () => {
@@ -1430,7 +1500,7 @@ function onApproval(req) {
     bar.replaceWith(why);
     input.focus();
   };
-  bar.querySelector('.always').onclick = async () => {
+  if (!req.claude) bar.querySelector('.always').onclick = async () => {
     bar.remove();
     settings = await window.api.approve(req.id, true, true);
     renderSettings();
@@ -2073,7 +2143,7 @@ function conversationItem(c, current) {
   li.dataset.place = c.id;
   li.dataset.project = projectOf(c);
   li.classList.toggle('active', c.id === current);
-  li.innerHTML = '<div class="card-top"><span class="title"></span><span class="state"></span><span class="pill"></span><span class="card-actions"><button class="ren">✎</button><button class="del" title="Supprimer">✕</button></span></div><div class="card-meta"><span class="project"></span><span class="when"></span></div>';
+  li.innerHTML = '<div class="card-top"><span class="title"></span><span class="state"></span><span class="pill"></span><span class="card-actions"><button class="ren">✎</button><button class="del" title="Supprimer">✕</button></span></div><div class="card-meta"><span class="project"></span><span class="card-engine"></span><span class="when"></span></div>';
   li.querySelector('.title').textContent = c.title;
   li.querySelector('.title').title = c.title;
   // How many things wait for the user: approvals (orange), answers to read (blue).
@@ -2089,6 +2159,8 @@ function conversationItem(c, current) {
   const project = li.querySelector('.project');
   project.innerHTML = `${projectGlyph(projectOf(c))} ${esc(c.offProject ? 'Hors projet' : baseName(c.workspace || ''))}`;
   project.title = c.offProject ? 'Conversation sans dossier de projet' : c.workspace || '';
+  li.querySelector('.card-engine').innerHTML = engineIcon(c.engine);
+  li.querySelector('.card-engine').title = c.engine === 'claude' ? 'Modèle Claude' : 'Modèle local';
   const when = li.querySelector('.when');
   if (category(c) === 'busy' && c.workingSince) {
     when.dataset.since = c.workingSince;

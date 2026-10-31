@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Agent, DEFAULT_CONFIG } from './agent/agent.js';
 import { loadSkills, skillDirs } from './agent/skills.js';
+import { ClaudeAgent, findClaude, claudeLoggedIn, claudeModels } from './agent/claude.js';
 import { listModels } from './agent/llm.js';
 import { ConversationStore, moveAppData } from './conversations.js';
 import { listDir, readFileForViewer } from './files.js';
@@ -96,34 +97,50 @@ class Session {
     this.unread = conv?.unread ?? 0; // answers finished in the background, not seen since (saved with the conversation)
     this.finished = false; // finished while shown: stays with the finished ones until the user leaves it
     this.draft = conv?.draft ?? ''; // what is typed in the input, not sent
+    // The model of this conversation: { engine: 'local' | 'claude', model, effort, mode }.
+    this.choice = conv ? conv.choice ?? { engine: 'local', model: null } : { ...(settings.lastChoice ?? { engine: 'local', model: null }) };
     this.draftTimer = null;
     this.workingSince = null; // when the turn under way started
     this.usedAt = Date.now();
   }
 
   get running() { return Boolean(this.agent?.running); }
+  get started() { return Boolean((this.agent?.messages ?? this.conv?.messages)?.length); }
 
   getAgent() {
     if (!this.cwd) throw new Error('Choisissez d’abord un dossier de projet.');
-    if (!this.agent || this.agent.cwd !== this.cwd) {
+    const claude = this.choice.engine === 'claude';
+    if (!this.agent || this.agent.cwd !== this.cwd || Boolean(this.agent.isClaude) !== claude) {
       this.agent?.reset();
-      const agent = new Agent({
-        cwd: this.cwd,
-        offProject: this.offProject,
-        triage: true, // the assessment before acting, on unless the conversation's steps turn it off
-        skillsDir: userSkills(),
-        config: settings.config,
-        approve: (req) => new Promise((resolve) => {
-          this.approvals.set(req.id, { req, resolve });
-          if (this === active) send('agent:approval', { ...req, session: this.key });
-          send('sessions:changed');
-        }),
+      const approve = (req) => new Promise((resolve) => {
+        this.approvals.set(req.id, { req, resolve });
+        if (this === active) send('agent:approval', { ...req, session: this.key });
+        send('sessions:changed');
       });
+      const agent = claude
+        ? new ClaudeAgent({ cwd: this.cwd, executable: findClaude(), approve, skillsDir: userSkills() })
+        : new Agent({
+          cwd: this.cwd,
+          offProject: this.offProject,
+          triage: true, // the assessment before acting, on unless the conversation's steps turn it off
+          skillsDir: userSkills(),
+          config: settings.config,
+          approve,
+        });
       agent.on('event', (ev) => this.onEvent(ev));
       this.agent = agent;
     }
-    this.agent.config = { ...DEFAULT_CONFIG, ...settings.config };
+    this.applyConfig();
     return this.agent;
+  }
+
+  /** The settings, and this conversation's model. */
+  applyConfig() {
+    this.agent.config = { ...DEFAULT_CONFIG, ...settings.config, ...(this.choice.engine === 'local' && this.choice.model ? { model: this.choice.model } : {}) };
+    if (this.agent.isClaude) {
+      this.agent.choice = this.choice;
+      this.agent.autoSkills = settings.config.autoSkills;
+    }
   }
 
   onEvent(ev) {
@@ -171,6 +188,8 @@ class Session {
       conv.checkpoints = agent.checkpoints;
       conv.archives = agent.archives;
     }
+    conv.choice = this.choice;
+    if (agent?.isClaude) conv.claudeSession = agent.sessionId;
     if (this.draft.trim()) conv.draft = this.draft;
     else delete conv.draft;
     conv.unread = this.unread;
@@ -255,7 +274,14 @@ const current = () => active ?? activate(new Session({ cwd: settings.workspace }
 const saveAll = () => { for (const s of sessions.values()) s.keepDraft(); };
 
 /** The settings, plus where the agent works now (for the window). */
-const publicSettings = () => ({ ...settings, active: { offProject: Boolean(active?.offProject), cwd: activeCwd() || '', session: active?.key ?? null } });
+const publicSettings = () => ({
+  ...settings,
+  active: {
+    offProject: Boolean(active?.offProject), cwd: activeCwd() || '', session: active?.key ?? null,
+    choice: active?.choice ?? { engine: 'local', model: null },
+    started: Boolean(active?.started),
+  },
+});
 
 /** Changes the current project (sessions in other folders go on). */
 function setWorkspace(dir) {
@@ -284,7 +310,7 @@ ipcMain.handle('settings:setConfig', (_, patch) => {
   settings.config = { ...settings.config, ...patch };
   saveSettings();
   nativeTheme.themeSource = settings.config.theme;
-  for (const s of sessions.values()) if (s.agent) s.agent.config = { ...DEFAULT_CONFIG, ...settings.config };
+  for (const s of sessions.values()) if (s.agent) s.applyConfig();
   return publicSettings();
 });
 ipcMain.handle('workspace:choose', async () => {
@@ -426,6 +452,7 @@ ipcMain.handle('conversations:list', () => {
     c.finished = s.finished;
     c.draft = Boolean(s.draft.trim());
     c.workingSince = s.workingSince;
+    c.engine = s.choice.engine;
   }
   return { current: active?.key ?? null, all };
 });
@@ -438,6 +465,34 @@ ipcMain.handle('conversations:newOffProject', () => {
   return publicSettings();
 });
 ipcMain.handle('session:current', () => sessionView(current()));
+// The Claude models, when Claude is installed here and its login works (asked once: it starts a process).
+let claudeInfo = null;
+ipcMain.handle('claude:status', async () => {
+  const executable = findClaude();
+  if (!executable) return { available: false, installed: false, models: [] };
+  if (!(await claudeLoggedIn(executable))) {
+    claudeInfo = null;
+    return { available: false, installed: true, models: [] };
+  }
+  claudeInfo ??= claudeModels(executable).then((models) => ({ available: models.length > 0, installed: true, models })).catch((e) => {
+    logError('claude', e);
+    claudeInfo = null;
+    return { available: false, installed: true, models: [] };
+  });
+  return claudeInfo;
+});
+// The model of the conversation shown. Once it has started, its engine stays: the two
+// keep their histories apart.
+ipcMain.handle('session:setChoice', (_, patch) => {
+  const s = current();
+  if (s.started && patch.engine && patch.engine !== s.choice.engine) return publicSettings();
+  s.choice = { ...s.choice, ...patch };
+  settings.lastChoice = s.choice;
+  saveSettings();
+  if (s.agent && Boolean(s.agent.isClaude) === (s.choice.engine === 'claude')) s.applyConfig();
+  if (s.conv) s.save({ touch: false });
+  return publicSettings();
+});
 // The skills for the menu of the input (what /name can call here).
 ipcMain.handle('skills:list', () => loadSkills(skillDirs(activeCwd(), userSkills())).map(({ name, description, author, origin }) => ({ name, description, author, origin })));
 // What is typed in the input of the conversation shown (saved soon, and when the user leaves it).
@@ -468,6 +523,7 @@ ipcMain.handle('conversations:open', (_, id) => {
   a.systemPrompt = loaded.systemPrompt ?? null;
   a.checkpoints = loaded.checkpoints ?? [];
   a.archives = loaded.archives ?? [];
+  if (a.isClaude) a.sessionId = loaded.claudeSession ?? null;
   a.upgradeReasoning(); // older reasoning blocks -> short notes
   if (loaded.inProgress) {
     // The app stopped during a turn (crash, forced quit): say so, and how to go on.
@@ -652,7 +708,7 @@ ipcMain.handle('agent:approve', (_, { id, ok, always, reason }) => {
   if (always) {
     settings.config.approval = 'auto';
     saveSettings();
-    for (const s of sessions.values()) if (s.agent) s.agent.config.approval = 'auto';
+    for (const s of sessions.values()) if (s.agent) s.applyConfig();
   }
   // (the approval may belong to any session)
   for (const s of sessions.values()) {

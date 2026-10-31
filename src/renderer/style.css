@@ -866,3 +866,20 @@ body.running .resume-btn { display: none; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::backdrop { transition-duration: 0s !important; animation-duration: 0s !important; }
 }
+
+/* ---------- the model of the conversation ---------- */
+.model-wrap { position: relative; flex: 0 1 auto; min-width: 0; }
+.model-picker { display: flex; align-items: center; gap: 6px; max-width: 100%; }
+.model-picker .model-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.engine-icon { display: block; width: 14px; height: 14px; flex: none; }
+.model-icon { flex: none; }
+.model-menu { left: auto; right: 0; top: auto; bottom: calc(100% + 6px); min-width: 240px; max-height: 50vh; }
+.model-row { width: 100%; background: none; border: none; color: var(--text); text-align: left; }
+.model-row:disabled { opacity: 0.45; cursor: default; }
+.model-row.selected .pm-name { color: var(--accent); }
+.claude-controls { display: flex; align-items: center; gap: 2px; flex: none; }
+.card-engine { flex: none; color: var(--muted); }
+/* (with a Claude model, the Claude harness has its own: Poney's stay out of the way) */
+.claude-mode #ctxGauge, .claude-mode #memoryBtn, .claude-mode #convSettingsBtn, .claude-mode .resume-btn, .claude-mode .edit-msg { display: none !important; }
+.model-hint { align-items: flex-start; cursor: default; }
+.model-hint .pm-name { white-space: normal; font-size: 13px; }

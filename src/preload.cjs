@@ -30,6 +30,8 @@ contextBridge.exposeInMainWorld('api', {
   onConversationsChanged: (fn) => ipcRenderer.on('conversations:changed', (_, id) => fn(id)),
   onSessionsChanged: (fn) => ipcRenderer.on('sessions:changed', () => fn()),
   onRenameConversation: (fn) => ipcRenderer.on('ui:renameConversation', () => fn()),
+  claudeStatus: () => ipcRenderer.invoke('claude:status'),
+  setChoice: (patch) => ipcRenderer.invoke('session:setChoice', patch),
   listSkills: () => ipcRenderer.invoke('skills:list'),
   setDraft: (text) => ipcRenderer.invoke('session:setDraft', text),
   onOpenSettings: (fn) => ipcRenderer.on('ui:openSettings', () => fn()),

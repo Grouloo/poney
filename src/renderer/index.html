@@ -81,8 +81,19 @@
             <input type="checkbox" id="autoApprove" aria-label="Sans confirmation"><svg class="toggle-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M9 1.8 3.6 9h3.6L6.8 14.2 12.4 7H8.7z"/></svg>
           </label>
         </div>
+        <div id="claudeControls" class="claude-controls hidden">
+          <select id="effortSelect" class="model-select" data-tip="Niveau d’effort"></select>
+          <select id="modeSelect" class="model-select" data-tip="Mode : Auto agit seul, Manuel demande avant chaque action sensible, Plan propose avant d’agir">
+            <option value="auto">Auto</option>
+            <option value="manual">Manuel</option>
+            <option value="plan">Plan</option>
+          </select>
+        </div>
         <div class="spacer-row"></div>
-        <select id="modelSelect" class="model-select" data-tip="Modèle"></select>
+        <div class="model-wrap">
+          <button id="modelPicker" class="model-select model-picker" type="button" data-tip="Modèle"><span class="model-icon"></span><span class="model-name"></span></button>
+          <div id="modelMenu" class="project-menu model-menu hidden"></div>
+        </div>
         <button id="sendBtn" class="primary">Envoyer</button>
       </div>
     </div>
