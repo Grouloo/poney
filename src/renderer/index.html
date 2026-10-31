@@ -31,6 +31,7 @@
         <span class="picker-icon"></span><span class="picker-name"></span>
         <svg class="picker-chev" viewBox="0 0 12 12" width="11" height="11" aria-hidden="true"><path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
+      <button id="projectSettingsBtn" type="button" class="ghost icon" title="Paramètres des projets"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M2 4.5h6.5M12 4.5h2M2 11.5h2M7.5 11.5H14"/><circle cx="10.2" cy="4.5" r="1.7"/><circle cx="5.8" cy="11.5" r="1.7"/></svg></button>
       <button type="button" class="ghost icon deck-swap"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 5.5h10M10 3l2.5 2.5L10 8M13.5 10.5h-10M6 8l-2.5 2.5L6 13"/></svg></button>
       <div id="projectMenu" class="project-menu hidden"></div>
     </div>
@@ -143,38 +144,46 @@
   </section>
   </div>
 
-  <dialog id="projectDialog" class="prompt-dialog project-dialog">
+  <dialog id="projectDialog" class="prompt-dialog nav-dialog settings-dialog">
     <form method="dialog" class="prompt-form">
       <div class="prompt-head">
-        <h2 id="projectDialogTitle"></h2>
+        <h2>Paramètres des projets</h2>
         <div class="spacer"></div>
         <button type="button" id="projectDialogClose" class="ghost icon" title="Fermer">✕</button>
       </div>
-      <div class="steps-body">
-        <div id="projectDialogPath" class="muted project-path"></div>
-        <div class="project-field">
-          <div class="project-icon-row">
-            <span id="projectIconPreview" class="project-icon-preview"></span>
-            <span class="project-field-label">Icône</span>
-            <div class="spacer"></div>
-            <button type="button" id="projectImage" class="ghost" title="Une image de votre ordinateur">Image…</button>
-            <button type="button" id="projectIconClear" class="ghost">Retirer</button>
-          </div>
-          <div class="icon-picker">
-            <div class="ip-head">
-              <div class="ip-tabs" role="tablist">
-                <button type="button" data-tab="emoji" class="active">Émoji</button>
-                <button type="button" data-tab="icon">Icônes</button>
-              </div>
-              <input id="ipSearch" type="search" placeholder="Rechercher, ou coller un émoji…" autocomplete="off">
+      <div class="nav-body">
+        <nav id="projectNav" class="dialog-nav project-nav"></nav>
+        <div class="nav-pages">
+          <div class="nav-page steps-body">
+            <div>
+              <div id="projectDialogTitle" class="project-field-label"></div>
+              <div id="projectDialogPath" class="muted project-path"></div>
             </div>
-            <div id="ipColors" class="ip-colors hidden"></div>
-            <div id="ipGrid" class="ip-grid"></div>
+            <div class="project-field">
+              <div class="project-icon-row">
+                <span id="projectIconPreview" class="project-icon-preview"></span>
+                <span class="project-field-label">Icône</span>
+                <div class="spacer"></div>
+                <button type="button" id="projectImage" class="ghost" title="Une image de votre ordinateur">Image…</button>
+                <button type="button" id="projectIconClear" class="ghost">Retirer</button>
+              </div>
+              <div class="icon-picker">
+                <div class="ip-head">
+                  <div class="ip-tabs" role="tablist">
+                    <button type="button" data-tab="emoji" class="active">Émoji</button>
+                    <button type="button" data-tab="icon">Icônes</button>
+                  </div>
+                  <input id="ipSearch" type="search" placeholder="Rechercher, ou coller un émoji…" autocomplete="off">
+                </div>
+                <div id="ipColors" class="ip-colors hidden"></div>
+                <div id="ipGrid" class="ip-grid"></div>
+              </div>
+            </div>
+            <div id="projectDanger" class="project-danger">
+              <div><b>Supprimer le projet</b><div class="muted">Ses conversations sont supprimées de Poney. Le dossier et ses fichiers ne sont pas touchés.</div></div>
+              <button type="button" id="projectDelete" class="danger-btn">Supprimer…</button>
+            </div>
           </div>
-        </div>
-        <div id="projectDanger" class="project-danger">
-          <div><b>Supprimer le projet</b><div class="muted">Ses conversations sont supprimées de Poney. Le dossier et ses fichiers ne sont pas touchés.</div></div>
-          <button type="button" id="projectDelete" class="danger-btn">Supprimer…</button>
         </div>
       </div>
     </form>

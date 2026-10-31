@@ -1538,7 +1538,7 @@ const projectActions = {
     const ids = toRead(key).map((c) => c.id);
     if (ids.length) await window.api.markConversationsRead(ids);
   },
-  projectSettings: (key) => key !== ALL && openProjectSettings(key),
+  projectSettings: (key) => openProjectSettings(key),
   addProject: () => addProject(),
 };
 
@@ -1549,9 +1549,7 @@ window.addEventListener('keydown', (e) => {
   if (!name) return;
   e.preventDefault();
   hideContextMenu();
-  // (the project listed in the sidebar; for settings with 'Tous', the project of the conversation shown)
-  const key = name === 'projectSettings' && projectFilter === ALL ? activeProject() || ALL : projectFilter;
-  projectActions[name](key);
+  projectActions[name](projectFilter); // (the project listed in the sidebar)
 });
 
 const ctxMenu = document.body.appendChild(document.createElement('div'));
@@ -1604,7 +1602,7 @@ $('sidebar').addEventListener('contextmenu', (e) => {
     { label: 'Nouvelle conversation', action: 'newConversation', run: () => projectActions.newConversation(key) },
     { label: n ? `Marquer comme lues (${n})` : 'Marquer comme lues', action: 'markRead', disabled: !n, run: () => projectActions.markRead(key) },
     '-',
-    { label: 'Paramètres du projet…', action: 'projectSettings', disabled: key === ALL, run: () => openProjectSettings(key) },
+    { label: key === ALL ? 'Paramètres des projets…' : 'Paramètres du projet…', action: 'projectSettings', run: () => openProjectSettings(key) },
     { label: 'Ajouter un projet…', action: 'addProject', run: addProject },
   ]);
 });
@@ -1651,20 +1649,37 @@ window.api.onContextMenu((p) => {
 
 // ---------- project settings ----------
 let settingsProject = null;
+/** The settings of all the projects, open at this one; for 'Tous', at the project of the conversation shown. */
 function openProjectSettings(key) {
+  if (key === ALL) key = activeProject() || projectKeys()[1];
   settingsProject = key;
   $('ipSearch').value = '';
   pickerTab = settings.projectIcons?.[key]?.icon ? 'icon' : 'emoji';
-  $('projectDialogTitle').textContent = key === OFF_KEY ? 'Hors projet' : `Projet ${projectLabel(key)}`;
+  $('projectDialogTitle').textContent = projectLabel(key);
   $('projectDialogPath').textContent = key === OFF_KEY ? 'Les conversations sans dossier de projet.' : shortPath(key);
   $('projectDanger').classList.toggle('hidden', key === OFF_KEY);
   renderProjectSettings();
   if (!$('projectDialog').open) $('projectDialog').showModal();
+  $('projectDialog').querySelector('.nav-pages').scrollTop = 0;
+  $('projectNav').querySelector('.active')?.scrollIntoView({ block: 'nearest' });
 }
 function renderProjectSettings() {
   const key = settingsProject;
   $('projectIconPreview').innerHTML = projectGlyph(key);
+  renderProjectNav();
   renderIconPicker();
+}
+function renderProjectNav() {
+  $('projectNav').replaceChildren(...projectKeys().filter((key) => key !== ALL).map((key) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = key === settingsProject ? 'active' : '';
+    b.innerHTML = `<span class="pm-icon">${projectGlyph(key)}</span><span class="pm-name"></span>`;
+    b.querySelector('.pm-name').textContent = projectLabel(key);
+    b.title = key === OFF_KEY ? '' : key;
+    b.onclick = () => openProjectSettings(key);
+    return b;
+  }));
 }
 async function applyProjectIcon(call) {
   try {
@@ -1737,6 +1752,7 @@ $('ipSearch').addEventListener('input', renderIconPicker);
 $('projectImage').onclick = () => applyProjectIcon(() => window.api.pickProjectIcon(settingsProject));
 $('projectIconClear').onclick = () => applyProjectIcon(() => window.api.setProjectIcon(settingsProject, null));
 $('projectDialogClose').onclick = () => $('projectDialog').close();
+$('projectSettingsBtn').onclick = () => openProjectSettings(projectFilter);
 $('projectDelete').onclick = async () => {
   const dir = settingsProject;
   const n = lastConversations.filter((c) => projectOf(c) === dir).length;

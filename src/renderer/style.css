@@ -301,7 +301,8 @@ details.thinking div { white-space: pre-wrap; border-left: 2px solid var(--borde
 .ctx-sep { height: 1px; margin: 4px 6px; background: var(--border); }
 
 /* project settings */
-.prompt-dialog.project-dialog { width: min(520px, 92vw); height: auto; }
+.project-nav { overflow-y: auto; }
+.project-nav button { flex: none; display: flex; align-items: center; gap: 8px; }
 .project-path { font-family: var(--mono); font-size: 13px; word-break: break-all; }
 .project-field { display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
 .project-icon-row { display: flex; align-items: center; gap: 8px; }
@@ -406,7 +407,7 @@ body.no-sidebar .deck { width: 0; margin-right: -12px; opacity: 0; transform: tr
 .conv-card.leaving, .group-head.leaving { position: absolute; margin: 0; pointer-events: none; list-style: none; } /* (the cards slide in sideways when the project changes) */
 /* the project listed: its name and a chevron, highlighted on hover (no glass) */
 .project-bar { position: relative; display: flex; align-items: center; gap: 4px; padding: 8px 8px 0; }
-.deck-swap { flex: none; display: inline-flex; align-items: center; justify-content: center; }
+.deck-swap, #projectSettingsBtn { flex: none; display: inline-flex; align-items: center; justify-content: center; }
 .with-icon { display: inline-flex; align-items: center; gap: 6px; }
 .project-picker {
   display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0; padding: 6px 8px; border-radius: 8px;
