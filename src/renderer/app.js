@@ -113,7 +113,9 @@ function renderSettings() {
 const LOCAL_ICON = '<svg class="engine-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="3" width="12" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M5.5 13.5h5M8 11v2.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
 const CLAUDE_ICON = `<svg class="engine-icon" viewBox="0 0 16 16" aria-hidden="true"><g stroke="#d97757" stroke-width="1.5" stroke-linecap="round">${[0, 30, 60, 90, 120, 150].map((a) => `<path d="M8 1.5v13" transform="rotate(${a} 8 8)"/>`).join('')}</g></svg>`;
 const engineIcon = (engine) => (engine === 'claude' ? CLAUDE_ICON : LOCAL_ICON);
-const groupIcon = (g) => (g?.icon ? `<img class="engine-img" src="${esc(g.icon)}" alt="">` : LOCAL_ICON);
+const SERVER_ICON = '<svg class="engine-icon" viewBox="0 0 16 16" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><rect x="2.5" y="2.5" width="11" height="4.5" rx="1.2"/><rect x="2.5" y="9" width="11" height="4.5" rx="1.2"/><path d="M5 4.75h.01M5 11.25h.01"/></g></svg>';
+/** A server's app when it is known, else a server; Poney's models keep the computer. */
+const groupIcon = (g) => (g?.icon ? `<img class="engine-img" src="${esc(g.icon)}" alt="">` : g && g.provider.type !== 'poney' ? SERVER_ICON : LOCAL_ICON);
 const EFFORT_LABEL = { low: 'Faible', medium: 'Moyen', high: 'Élevé', xhigh: 'Très élevé', max: 'Maximum' };
 let modelGroups = []; // the models by provider
 let claude = { available: false, models: [] };
