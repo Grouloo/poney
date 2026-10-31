@@ -902,6 +902,7 @@ body.running .resume-btn { display: none; }
 .claude-controls { display: flex; align-items: center; gap: 2px; flex: none; }
 .card-engine { flex: none; color: var(--muted); }
 /* (with a Claude model, the Claude harness has its own: Poney's stay out of the way) */
-.claude-mode #ctxGauge, .claude-mode #memoryBtn, .claude-mode #convSettingsBtn, .claude-mode .resume-btn, .claude-mode .edit-msg { display: none !important; }
+.claude-mode #ctxGauge { cursor: default; }
+.claude-mode #memoryBtn, .claude-mode #convSettingsBtn, .claude-mode .resume-btn, .claude-mode .edit-msg { display: none !important; }
 .model-hint { align-items: flex-start; cursor: default; }
 .model-hint .pm-name { white-space: normal; font-size: 13px; }
