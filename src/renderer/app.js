@@ -2073,9 +2073,8 @@ function setProjectFilter(key, dir = 0) {
 
 function stepProject(dir) {
   const keys = projectKeys();
-  const i = keys.indexOf(projectFilter);
-  const next = keys[i + dir];
-  if (next) setProjectFilter(next, dir);
+  // (past either end, round to the other)
+  setProjectFilter(keys[(keys.indexOf(projectFilter) + dir + keys.length) % keys.length], dir);
 }
 
 function renderProjectBar(keys) {
@@ -2544,9 +2543,8 @@ function renderSection() {
   }
   renderDeck();
 }
-function setSection(key) {
+function setSection(key, dir = Math.sign(SECTIONS.findIndex((s) => s.key === key) - SECTIONS.findIndex((s) => s.key === filesSection))) {
   if (key === filesSection) return;
-  const dir = Math.sign(SECTIONS.findIndex((s) => s.key === key) - SECTIONS.findIndex((s) => s.key === filesSection));
   filesSection = key;
   try { localStorage.setItem('filesSection', key); } catch {}
   renderSection();
@@ -2558,8 +2556,7 @@ function setSection(key) {
   refreshGit();
 }
 function stepSection(dir) {
-  const next = SECTIONS[SECTIONS.findIndex((s) => s.key === filesSection) + dir];
-  if (next) setSection(next.key);
+  setSection(SECTIONS[(SECTIONS.findIndex((s) => s.key === filesSection) + dir + SECTIONS.length) % SECTIONS.length].key, dir);
 }
 const sectionSwipe = new SwipeDetector(stepSection);
 $('filesBar').addEventListener('wheel', (e) => {
