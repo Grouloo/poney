@@ -1189,7 +1189,7 @@ function onEvent(ev) {
       }
       if (ev.kind === 'thinking') {
         b.thinking += ev.text;
-        b.thinkPieces = (b.thinkPieces || 0) + 1;
+        if (!ev.summary) b.thinkPieces = (b.thinkPieces || 0) + 1; // (a summary's pieces say nothing of the tokens spent)
         if (!b.thinkingEl) {
           b.thinkingEl = document.createElement('details');
           b.thinkingEl.className = 'thinking';

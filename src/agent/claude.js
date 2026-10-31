@@ -163,6 +163,7 @@ export class ClaudeAgent extends EventEmitter {
           cwd: this.cwd,
           model: this.choice.model,
           effort: this.choice.effort,
+          thinking: { type: 'adaptive', display: 'summarized' }, // (by default, the reasoning arrives empty)
           permissionMode: MODES[this.choice.mode] ?? 'default',
           canUseTool: (name, input, opts) => this.canUse(state, name, input, opts),
           disallowedTools: ['AskUserQuestion'], // (it asks in the conversation instead)
@@ -236,8 +237,9 @@ export class ClaudeAgent extends EventEmitter {
         gen.text += d.text;
         this.emitFor(parent, state, { type: 'delta', id: gen.id, kind: 'text', text: d.text });
       } else if (d.type === 'thinking_delta') {
+        if (!d.thinking) return null;
         gen.thinking += d.thinking;
-        this.emitFor(parent, state, { type: 'delta', id: gen.id, kind: 'thinking', text: d.thinking });
+        this.emitFor(parent, state, { type: 'delta', id: gen.id, kind: 'thinking', text: d.thinking, summary: true });
       } else if (d.type === 'input_json_delta' && gen.blocks.has(ev.index)) gen.blocks.get(ev.index).json += d.partial_json;
     } else if (ev.type === 'content_block_stop' && gen.blocks.has(ev.index)) {
       const b = gen.blocks.get(ev.index);

@@ -137,3 +137,13 @@ test('a failed result is said once, and ends the turn as an error', async () => 
   assert.equal(events.filter((e) => e.type === 'error').length, 1);
   assert.equal(events.at(-1).reason, 'error');
 });
+
+test('the reasoning is asked for as a summary, and an empty one shows nothing', async () => {
+  const think = (t) => stream({ type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: t } });
+  const { a, events, calls } = agent([init, start, think(''), think('Je compare.'), think(''), text('Fini.'), stop, done]);
+  await a.send('compare');
+  assert.deepEqual(calls[0].options.thinking, { type: 'adaptive', display: 'summarized' });
+  const thoughts = events.filter((e) => e.kind === 'thinking');
+  assert.deepEqual(thoughts.map((e) => [e.text, e.summary]), [['Je compare.', true]]);
+  assert.equal(events.find((e) => e.type === 'assistant_end').thinking, 'Je compare.');
+});
