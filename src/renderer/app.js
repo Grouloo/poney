@@ -124,6 +124,7 @@ const claudeModel = () => claude.models.find((m) => m.value === choice().model) 
 async function setChoice(patch) {
   settings = await window.api.setChoice(patch);
   renderSettings();
+  refreshGauge();
 }
 
 async function refreshModels() {
@@ -2829,7 +2830,7 @@ $('convSave').onclick = async () => {
 };
 
 // ---------- context gauge ----------
-const fmtTokens = (n) => (n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n));
+const fmtTokens = (n) => (n >= 1e6 ? `${+(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n));
 
 /** A context gauge: the conversation's (under the input), or a sub-agent's (sub: on its card and in its panel). */
 function renderGauge(c, g = $('ctxGauge'), { sub = false } = {}) {
@@ -2846,6 +2847,10 @@ function renderGauge(c, g = $('ctxGauge'), { sub = false } = {}) {
   if (g.querySelector('.gauge-text')) g.querySelector('.gauge-text').textContent = `${fmtTokens(c.used)} / ${fmtTokens(c.numCtx)}`;
   g.classList.toggle('warn', c.used >= c.compactAt * 0.85);
   g.classList.toggle('full', c.used >= c.limit);
+  if (c.claude) {
+    g.title = `Contexte utilisé : ${c.used} tokens sur ${c.numCtx}\nCompactage automatique vers ${c.compactAt} tokens (trait vertical)`;
+    return;
+  }
   g.title = [
     `${sub ? 'Contexte du sous-agent' : 'Contexte utilisé'} (estimé) : ${c.used} tokens sur ${c.numCtx}`,
     `Compactage automatique seulement quand l’appel suivant ne tiendrait plus : vers ${c.compactAt} tokens (trait vertical)`,
@@ -2867,7 +2872,7 @@ async function refreshGauge() {
 }
 
 $('ctxGauge').onclick = async () => {
-  if (running) return;
+  if (running || usesClaude()) return; // (the Claude harness compacts by itself)
   if (!confirm('Compacter maintenant ? Les anciens messages seront remplacés par un résumé (le fil affiché reste intact).')) return;
   setRunning(true);
   stopRunTimer();

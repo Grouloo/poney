@@ -190,7 +190,10 @@ class Session {
       conv.archives = agent.archives;
     }
     conv.choice = this.choice;
-    if (agent?.isClaude) conv.claudeSession = agent.sessionId;
+    if (agent?.isClaude) {
+      conv.claudeSession = agent.sessionId;
+      conv.claudeContext = agent.context;
+    }
     if (this.draft.trim()) conv.draft = this.draft;
     else delete conv.draft;
     conv.unread = this.unread;
@@ -524,7 +527,10 @@ ipcMain.handle('conversations:open', (_, id) => {
   a.systemPrompt = loaded.systemPrompt ?? null;
   a.checkpoints = loaded.checkpoints ?? [];
   a.archives = loaded.archives ?? [];
-  if (a.isClaude) a.sessionId = loaded.claudeSession ?? null;
+  if (a.isClaude) {
+    a.sessionId = loaded.claudeSession ?? null;
+    a.context = loaded.claudeContext ?? null;
+  }
   a.upgradeReasoning(); // older reasoning blocks -> short notes
   if (loaded.inProgress) {
     // The app stopped during a turn (crash, forced quit): say so, and how to go on.

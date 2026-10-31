@@ -185,7 +185,8 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   optional reason that is passed on to the model, so it can change its approach.
 
 ![A command waiting for approval; the sidebar sorts the conversations by state](docs/screenshots/approval.png)
-- **Context gauge** under the input (the tick marks the compaction threshold); a click compacts on demand.
+- **Context gauge** under the input (the tick marks the compaction threshold); a click compacts on demand. With a
+  Claude model it shows the API's counts, from the first message on, and the Claude harness compacts by itself.
   Each sub-agent has its own, on its card and in its panel (kept with its result).
   Summaries appear in the transcript, expandable.
 - **Prompt reading progress** (LM Studio): percentage and estimated time left in the status bar before the first

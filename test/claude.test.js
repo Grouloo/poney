@@ -147,3 +147,26 @@ test('the reasoning is asked for as a summary, and an empty one shows nothing', 
   assert.deepEqual(thoughts.map((e) => [e.text, e.summary]), [['Je compare.', true]]);
   assert.equal(events.find((e) => e.type === 'assistant_end').thinking, 'Je compare.');
 });
+
+test('the context gauge follows the API\'s counts, in the window the harness gives', async () => {
+  const usage = { input_tokens: 2, cache_read_input_tokens: 9000, cache_creation_input_tokens: 998, output_tokens: 1 };
+  const events = [];
+  const messages = [init, stream({ type: 'message_start', message: { usage } }), text('Fini.'), stream({ type: 'message_delta', usage: { ...usage, output_tokens: 500 } }),
+    stream({ type: 'message_start', message: { usage: { input_tokens: 999999 } } }, 'sub'), stop, done];
+  const a = new ClaudeAgent({
+    cwd: '/project', executable: '/bin/claude', approve: async () => true,
+    query: () => Object.assign((async function* () { yield* messages; })(), { getContextUsage: async () => ({ totalTokens: 8000, maxTokens: 1000000, autoCompactThreshold: 967000, isAutoCompactEnabled: true }) }),
+  });
+  a.on('event', (e) => events.push(e));
+  assert.equal(a.contextStats(), null);
+  await a.send('salut');
+  assert.deepEqual(events.filter((e) => e.type === 'context').map((e) => e.used), [8000, 10001, 10500]);
+  assert.deepEqual(a.contextStats(), { type: 'context', claude: true, used: 10500, numCtx: 1000000, compactAt: 967000, limit: 967000 });
+});
+
+test('without what the harness says of the window, a turn goes on and the gauge stays empty', async () => {
+  const { a, events } = agent([init, start, text('Fini.'), stop, done]);
+  await a.send('salut');
+  assert.equal(events.at(-1).reason, 'done');
+  assert.equal(a.contextStats(), null);
+});

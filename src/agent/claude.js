@@ -107,6 +107,7 @@ export class ClaudeAgent extends EventEmitter {
     this.sessionId = null; // the Claude session, resumed at each message
     this.config = {};
     this.controller = null;
+    this.context = null; // the context gauge: what the last message used, in the window of the model
     // (what the app reads from any agent: all empty here, the Claude harness keeps its own)
     this.messages = [];
     this.untested = false;
@@ -125,7 +126,7 @@ export class ClaudeAgent extends EventEmitter {
   stop() { this.controller?.abort(); }
   reset() { this.stop(); }
   upgradeReasoning() {}
-  contextStats() { return null; }
+  contextStats() { return this.context; }
 
   /** The message with its skills: Poney's, called like its local models do. */
   prompt(text, turnId) {
@@ -176,6 +177,7 @@ export class ClaudeAgent extends EventEmitter {
         },
       });
       for await (const message of q) {
+        if (message.type === 'system' && message.subtype === 'init') await this.readContext(q);
         const end = this.onMessage(state, message);
         if (end) ({ stats, reason } = end);
       }
@@ -192,6 +194,28 @@ export class ClaudeAgent extends EventEmitter {
     this.closeTools(state);
     this.controller = null;
     this.emit('event', { type: 'turn_end', reason, stats });
+  }
+
+  /** The window and the compaction threshold: only the harness knows them, and only while it runs. */
+  async readContext(q) {
+    try {
+      const c = await q.getContextUsage?.({ detail: 'summary' });
+      if (!c) return;
+      const compactAt = (c.isAutoCompactEnabled && c.autoCompactThreshold) || c.maxTokens;
+      this.setContext({ used: c.totalTokens, numCtx: c.maxTokens, compactAt, limit: compactAt });
+    } catch {} // (the gauge is not worth a failed turn)
+  }
+
+  setContext(c) {
+    this.context = { ...this.context, ...c, type: 'context', claude: true };
+    this.emit('event', this.context);
+  }
+
+  /** What a message of the conversation used, by the API's count. */
+  countContext(usage) {
+    if (!usage || !this.context) return;
+    const used = (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0) + (usage.output_tokens ?? 0);
+    if (used) this.setContext({ used });
   }
 
   emitFor(parent, state, ev) {
@@ -222,11 +246,13 @@ export class ClaudeAgent extends EventEmitter {
   onStream(state, ev, parent) {
     const key = parent ?? 'main';
     if (ev.type === 'message_start') {
+      if (!parent) this.countContext(ev.message?.usage);
       const id = nextId++;
       state.gens.set(key, { id, key, parent, state, text: '', thinking: '', tools: 0, blocks: new Map() });
       this.emitFor(parent, state, { type: 'assistant_start', id });
       return null;
     }
+    if (ev.type === 'message_delta' && !parent) this.countContext(ev.usage);
     const gen = state.gens.get(key);
     if (!gen) return null;
     if (ev.type === 'content_block_start' && ev.content_block?.type === 'tool_use') {
