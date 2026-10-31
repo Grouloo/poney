@@ -104,7 +104,6 @@ function renderSettings() {
   }
   $('torEnabled').checked = Boolean(settings.config.torEnabled);
   $('subagentsEnabled').checked = settings.config.subagentsEnabled !== false;
-  form.elements.maxParallelAgents.disabled = settings.config.parallelAgents === false; // (one at a time)
   if (Boolean(torTimer) !== Boolean(settings.config.torEnabled)) scheduleTorStatus();
   renderWelcomeProject();
   renderChoice();
@@ -114,8 +113,9 @@ function renderSettings() {
 const LOCAL_ICON = '<svg class="engine-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="3" width="12" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M5.5 13.5h5M8 11v2.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
 const CLAUDE_ICON = `<svg class="engine-icon" viewBox="0 0 16 16" aria-hidden="true"><g stroke="#d97757" stroke-width="1.5" stroke-linecap="round">${[0, 30, 60, 90, 120, 150].map((a) => `<path d="M8 1.5v13" transform="rotate(${a} 8 8)"/>`).join('')}</g></svg>`;
 const engineIcon = (engine) => (engine === 'claude' ? CLAUDE_ICON : LOCAL_ICON);
+const groupIcon = (g) => (g?.icon ? `<img class="engine-img" src="${esc(g.icon)}" alt="">` : LOCAL_ICON);
 const EFFORT_LABEL = { low: 'Faible', medium: 'Moyen', high: 'Élevé', xhigh: 'Très élevé', max: 'Maximum' };
-let localModels = [];
+let modelGroups = []; // the models by provider
 let claude = { available: false, models: [] };
 const choice = () => settings.active?.choice ?? { engine: 'local', model: null };
 const usesClaude = () => choice().engine === 'claude';
@@ -127,21 +127,19 @@ async function setChoice(patch) {
   refreshGauge();
 }
 
+/** The provider of the conversation shown (one from before providers: the first server). */
+const choiceProvider = () => choice().provider ?? settings.providers?.find((p) => p.type !== 'poney' && p.type !== 'claude')?.id;
+
 async function refreshModels() {
-  let models = [];
-  try {
-    models = await window.api.listModels({});
-  } catch (e) {
-    $('status').textContent = `Serveur de modèles injoignable (${settings.config.baseUrl})`;
-  }
-  const current = settings.config.model;
-  if (current && !models.includes(current)) models.unshift(current);
-  localModels = models;
-  $('modelList').innerHTML = models.map((m) => `<option value="${esc(m)}">`).join('');
-  if (!current && models[0]) settings = await window.api.setConfig({ model: models[0] });
+  modelGroups = await window.api.providerModels().catch(() => []);
+  const failed = modelGroups.find((g) => g.error && g.provider.id === choiceProvider());
+  if (failed) $('status').textContent = `Serveur de modèles injoignable (${failed.name})`;
+  const first = modelGroups.find((g) => g.provider.type !== 'poney' && g.models.length);
+  if (!settings.config.model && first) settings = await window.api.setConfig({ model: first.models[0].id });
   renderChoice();
   claude = await window.api.claudeStatus().catch(() => claude);
   renderChoice();
+  if ($('settingsDialog').open) renderProviders();
 }
 
 /** The input follows the model: its name, and what can be set for it. */
@@ -149,8 +147,10 @@ function renderChoice() {
   const c = choice();
   const isClaude = c.engine === 'claude';
   const picker = $('modelPicker');
-  picker.querySelector('.model-icon').innerHTML = engineIcon(c.engine);
-  picker.querySelector('.model-name').textContent = isClaude ? claudeModel()?.name ?? c.model ?? 'Claude' : c.model || settings.config.model || 'aucun modèle';
+  const group = modelGroups.find((g) => g.provider.id === choiceProvider());
+  picker.querySelector('.model-icon').innerHTML = isClaude ? CLAUDE_ICON : groupIcon(group);
+  const local = c.model || settings.config.model;
+  picker.querySelector('.model-name').textContent = isClaude ? claudeModel()?.name ?? c.model ?? 'Claude' : group?.models.find((m) => m.id === local)?.name ?? local ?? 'aucun modèle';
   document.body.classList.toggle('claude-mode', isClaude);
   $('claudeControls').classList.toggle('hidden', !isClaude);
   document.querySelector('.toggles').classList.toggle('hidden', isClaude);
@@ -175,22 +175,26 @@ function openModelMenu() {
   const menu = $('modelMenu');
   const c = choice();
   menu.innerHTML = '';
-  const row = (engine, model, name, off) => {
+  const row = (engine, model, name, off, group) => {
     const r = menu.appendChild(document.createElement('button'));
     r.type = 'button';
-    r.className = `pm-row model-row${engine === c.engine && model === (c.model ?? (engine === 'local' ? settings.config.model : claudeModel()?.value)) ? ' selected' : ''}`;
-    r.innerHTML = `<span class="pm-icon">${engineIcon(engine)}</span><span class="pm-name">${esc(name)}</span>`;
+    const same = engine === 'claude' || group.provider.id === choiceProvider();
+    r.className = `pm-row model-row${engine === c.engine && same && model === (c.model ?? (engine === 'local' ? settings.config.model : claudeModel()?.value)) ? ' selected' : ''}`;
+    r.innerHTML = `<span class="pm-icon">${group ? groupIcon(group) : engineIcon(engine)}</span><span class="pm-name">${esc(name)}</span>`;
     r.disabled = off;
     if (off) r.title = 'Une conversation commencée garde son type de modèle';
     r.onclick = () => {
       closeModelMenu();
       const m = claude.models.find((x) => x.value === model);
-      setChoice(engine === 'claude' ? { engine, model, effort: c.effort ?? (m?.efforts.includes('high') ? 'high' : m?.efforts[0]), mode: c.mode ?? 'manual' } : { engine, model });
+      setChoice(engine === 'claude' ? { engine, model, effort: c.effort ?? (m?.efforts.includes('high') ? 'high' : m?.efforts[0]), mode: c.mode ?? 'manual' } : { engine, model, provider: group.provider.id });
     };
   };
   const started = settings.active?.started;
-  for (const m of localModels) row('local', m, m, started && c.engine !== 'local');
-  if (!localModels.length) menu.appendChild(div('pm-row muted', 'aucun modèle local'));
+  for (const g of modelGroups) {
+    for (const m of g.models) row('local', m.id, m.name, started && c.engine !== 'local', g);
+    if (g.error) menu.appendChild(div('pm-row muted', `<span class="pm-icon">${groupIcon(g)}</span><span class="pm-name">${esc(g.name)} : injoignable</span>`));
+  }
+  if (!modelGroups.some((g) => g.models.length || g.error)) menu.appendChild(div('pm-row muted', 'aucun modèle local'));
   if (claude.available || claude.installed) menu.appendChild(div('ctx-sep'));
   for (const m of claude.models) row('claude', m.value, m.name, started && c.engine !== 'claude');
   if (claude.installed && !claude.available) {
@@ -225,11 +229,80 @@ form.addEventListener('change', async (e) => {
   renderSettings();
   refreshGauge();
   if (el.name === 'torProxy') scheduleTorStatus();
-  if (['provider', 'baseUrl', 'apiKey'].includes(el.name)) refreshModels();
-  if (el.name === 'model') refreshModels();
 });
 
-$('refreshModels').onclick = refreshModels;
+// ---------- providers ----------
+const fieldIn = (parent, label, value, onChange, attrs = {}) => {
+  const l = parent.appendChild(document.createElement('label'));
+  l.textContent = label;
+  const i = l.appendChild(document.createElement('input'));
+  Object.assign(i, attrs);
+  i.value = value ?? '';
+  i.onchange = () => onChange(i.value.trim());
+  return i;
+};
+async function changeProvider(call) {
+  settings = await call;
+  renderSettings();
+  refreshGauge();
+  refreshModels();
+}
+function providerCard(p) {
+  const card = div(`provider-card${p.enabled ? '' : ' off'}`);
+  const group = modelGroups.find((g) => g.provider.id === p.id);
+  const head = card.appendChild(div('provider-head'));
+  head.innerHTML = `<span class="pm-icon">${p.type === 'claude' ? CLAUDE_ICON : groupIcon(group)}</span><span class="provider-name"></span><div class="spacer"></div><label><input type="checkbox"> Activé</label>`;
+  head.querySelector('.provider-name').textContent = p.name || group?.name || 'Serveur';
+  const on = head.querySelector('input');
+  on.checked = p.enabled;
+  on.onchange = () => changeProvider(window.api.updateProvider(p.id, { enabled: on.checked }));
+  return card;
+}
+function serverCard(p) {
+  const card = providerCard(p);
+  const remove = card.querySelector('.provider-head').appendChild(document.createElement('button'));
+  remove.type = 'button';
+  remove.className = 'ghost';
+  remove.textContent = 'Supprimer';
+  remove.onclick = () => confirm(`Supprimer ce serveur ? Ses conversations restent lisibles.`) && changeProvider(window.api.removeProvider(p.id));
+  const update = (patch) => changeProvider(window.api.updateProvider(p.id, patch));
+  fieldIn(card, 'Nom', p.name, (name) => update({ name }), { placeholder: 'automatique' });
+  const type = card.appendChild(document.createElement('label'));
+  type.textContent = 'Type';
+  const select = type.appendChild(document.createElement('select'));
+  select.innerHTML = '<option value="openai">Compatible OpenAI (LM Studio, llama.cpp, vLLM…)</option><option value="ollama">Ollama (API native)</option>';
+  select.value = p.type;
+  select.onchange = () => update({ type: select.value, baseUrl: select.value === 'ollama' ? 'http://localhost:11434' : 'http://localhost:1234/v1' });
+  fieldIn(card, 'URL', p.baseUrl, (baseUrl) => update({ baseUrl }), { placeholder: 'http://localhost:1234/v1' });
+  fieldIn(card, 'Clé API (optionnelle)', p.apiKey, (apiKey) => update({ apiKey }), { type: 'password', autocomplete: 'off' });
+  return card;
+}
+async function poneyCard(p) {
+  const card = providerCard(p);
+  const engine = await window.api.engineStatus();
+  const state = card.appendChild(div('muted'));
+  state.textContent = !engine.supported ? 'Pas encore disponible sur cette machine.'
+    : engine.loaded.length ? `En mémoire : ${engine.loaded.map((m) => m.id).join(', ')}`
+      : engine.installed ? 'Prêt. Les modèles se chargent au premier message.' : 'Le moteur sera téléchargé à la première utilisation d’un de ces modèles.';
+  if (!engine.supported) return card;
+  const options = settings.engine;
+  fieldIn(card, 'Décharger un modèle inactif après (minutes)', options.idleMinutes, (v) => changeProvider(window.api.setEngineOptions({ idleMinutes: Math.max(1, Number(v) || 15) })), { type: 'number', min: 1 });
+  fieldIn(card, 'Cache de prompt sur disque (Go)', options.cacheGb, (v) => changeProvider(window.api.setEngineOptions({ cacheGb: Math.max(0, Number(v) || 0) })), { type: 'number', min: 0 });
+  for (const m of modelGroups.find((g) => g.provider.id === p.id)?.models ?? []) {
+    const row = card.appendChild(div('provider-model'));
+    row.appendChild(document.createElement('span')).textContent = m.name;
+    row.title = 'Taille du contexte de ce modèle, en tokens. Vide : celle des réglages. Elle s’applique au message suivant.';
+    const i = row.appendChild(document.createElement('input'));
+    Object.assign(i, { type: 'number', min: 2048, step: 1024, placeholder: String(settings.config.numCtx), value: settings.modelContexts?.[m.id] ?? '' });
+    i.onchange = () => changeProvider(window.api.setModelContext(m.id, Number(i.value) || null));
+  }
+  return card;
+}
+async function renderProviders() {
+  const cards = await Promise.all((settings.providers ?? []).map((p) => (p.type === 'poney' ? poneyCard(p) : p.type === 'claude' ? providerCard(p) : serverCard(p))));
+  $('providersList').replaceChildren(...cards);
+}
+$('addProvider').onclick = () => changeProvider(window.api.addProvider({ baseUrl: 'http://localhost:1234/v1' }));
 $('autoApprove').onchange = async (e) => {
   settings = await window.api.setConfig({ approval: e.target.checked ? 'auto' : 'ask' });
   renderSettings();
@@ -314,6 +387,7 @@ closeOnOutside($('projectDialog'));
 const showSettingsPage = navDialog(settingsDialog);
 function openSettings(page) {
   if (page) showSettingsPage(page);
+  renderProviders();
   if (!settingsDialog.open) settingsDialog.showModal();
 }
 $('settingsBtn').onclick = () => openSettings();
@@ -709,9 +783,14 @@ async function submit() {
     onWorkspaceChanged();
     setInput(text);
   }
-  if (!usesClaude() && !settings.config.model) {
-    openSettings('server');
-    $('status').textContent = 'Choisissez un modèle dans les réglages.';
+  if (settings.active?.blocked) {
+    $('status').textContent = settings.active.blocked;
+    setTimeout(openModelMenu); // (after this click, which closes menus)
+    return;
+  }
+  if (!usesClaude() && !choice().model && !settings.config.model) {
+    openSettings('providers');
+    $('status').textContent = 'Choisissez un modèle.';
     return;
   }
   setInput('');
@@ -915,6 +994,7 @@ function statsDetails(s) {
 
 // Progress of the prompt reading (before the first token), when the server reports it.
 let promptProgress = null; // { id, value, t0 }
+let modelStatus = ''; // what the call waits for: its turn, the model
 
 function promptProgressText() {
   if (!promptProgress) return '';
@@ -951,13 +1031,14 @@ function startRunTimer() {
   const t0 = performance.now();
   clearInterval(runTimer);
   const tick = () => {
-    const extra = promptProgressText() || liveGenText();
+    const extra = modelStatus || promptProgressText() || liveGenText();
     $('status').textContent = `L’agent travaille… ${fmtDuration(performance.now() - t0)}${extra ? ` · ${extra}` : ''}`;
   };
   tick();
   runTimer = setInterval(tick, 100);
 }
 function stopRunTimer() {
+  modelStatus = '';
   clearInterval(runTimer);
   runTimer = null;
 }
@@ -1229,7 +1310,7 @@ function onEvent(ev) {
         b.el.insertBefore(b.thinkingEl, b.bubble);
       } else if (b.thinkingEl) {
         b.thinkingEl.querySelector('summary').textContent = b.thinkPieces ? `Réflexion (${b.thinkPieces} tokens)` : 'Réflexion';
-        if (!b.thinking && ev.thinking) b.thinkingEl.querySelector('div').textContent = ev.thinking.trim(); // (written in the answer: as kept)
+        b.thinkingEl.querySelector('div').textContent = thinking; // (a reasoning that ends at once was never drawn; written in the answer: as kept)
       }
       if (ev.text) b.bubble.innerHTML = markdown(ev.text);
       else if (!thinking) b.el.remove();
@@ -1442,6 +1523,9 @@ function onEvent(ev) {
     }
     case 'context':
       if (!replaying) renderGauge(ev);
+      break;
+    case 'model_status':
+      if (!replaying) modelStatus = ev.text;
       break;
     case 'prompt_progress':
       if (!replaying) onPromptProgress(ev);

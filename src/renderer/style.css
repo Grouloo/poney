@@ -896,6 +896,15 @@ body.running .resume-btn { display: none; }
 .engine-icon { display: block; width: 14px; height: 14px; flex: none; }
 .model-icon { flex: none; }
 .model-menu { left: auto; right: 0; top: auto; bottom: calc(100% + 6px); min-width: 240px; max-height: min(50vh, var(--room, 50vh)); }
+.engine-img { width: 16px; height: 16px; display: block; }
+.provider-card { display: flex; flex-direction: column; gap: 8px; margin: 10px 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; }
+.provider-card.off > :not(.provider-head) { display: none; }
+.provider-head { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.provider-head .spacer { flex: 1; }
+.provider-head label { display: flex; flex-direction: row; align-items: center; gap: 6px; margin: 0; font-weight: normal; font-size: 13px; color: var(--muted); }
+.provider-model { display: flex; align-items: center; gap: 8px; font-size: 13.5px; }
+.provider-model span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.provider-model input { flex: none; width: 110px; }
 .model-row { width: 100%; background: none; border: none; color: var(--text); text-align: left; }
 .model-row:disabled { opacity: 0.45; cursor: default; }
 .model-row.selected .pm-name { color: var(--accent); }

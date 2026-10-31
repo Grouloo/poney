@@ -144,6 +144,18 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   numbered and nested lists, headings, links (opened in the browser), tables (GitHub style, with alignment), code;
   a single line break is kept. LaTeX formulas rendered by KaTeX (`$…$`, `\(…\)` inline; `$$…$$`, `\[…\]` as
   blocks); prices like "$5 and $10" stay text. Raw HTML in an answer is shown as text.
+- **Providers** (Réglages › Fournisseurs): where models come from, each one on or off, the servers added or removed
+  freely. The model menu shows Poney's own models, then each server's (LM Studio's with its logo), then Claude's. A
+  conversation keeps its provider and model; if its provider is off or gone, it stays readable and sending asks for
+  another model.
+- **Poney's engine**: GGUF models run without any other app. `llama-server` (a pinned llama.cpp build, downloaded on
+  first use and checked against its digest) runs as a separate process on 127.0.0.1, per model. Models come from
+  `<data>/models` and, read only, `~/.lmstudio/models`; a file both can run shows under Poney only. A message loads
+  its model; an idle one goes after 15 minutes. The context is set per model (a change reloads at the next message)
+  and the prompt cache survives unloading, on disk, up to 10 GB, the unused going first.
+- **Calls to local models** go through one queue ("Inférences en même temps", 0 for no limit), conversations and
+  sub-agents alike, one call at a time. Calls for the loaded model go first, past an older one at most 3 times.
+  Memory comes before the limit: idle models go, then calls wait. Claude's models are not counted.
 - **Claude models**: when `claude` is installed and logged in on the machine, its models appear in the model menu, after the local ones. Poney then only displays the work of the Claude harness (through the Agent SDK): its own harness is off, apart from the skills, and the tool switches give way to the effort and the mode (Auto, Manuel, Plan). Each conversation keeps its model. **This uses the machine's own Claude login, for personal use: Anthropic does not allow third-party products to offer that login without its approval, so a public release must use an API key or get that approval.**
 - **Skills**: instructions added to a message only when it needs them, so they cost nothing the rest of the time. Type `/` in the input to see them, or let Poney add one when a message contains one of its trigger phrases (it says so under the message; this can be turned off in the settings). Eleven come with the app, in `src/skills/`: one for syntheses, the others adapted for small models from [Matt Pocock](https://github.com/mattpocock/skills), [Anthropic](https://github.com/anthropics/skills) and [Cursor](https://github.com/cursor/plugins). Add your own in `.poney/skills/<name>.md` for a project, or in the app's data folder under `skills/`: a project skill replaces a skill of the same name. `/skill-creator` writes one with you.
 - **Drafts**: text typed but not sent is kept with its conversation when you leave it or quit, even if nothing was sent yet; the conversation waits under "Brouillons", at the top of the sidebar.
@@ -296,6 +308,10 @@ the status dot is red.
 - `src/conversations.js`, `src/files.js` — conversation storage, file access for the viewer
 - `src/cli.js` — command-line runner
 - `src/git.js` — Git for the sidebar: status, diff, fetch, sync
+- `src/providers.js` — the list of providers, and what a conversation's model calls
+- `src/engine/` — Poney's engine: `install.js` (the pinned llama-server), `models.js` and `gguf.js` (the models here), `gate.js` (the queue), `engine.js` (processes, memory, prompt cache)
+- `scripts/compare-engine.mjs` — compares the engine with LM Studio on the same prompts
+- `docs/instances.md` — where Poney instances talking to each other would fit
 - `scripts/brand-electron.mjs` — macOS, development: renames the Electron bundle to `Poney.app` and gives it the app's icon, so the Dock shows them (run by `npm start`)
 - `assets/` — app icon (`icon.svg` source; `icon.png` for the macOS Dock, `icon.icns` for the bundle, `icon-square.png` for the Windows/Linux taskbar)
 

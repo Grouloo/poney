@@ -21,6 +21,7 @@ Stop only your own instance, not one the user is running. The tests use fake mod
 - `src/agent/`: the local harness, without UI. `protocol.js` builds the system prompt and parses tool tags, `agent.js` is the loop, `context.js` is compaction, `triage.js` is the assessment.
 - `src/agent/claude.js`: Claude models through the Agent SDK. It only translates events: none of the local harness runs there, except skills.
 - `src/skills/`: built-in skills. Keep each under 1700 characters, with exact trigger phrases.
+- `src/engine/`: Poney's own inference (llama-server, the queue). `src/providers.js`: where models come from.
 - `src/main.js`: sessions and IPC. `src/preload.cjs` must expose each new call.
 - `src/renderer/`: the interface.
 

@@ -1,12 +1,17 @@
 import { app, BrowserWindow, Menu, ipcMain, dialog, shell, nativeImage, nativeTheme } from 'electron';
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Agent, DEFAULT_CONFIG } from './agent/agent.js';
 import { loadSkills, skillDirs } from './agent/skills.js';
 import { ClaudeAgent, findClaude, claudeLoggedIn, claudeModels } from './agent/claude.js';
-import { listModels } from './agent/llm.js';
+import { listModels, lmStudioModels, setInferenceService } from './agent/llm.js';
+import { ModelEngine } from './engine/engine.js';
+import { ENGINE_BUILD, engineSupported, installEngine, installedEngine } from './engine/install.js';
+import { scanModels, sameModelFile } from './engine/models.js';
+import { addServer, loadProviders, modelConfig, providerOf, removeProvider, unavailable, updateProvider } from './providers.js';
 import { ConversationStore, moveAppData } from './conversations.js';
 import { listDir, readFileForViewer } from './files.js';
 import { gitStatus, gitDiff, gitFetch, gitSync } from './git.js';
@@ -50,12 +55,16 @@ function logError(what, detail) {
 
 // ---------- settings ----------
 const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
-let settings = { config: { ...DEFAULT_CONFIG }, workspace: '', recent: [], projectIcons: {} };
+let settings = { config: { ...DEFAULT_CONFIG }, workspace: '', recent: [], projectIcons: {}, modelContexts: {}, engine: { idleMinutes: 15, cacheGb: 10 } };
 
 function loadSettings() {
   try {
     const saved = JSON.parse(fs.readFileSync(settingsFile(), 'utf8'));
     settings = { ...settings, ...saved, config: { ...DEFAULT_CONFIG, ...saved.config } };
+    // The setting for sub-agents became the limit of all the calls to local models.
+    if (saved.config && saved.config.maxInferences === undefined) {
+      settings.config.maxInferences = saved.config.parallelAgents === false ? 1 : saved.config.maxParallelAgents ?? 2;
+    }
     // 0.2 used to be the default (saved as is): now the model's own temperature is used.
     if (!settings.temperatureFromModel) {
       if (settings.config.temperature === 0.2) settings.config.temperature = null;
@@ -64,6 +73,46 @@ function loadSettings() {
     }
   } catch {}
 }
+const engineDir = () => path.join(app.getPath('userData'), 'engine');
+const modelDirs = () => [path.join(app.getPath('userData'), 'models'), path.join(os.homedir(), '.lmstudio', 'models')];
+let engine = null;
+let poneyModelList = null;
+/** The GGUF files here. (Read again when the menu asks, not for each call.) */
+const poneyModels = async ({ fresh = false } = {}) => {
+  if (fresh || !poneyModelList) poneyModelList = await scanModels(modelDirs());
+  return poneyModelList;
+};
+const engineOptions = () => ({
+  limit: settings.config.maxInferences ?? 1,
+  idleMs: settings.engine.idleMinutes * 60 * 1000,
+  cacheBytes: settings.engine.cacheGb * 1024 ** 3,
+});
+/** A model server left behind by a crash of the app would hold its memory for nothing. */
+function killLeftovers() {
+  execFile('pgrep', ['-f', engineDir()], (error, stdout) => {
+    if (error) return;
+    for (const pid of stdout.split('\n').filter(Boolean)) if (Number(pid) !== process.pid) try { process.kill(Number(pid)); } catch {}
+  });
+}
+function startEngine() {
+  killLeftovers();
+  engine = new ModelEngine({
+    binary: (onStatus) => installEngine(engineDir(), { onProgress: (p) => onStatus(`Installation du moteur… ${Math.floor(p * 100)} %`) }),
+    cacheDir: path.join(app.getPath('userData'), 'prompt-cache'),
+    build: ENGINE_BUILD,
+    log: logError,
+    ...engineOptions(),
+  });
+  setInferenceService({
+    acquire: async ({ provider, model, numCtx, signal, onStatus }) => {
+      if (provider !== 'poney') return engine.acquire({ signal, onStatus });
+      const found = (await poneyModels()).find((m) => m.id === model) ?? (await poneyModels({ fresh: true })).find((m) => m.id === model);
+      if (!found) throw new Error(`Le modèle ${model} est introuvable sur cette machine.`);
+      return engine.acquire({ model: found, numCtx, signal, onStatus });
+    },
+  });
+}
+
 function saveSettings() {
   fs.mkdirSync(path.dirname(settingsFile()), { recursive: true });
   fs.writeFileSync(settingsFile(), JSON.stringify(settings, null, 2));
@@ -137,7 +186,8 @@ class Session {
 
   /** The settings, and this conversation's model. */
   applyConfig() {
-    this.agent.config = { ...DEFAULT_CONFIG, ...settings.config, ...(this.choice.engine === 'local' && this.choice.model ? { model: this.choice.model } : {}) };
+    const local = this.choice.engine === 'local';
+    this.agent.config = { ...DEFAULT_CONFIG, ...modelConfig(settings.config, local ? providerOf(settings.providers, this.choice) : null, local ? this.choice.model : null, settings.modelContexts) };
     if (this.agent.isClaude) {
       this.agent.choice = this.choice;
       this.agent.autoSkills = settings.config.autoSkills;
@@ -283,6 +333,7 @@ const publicSettings = () => ({
   active: {
     offProject: Boolean(active?.offProject), cwd: activeCwd() || '', session: active?.key ?? null,
     choice: active?.choice ?? { engine: 'local', model: null },
+    blocked: unavailable(providerOf(settings.providers, active?.choice ?? { engine: 'local' })),
     started: Boolean(active?.started),
   },
 });
@@ -315,6 +366,7 @@ ipcMain.handle('settings:setConfig', (_, patch) => {
   saveSettings();
   nativeTheme.themeSource = settings.config.theme;
   for (const s of sessions.values()) if (s.agent) s.applyConfig();
+  engine.setOptions(engineOptions());
   return publicSettings();
 });
 ipcMain.handle('workspace:choose', async () => {
@@ -362,11 +414,78 @@ ipcMain.handle('ui:edit', (_, cmd, arg) => {
   else if (cmd === 'learn') wc.session.addWordToSpellCheckerDictionary(String(arg));
 });
 ipcMain.handle('workspace:reveal', () => activeCwd() && shell.openPath(activeCwd()));
-ipcMain.handle('models:list', async (_, cfg) => listModels({ ...settings.config, ...cfg }));
+// The icon of the app behind a server, if it is installed here.
+const appIcons = new Map();
+async function appIcon(name) {
+  if (!appIcons.has(name)) {
+    appIcons.set(name, await nativeImage.createThumbnailFromPath(`/Applications/${name}.app`, { width: 32, height: 32 }).then((i) => (i.isEmpty() ? null : i.toDataURL())).catch(() => null));
+  }
+  return appIcons.get(name);
+}
+async function serverModels(p) {
+  const lms = p.type === 'openai' ? await lmStudioModels(p) : null;
+  if (lms) {
+    // (a file Poney can run shows once, under Poney)
+    const own = settings.providers.find((x) => x.type === 'poney')?.enabled ? await poneyModels() : [];
+    const models = lms.filter((m) => m.type !== 'embeddings' && !(m.compatibility_type === 'gguf' && sameModelFile(m.id, own))).map((m) => ({ id: m.id, name: m.id }));
+    return { name: p.name || 'LM Studio', icon: await appIcon('LM Studio'), models };
+  }
+  const models = (await listModels({ provider: p.type, baseUrl: p.baseUrl, apiKey: p.apiKey })).map((id) => ({ id, name: id }));
+  return { name: p.name || (p.type === 'ollama' ? 'Ollama' : p.baseUrl), icon: p.type === 'ollama' ? await appIcon('Ollama') : null, models };
+}
+// The models by provider, Poney first. Claude's come through claude:status.
+ipcMain.handle('providers:models', async () => {
+  const groups = await Promise.all(settings.providers.filter((p) => p.enabled && p.type !== 'claude').map(async (p) => {
+    const provider = { id: p.id, type: p.type };
+    if (p.type === 'poney') {
+      const models = engineSupported() ? await poneyModels({ fresh: true }) : [];
+      return { provider, name: 'Poney', models: models.map((m) => ({ id: m.id, name: m.name, contextLength: m.info.contextLength })) };
+    }
+    try {
+      return { provider, ...(await serverModels(p)) };
+    } catch (e) {
+      return { provider, name: p.name || p.baseUrl, models: [], error: e.message };
+    }
+  }));
+  return groups;
+});
+const changeProviders = (providers) => {
+  settings.providers = providers;
+  saveSettings();
+  for (const s of sessions.values()) if (s.agent) s.applyConfig();
+  return publicSettings();
+};
+ipcMain.handle('providers:add', (_, server) => changeProviders(addServer(settings.providers, server)));
+ipcMain.handle('providers:update', (_, id, patch) => changeProviders(updateProvider(settings.providers, id, patch)));
+ipcMain.handle('providers:remove', (_, id) => changeProviders(removeProvider(settings.providers, id)));
+ipcMain.handle('engine:status', async () => ({
+  supported: engineSupported(),
+  installed: Boolean(await installedEngine(engineDir())),
+  loaded: engine.status(),
+  folder: modelDirs()[0],
+}));
+ipcMain.handle('engine:setContext', (_, model, numCtx) => {
+  if (numCtx) settings.modelContexts = { ...settings.modelContexts, [model]: numCtx };
+  else {
+    settings.modelContexts = { ...settings.modelContexts };
+    delete settings.modelContexts[model];
+  }
+  saveSettings();
+  for (const s of sessions.values()) if (s.agent) s.applyConfig();
+  return publicSettings();
+});
+ipcMain.handle('engine:setOptions', (_, patch) => {
+  settings.engine = { ...settings.engine, ...patch };
+  saveSettings();
+  engine.setOptions(engineOptions());
+  return publicSettings();
+});
 ipcMain.handle('agent:send', async (_, text, turnId) => {
   const s = current();
   const a = s.getAgent();
   if (a.running) throw new Error('L’agent est déjà en cours d’exécution.');
+  const blocked = unavailable(providerOf(settings.providers, s.choice));
+  if (blocked) throw new Error(blocked);
   if (!s.conv) {
     s.conv = store.create(s.cwd, text, { id: s.key, offProject: s.offProject });
     s.conv.systemPrompt = a.systemPrompt; // edited before the first message
@@ -473,7 +592,7 @@ ipcMain.handle('session:current', () => sessionView(current()));
 let claudeInfo = null;
 ipcMain.handle('claude:status', async () => {
   const executable = findClaude();
-  if (!executable) return { available: false, installed: false, models: [] };
+  if (!executable || !settings.providers.find((p) => p.type === 'claude')?.enabled) return { available: false, installed: false, models: [] };
   if (!(await claudeLoggedIn(executable))) {
     claudeInfo = null;
     return { available: false, installed: true, models: [] };
@@ -830,6 +949,8 @@ app.whenReady().then(() => {
   if (process.platform === 'darwin') app.dock?.setIcon(path.join(here, '..', 'assets', 'icon.png'));
   appMenu();
   loadSettings();
+  settings.providers = loadProviders(settings.providers, settings.config);
+  startEngine();
   nativeTheme.themeSource = settings.config.theme;
   store = new ConversationStore(path.join(app.getPath('userData'), 'conversations'));
   pruneOffProject();
@@ -837,10 +958,21 @@ app.whenReady().then(() => {
   app.on('activate', () => BrowserWindow.getAllWindows().length === 0 && createWindow());
 });
 app.on('before-quit', () => saveAll());
+// The models are stopped and their caches saved before the app goes.
+let engineStopped = false;
+app.on('will-quit', (e) => {
+  if (engineStopped || !engine?.status().length) return;
+  e.preventDefault();
+  engine.shutdown().finally(() => {
+    engineStopped = true;
+    app.quit();
+  });
+});
 // Ctrl-C in the terminal, kill: Electron quits without 'before-quit'.
 for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
   process.on(sig, () => {
     saveAll();
+    engine?.kill();
     app.exit(0);
   });
 }

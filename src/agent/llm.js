@@ -49,6 +49,37 @@ async function checkResponse(res) {
  * server allows it (Gemma in LM Studio's raw mode, Ollama's think: false).
  */
 export async function* streamChat(opts) {
+  if (!service) return yield* dispatch(opts);
+  // The lease is awaited here, what it waits for coming through as chunks.
+  const statuses = [];
+  let wake = null;
+  const acquiring = service.acquire({ ...opts, onStatus: (text) => { statuses.push(text); wake?.(); } });
+  let lease = null;
+  let failure = null;
+  acquiring.then((l) => { lease = l; }, (e) => { failure = e; }).finally(() => wake?.());
+  while (!lease && !failure) {
+    while (statuses.length) yield { type: 'status', text: statuses.shift() };
+    if (!lease && !failure) await new Promise((resolve) => { wake = resolve; });
+  }
+  if (failure) throw failure;
+  try {
+    yield { type: 'status', text: '' };
+    yield* dispatch({ ...opts, lease });
+  } finally {
+    lease.release();
+  }
+}
+
+// The queue and the models Poney runs itself (see src/engine/). Without it (the
+// command line, the tests) calls go straight to the server.
+let service = null;
+export const setInferenceService = (s) => { service = s; };
+
+async function* dispatch(opts) {
+  if (opts.provider === 'poney') {
+    yield* streamEngine({ ...opts, baseUrl: opts.lease.baseUrl, apiKey: opts.lease.apiKey });
+    return;
+  }
   if (opts.provider === 'openai' && await isLMStudio(opts)) {
     // Declare our tools to models with native tool calls (see toolSchemas), for the
     // chat endpoint only. Not in raw mode, which holds nothing back: declared there
@@ -171,9 +202,14 @@ export function makeChannelSplitter() {
 // Gemma's own way of not reasoning: an empty reasoning channel, closed at once.
 export const GEMMA_NO_THINKING = '<|channel>thought<channel|>';
 
-async function* streamLMStudioRaw({ baseUrl, apiKey, model, messages, temperature, maxTokens, signal, tools, noThinking }) {
+async function* streamLMStudioRaw(opts) {
+  const { baseUrl, model, messages, tools } = opts;
   const handle = await lmsModelHandle(baseUrl, model);
-  let prompt = await handle.applyPromptTemplate(Chat.from(messages), tools ? { toolDefinitions: tools } : undefined);
+  const prompt = await handle.applyPromptTemplate(Chat.from(messages), tools ? { toolDefinitions: tools } : undefined);
+  yield* streamRaw({ ...opts, prompt });
+}
+
+async function* streamRaw({ baseUrl, apiKey, model, prompt, temperature, maxTokens, signal, noThinking, extra = {} }) {
   // The answer starts after an empty reasoning (the prompt before it is unchanged: still cached).
   if (noThinking) prompt += GEMMA_NO_THINKING;
   const headers = { 'Content-Type': 'application/json' };
@@ -182,7 +218,7 @@ async function* streamLMStudioRaw({ baseUrl, apiKey, model, messages, temperatur
     method: 'POST',
     headers,
     signal,
-    body: JSON.stringify({ model, prompt, stream: true, stream_options: { include_usage: true }, ...sampling(temperature), max_tokens: maxTokens, stop: ['<turn|>'] }),
+    body: JSON.stringify({ model, prompt, stream: true, stream_options: { include_usage: true }, ...sampling(temperature), max_tokens: maxTokens, stop: ['<turn|>'], ...extra }),
   });
   await checkResponse(res);
   const split = makeChannelSplitter();
@@ -193,8 +229,9 @@ async function* streamLMStudioRaw({ baseUrl, apiKey, model, messages, temperatur
     if (payload === '[DONE]') break;
     let data;
     try { data = JSON.parse(payload); } catch { continue; }
+    if (data.prompt_progress) yield progressChunk(data.prompt_progress);
     if (data.usage?.completion_tokens) {
-      yield { type: 'usage', promptTokens: data.usage.prompt_tokens || 0, outputTokens: data.usage.completion_tokens };
+      yield { type: 'usage', promptTokens: data.usage.prompt_tokens || 0, outputTokens: data.usage.completion_tokens, ...timingsOf(data) };
     }
     const choice = data.choices?.[0];
     if (choice?.text) yield* split(choice.text);
@@ -202,6 +239,28 @@ async function* streamLMStudioRaw({ baseUrl, apiKey, model, messages, temperatur
   }
   yield* split('', true);
   yield { type: 'done', reason: finish === 'length' ? 'length' : 'stop' };
+}
+
+// ---------- Poney's engine (llama-server) ----------
+const progressChunk = ({ processed, total }) => ({ type: 'progress', progress: total ? processed / total : 1 });
+const timingsOf = ({ timings }) => (timings ? { promptMs: timings.prompt_ms ?? null, evalMs: timings.predicted_ms ?? null } : {});
+
+/** As with LM Studio: Gemma in raw mode (it can hold nothing back), the others on the chat endpoint. */
+async function* streamEngine(opts) {
+  const { lease, baseUrl, apiKey, messages, jsonSchema, noThinking, toolSchemas } = opts;
+  const extra = { return_progress: true, cache_prompt: true };
+  if (/^gemma/i.test(lease.model.info?.arch ?? '') && (!jsonSchema || noThinking)) {
+    const res = await fetch(`${baseUrl}/apply-template`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({ messages }),
+      signal: opts.signal,
+    });
+    await checkResponse(res);
+    yield* streamRaw({ ...opts, prompt: (await res.json()).prompt, extra });
+    return;
+  }
+  yield* streamHTTP({ ...opts, provider: 'openai', tools: toolSchemas?.length ? toolSchemas : undefined, extra });
 }
 
 // ---------- LM Studio (SDK) ----------
@@ -228,6 +287,17 @@ async function isLMStudio({ baseUrl }) {
     lmsDetected.set(root, ok);
   }
   return lmsDetected.get(root);
+}
+
+/** LM Studio's list of models (with their formats), or null if this server is not LM Studio. */
+export async function lmStudioModels({ baseUrl }) {
+  try {
+    const res = await fetch(`${lmsRoot(baseUrl)}/api/v0/models`, { signal: AbortSignal.timeout(2000) });
+    const data = res.ok ? await res.json() : null;
+    return Array.isArray(data?.data) && data.data.some((m) => 'state' in m) ? data.data : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Whether LM Studio says this model supports native tool calls. */
@@ -328,7 +398,7 @@ async function* readPromptLMStudio({ baseUrl, model, messages, temperature, sign
 
 // ---------- HTTP (Ollama native, OpenAI-compatible) ----------
 
-async function* streamHTTP({ provider, baseUrl, apiKey, model, messages, numCtx, temperature, maxTokens, signal, tools, jsonSchema, noThinking }) {
+async function* streamHTTP({ provider, baseUrl, apiKey, model, messages, numCtx, temperature, maxTokens, signal, tools, jsonSchema, noThinking, extra = {} }) {
   if (!model) throw new Error('No model selected.');
   if (provider === 'ollama') {
     const post = (think) => fetch(`${trimSlash(baseUrl)}/api/chat`, {
@@ -384,7 +454,7 @@ async function* streamHTTP({ provider, baseUrl, apiKey, model, messages, numCtx,
     headers,
     signal,
     body: JSON.stringify({ model, messages, stream: true, stream_options: { include_usage: true }, ...sampling(temperature), max_tokens: maxTokens, ...(tools ? { tools } : {}),
-      ...(jsonSchema ? { response_format: { type: 'json_schema', json_schema: { name: 'answer', strict: true, schema: jsonSchema } } } : {}) }),
+      ...(jsonSchema ? { response_format: { type: 'json_schema', json_schema: { name: 'answer', strict: true, schema: jsonSchema } } } : {}), ...extra }),
   });
   await checkResponse(res);
   const toolCalls = []; // native function calls, streamed in pieces
@@ -399,8 +469,9 @@ async function* streamHTTP({ provider, baseUrl, apiKey, model, messages, numCtx,
     if (payload === '[DONE]') { yield* flushToolCalls(); return; }
     let data;
     try { data = JSON.parse(payload); } catch { continue; }
+    if (data.prompt_progress) yield progressChunk(data.prompt_progress);
     if (data.usage?.prompt_tokens) {
-      yield { type: 'usage', promptTokens: data.usage.prompt_tokens, outputTokens: data.usage.completion_tokens || 0 };
+      yield { type: 'usage', promptTokens: data.usage.prompt_tokens, outputTokens: data.usage.completion_tokens || 0, ...timingsOf(data) };
     }
     const delta = data.choices?.[0]?.delta || {};
     for (const tc of delta.tool_calls || []) {
@@ -429,6 +500,7 @@ export async function complete(opts) {
   let doneReason = null;
   for await (const chunk of streamChat(opts)) {
     if (chunk.type === 'progress') opts.onProgress?.(chunk.progress);
+    else if (chunk.type === 'status') opts.onStatus?.(chunk.text);
     else if (chunk.type === 'text') text += chunk.text;
     else if (chunk.type === 'thinking') thinking += chunk.text;
     else if (chunk.type === 'usage') usage = chunk;
@@ -443,7 +515,7 @@ export async function complete(opts) {
  * (max_model_len). Null if unknown. Ollama is not queried: we set num_ctx ourselves.
  */
 export async function serverContextLength({ provider, baseUrl, apiKey, model }) {
-  if (provider === 'ollama' || !model) return null;
+  if (provider === 'ollama' || provider === 'poney' || !model) return null; // (their context is ours to set)
   const headers = apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
   const get = async (url) => {
     try {

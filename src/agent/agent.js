@@ -40,6 +40,7 @@ export const DEFAULT_CONFIG = {
   subagentsEnabled: true, // the agent may delegate tasks to sub-agents (<agent>)
   maxParallelAgents: 2, // sub-agents running at the same time (one GPU: speed is shared)
   parallelAgents: true, // false: sub-agents one at a time (on weak machines, parallel generations slow down a lot)
+  maxInferences: 1, // the app's limit of calls to local models at the same time; 0: none
   testCommand: '',
   searxngUrl: '',
 };
@@ -797,6 +798,10 @@ export class Agent extends EventEmitter {
           this.emit('event', { type: 'delta', id, kind: 'tool', text: chunk.text, name: chunk.name });
           continue;
         }
+        if (chunk.type === 'status') {
+          this.emit('event', { type: 'model_status', id, text: chunk.text });
+          continue;
+        }
         if (chunk.type === 'prompt_read') {
           // The server has read the prompt (it is cached): something visible
           // should come within seconds. If not, the model is stuck producing
@@ -1005,6 +1010,7 @@ export class Agent extends EventEmitter {
         else if (chunk.type === 'thinking') thinking += chunk.text;
         else if (chunk.type === 'done') done = chunk.reason;
         else if (chunk.type === 'progress') this.emit('event', { type: 'prompt_progress', id: 'triage', progress: chunk.progress });
+        else if (chunk.type === 'status') this.emit('event', { type: 'model_status', id: 'triage', text: chunk.text });
       }
       cut = done === 'length' && Boolean(thinking.trim()) && !text.trim();
       return parseTriage(text);

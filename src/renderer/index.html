@@ -253,7 +253,7 @@
       <div class="nav-body">
       <nav class="dialog-nav">
         <button type="button" data-page="appearance">Apparence</button>
-        <button type="button" data-page="server">Serveur de modèles</button>
+        <button type="button" data-page="providers">Fournisseurs</button>
         <button type="button" data-page="generation">Génération</button>
         <button type="button" data-page="tools">Outils</button>
         <button type="button" data-page="privacy">Confidentialité</button>
@@ -269,20 +269,10 @@
           </select>
         </label>
       </fieldset>
-      <fieldset class="nav-page" data-page="server">
-        <legend>Serveur de modèles</legend>
-        <label>Fournisseur
-          <select name="provider">
-            <option value="ollama">Ollama (API native)</option>
-            <option value="openai">Compatible OpenAI (LM Studio, llama.cpp, vLLM…)</option>
-          </select>
-        </label>
-        <label>URL <input name="baseUrl" placeholder="http://localhost:11434"></label>
-        <label>Clé API (optionnelle) <input name="apiKey" type="password" autocomplete="off"></label>
-        <label>Modèle
-          <div class="row"><input name="model" list="modelList"><button type="button" id="refreshModels" class="ghost">↻</button></div>
-          <datalist id="modelList"></datalist>
-        </label>
+      <fieldset class="nav-page" data-page="providers">
+        <legend>Fournisseurs</legend>
+        <div id="providersList" class="providers"></div>
+        <button type="button" id="addProvider" class="ghost">Ajouter un serveur</button>
       </fieldset>
       <fieldset class="nav-page" data-page="generation">
         <legend>Génération</legend>
@@ -290,6 +280,10 @@
         <label>Tokens max par réponse <input name="maxTokens" type="number" min="256" step="256"></label>
         <label>Température <input name="temperature" type="number" min="0" max="2" step="0.05" placeholder="celle du modèle" title="Vide : la température prévue pour le modèle (réglages du serveur). Une valeur basse rend les réponses plates et favorise les boucles."></label>
         <label>Étapes max par tâche <input name="maxSteps" type="number" min="1"></label>
+        <label>Inférences en même temps
+          <input name="maxInferences" type="number" min="0">
+          <small>0 : sans limite. Vaut pour les conversations et les sous-agents sur les modèles locaux et les serveurs ; les autres attendent leur tour. Si la mémoire manque, Poney attend aussi, quel que soit ce réglage.</small>
+        </label>
       </fieldset>
       <fieldset class="nav-page" data-page="tools">
         <legend>Outils</legend>
@@ -298,13 +292,6 @@
           <small>Lancée automatiquement quand l’agent pense avoir fini ; il doit la faire passer.</small>
         </label>
         <label>Timeout des commandes (s) <input name="commandTimeout" type="number" min="5"></label>
-        <label class="check"><input name="parallelAgents" type="checkbox" checked> Lancer les sous-agents en parallèle
-          <small>Décoché : un à la fois (les tâches restent déléguées). Sur une machine modeste, deux générations en même temps peuvent être bien plus lentes qu’une seule.</small>
-        </label>
-        <label>Sous-agents en même temps
-          <input name="maxParallelAgents" type="number" min="1" max="8">
-          <small>Un seul GPU : la vitesse est partagée entre eux. Utile surtout quand ils attendent des commandes ou le web. LM Studio : au plus son nombre de requêtes parallèles.</small>
-        </label>
         <label>Exécution des commandes
           <select name="approval">
             <option value="ask">Demander à chaque fois</option>
