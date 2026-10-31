@@ -8,6 +8,7 @@ test('the server of before becomes the first entry, between Poney and Claude', (
   const list = loadProviders(undefined, config);
   assert.deepEqual(list.map((p) => p.type), ['poney', 'openai', 'claude']);
   assert.equal(list[1].baseUrl, config.baseUrl);
+  assert.equal(list[0].enabled, false); // (the engine is not the default yet)
   assert.equal(loadProviders(list, config), list);
 });
 

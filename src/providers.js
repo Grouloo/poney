@@ -10,7 +10,7 @@ const FIXED = { poney: 'Poney', claude: 'Claude' };
 export function loadProviders(saved, config) {
   if (Array.isArray(saved) && saved.length) return saved;
   return [
-    { id: 'poney', type: 'poney', name: 'Poney', enabled: true },
+    { id: 'poney', type: 'poney', name: 'Poney', enabled: false }, // (on once scripts/compare-engine.mjs has passed: until then the server stays the default)
     { id: 'server-1', type: config.provider === 'ollama' ? 'ollama' : 'openai', name: '', baseUrl: config.baseUrl, apiKey: config.apiKey ?? '', enabled: true },
     { id: 'claude', type: 'claude', name: 'Claude', enabled: true },
   ];
