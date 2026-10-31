@@ -42,14 +42,20 @@
   </aside>
   <aside id="filesBar" class="side-pane">
     <div class="files-head">
-      <span class="files-title">Fichiers</span>
+      <button id="sectionPicker" class="project-picker" type="button">
+        <span class="picker-name"></span>
+        <svg class="picker-chev" viewBox="0 0 12 12" width="11" height="11" aria-hidden="true"><path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
       <span id="filesRoot" class="muted"></span>
       <button id="refreshFiles" class="ghost icon" data-tip="Rafraîchir">↻</button>
       <button type="button" class="ghost icon deck-swap"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 5.5h10M10 3l2.5 2.5L10 8M13.5 10.5h-10M6 8l-2.5 2.5L6 13"/></svg></button>
+      <div id="sectionMenu" class="project-menu hidden"></div>
     </div>
-    <div class="pane">
+    <div id="filesPane" class="pane">
       <ul id="fileTree" class="tree"></ul>
     </div>
+    <div id="gitPane" class="pane hidden"></div>
+    <div id="sectionDots" class="project-dots"></div>
   </aside>
   </div>
 
@@ -132,6 +138,15 @@
       <button id="agentPanelClose" class="ghost icon" title="Fermer">✕</button>
     </div>
     <div id="agentPanelBody" class="viewer-body agent-panel-body"></div>
+  </section>
+  <section id="diffPanel" class="viewer live-panel hidden">
+    <div class="viewer-head">
+      <span id="diffPanelSide" class="agent-chip"></span>
+      <span id="diffPanelPath" class="agent-title"></span>
+      <span id="diffPanelInfo" class="tag"></span>
+      <button id="diffPanelClose" class="ghost icon" title="Fermer">✕</button>
+    </div>
+    <div id="diffPanelBody" class="viewer-body live-panel-body"></div>
   </section>
   <section id="livePanel" class="viewer live-panel hidden">
     <div class="viewer-head">

@@ -9,8 +9,9 @@ import { ClaudeAgent, findClaude, claudeLoggedIn, claudeModels } from './agent/c
 import { listModels } from './agent/llm.js';
 import { ConversationStore, moveAppData } from './conversations.js';
 import { listDir, readFileForViewer } from './files.js';
+import { gitStatus, gitDiff, gitFetch, gitSync } from './git.js';
 import { migrateLegacy, rebuildHistory, rebuildForAction } from './agent/rebuild.js';
-import { checkTor, torStatus, newCircuits, findTorProxy } from './agent/tor.js';
+import { checkTor, torStatus, newCircuits, findTorProxy, requireTor, proxyEnv } from './agent/tor.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -704,6 +705,12 @@ ipcMain.handle('files:list', (_, rel) => listDir(activeCwd(), rel));
 ipcMain.handle('files:read', (_, rel) => readFileForViewer(activeCwd(), rel));
 ipcMain.handle('files:openExternal', (_, rel) => shell.openPath(path.join(activeCwd(), rel)));
 ipcMain.handle('files:reveal', (_, rel) => shell.showItemInFolder(path.join(activeCwd(), rel)));
+// (git goes through the network like a terminal command: the same Tor setting)
+const gitEnv = async () => settings.config.torEnabled && settings.config.torShell ? proxyEnv(await requireTor(settings.config.torProxy)) : {};
+ipcMain.handle('git:status', () => gitStatus(activeCwd()));
+ipcMain.handle('git:diff', (_, file, opts) => gitDiff(activeCwd(), file, opts));
+ipcMain.handle('git:fetch', async () => gitFetch(activeCwd(), await gitEnv()));
+ipcMain.handle('git:sync', async () => gitSync(activeCwd(), await gitEnv()));
 ipcMain.handle('agent:approve', (_, { id, ok, always, reason }) => {
   if (always) {
     settings.config.approval = 'auto';

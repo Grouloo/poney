@@ -122,6 +122,11 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   delete the project from the app: its conversations go, its folder and files stay), add a project (⇧⌘O).
   The shortcuts act on the project listed in the sidebar (Ctrl instead of ⌘ outside macOS). ⇧⌘E swaps the
   conversations and the files.
+- **Git**, the second section of the files' card (selector at the top, icons at the bottom, or a two-finger swipe):
+  "Synchroniser" with what goes up and down (fast-forward only: a diverged branch is refused; a branch without
+  upstream is published), the staged files, the tracked changes, recent commits. A click on a file opens its diff
+  in a side panel. The remote is fetched at most every 5 minutes while this section is shown, or on ↻; through
+  Tor when commands are.
 - **Right click on a conversation's card**: mark it as read, rename it, delete it.
 - **Right click on text**: on a selection of the conversation, copy and "Citer dans le message"; in the input (and
   the other fields), undo, cut, copy, paste, select all, and the spelling checker's suggestions (or "Ajouter au
@@ -289,6 +294,7 @@ the status dot is red.
 - `src/main.js`, `src/preload.cjs`, `src/renderer/` — Electron app
 - `src/conversations.js`, `src/files.js` — conversation storage, file access for the viewer
 - `src/cli.js` — command-line runner
+- `src/git.js` — Git for the sidebar: status, diff, fetch, sync
 - `scripts/brand-electron.mjs` — macOS, development: renames the Electron bundle to `Poney.app` and gives it the app's icon, so the Dock shows them (run by `npm start`)
 - `assets/` — app icon (`icon.svg` source; `icon.png` for the macOS Dock, `icon.icns` for the bundle, `icon-square.png` for the Windows/Linux taskbar)
 

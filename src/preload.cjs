@@ -56,4 +56,9 @@ contextBridge.exposeInMainWorld('api', {
   readFile: (rel) => ipcRenderer.invoke('files:read', rel),
   openFileExternal: (rel) => ipcRenderer.invoke('files:openExternal', rel),
   revealFile: (rel) => ipcRenderer.invoke('files:reveal', rel),
+
+  gitStatus: () => ipcRenderer.invoke('git:status'),
+  gitDiff: (file, opts) => ipcRenderer.invoke('git:diff', file, opts),
+  gitFetch: () => ipcRenderer.invoke('git:fetch'),
+  gitSync: () => ipcRenderer.invoke('git:sync'),
 });

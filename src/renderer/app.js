@@ -1814,6 +1814,14 @@ $('sidebarBtn').onclick = () => document.body.classList.toggle('no-sidebar');
 // The conversations and the files, as a deck of two cards (the one in front: remembered).
 let filesInFront = false;
 try { filesInFront = localStorage.getItem('deckFront') === 'files'; } catch {}
+// On the card of the files, two sections, gone through as the projects are on the other card.
+const SECTIONS = [
+  { key: 'files', label: 'Fichiers', icon: '<svg class="proj-icon dot-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M1 3a1 1 0 0 1 1-1h2.6l1.2 1.3H10a1 1 0 0 1 1 1V9a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1z"/></svg>' },
+  { key: 'git', label: 'Git', icon: '<svg class="proj-icon dot-icon" viewBox="0 0 12 12" aria-hidden="true"><circle cx="3" cy="2.5" r="1.6"/><circle cx="3" cy="9.5" r="1.6"/><circle cx="9" cy="3.5" r="1.6"/><path class="line" d="M3 3v6M9 4.5C9 7 3 6 3 8.5"/></svg>' },
+];
+let filesSection = 'files';
+try { if (localStorage.getItem('filesSection') === 'git') filesSection = 'git'; } catch {}
+const sectionLabel = () => SECTIONS.find((s) => s.key === filesSection).label;
 function renderDeck() {
   const [front, back] = filesInFront ? [$('filesBar'), $('sidebar')] : [$('sidebar'), $('filesBar')];
   front.className = front.className.replace(/\b(front|back)\b/g, '').trim();
@@ -1822,7 +1830,7 @@ function renderDeck() {
   back.classList.add('back');
   front.inert = false;
   back.inert = true; // (under the other card: out of reach of the keyboard too)
-  $('deckTab').textContent = filesInFront ? 'Conversations' : 'Fichiers';
+  $('deckTab').textContent = filesInFront ? 'Conversations' : sectionLabel();
   $('deckTab').setAttribute('aria-label', `Afficher : ${$('deckTab').textContent}`);
   for (const b of document.querySelectorAll('.deck-swap')) b.dataset.tip = `Afficher : ${$('deckTab').textContent} (${shortcutText(SHORTCUTS.swapDeck)})`;
 }
@@ -2362,15 +2370,233 @@ async function renderDir(rel, ul) {
 
 let treeRefresh = null;
 async function refreshTree() {
-  $('filesRoot').textContent = offMode() ? '' : shortPath(activeDir());
-  $('filesRoot').title = activeDir();
+  renderFilesHead();
+  refreshGit();
   if (!activeDir()) {
     $('fileTree').innerHTML = '';
     return;
   }
   await renderDir('.', $('fileTree'));
 }
-$('refreshFiles').onclick = refreshTree;
+$('refreshFiles').onclick = () => filesSection === 'git' ? refreshGit({ force: true }) : refreshTree();
+
+// ---------- the sections of the second card: the files and Git ----------
+function renderFilesHead() {
+  const git = filesSection === 'git';
+  const root = $('filesRoot');
+  root.classList.toggle('branch', git);
+  root.textContent = git ? gitState?.branch ?? '' : offMode() ? '' : shortPath(activeDir());
+  root.title = git ? root.textContent : activeDir();
+}
+function renderSection() {
+  $('sectionPicker').querySelector('.picker-name').textContent = sectionLabel();
+  $('filesPane').classList.toggle('hidden', filesSection !== 'files');
+  $('gitPane').classList.toggle('hidden', filesSection !== 'git');
+  const dots = $('sectionDots');
+  dots.innerHTML = '';
+  for (const s of SECTIONS) {
+    const b = dots.appendChild(document.createElement('button'));
+    b.type = 'button';
+    b.className = `pdot has-icon${s.key === filesSection ? ' active' : ''}`;
+    b.dataset.tip = s.label;
+    b.innerHTML = s.icon;
+    b.onclick = () => setSection(s.key);
+  }
+  renderDeck();
+}
+function setSection(key) {
+  if (key === filesSection) return;
+  const dir = Math.sign(SECTIONS.findIndex((s) => s.key === key) - SECTIONS.findIndex((s) => s.key === filesSection));
+  filesSection = key;
+  try { localStorage.setItem('filesSection', key); } catch {}
+  renderSection();
+  renderFilesHead();
+  const pane = $(key === 'git' ? 'gitPane' : 'filesPane');
+  pane.classList.remove('slide-next', 'slide-prev');
+  void pane.offsetWidth; // (changed again during the animation: it starts over)
+  pane.classList.add(dir > 0 ? 'slide-next' : 'slide-prev');
+  refreshGit();
+}
+function stepSection(dir) {
+  const next = SECTIONS[SECTIONS.findIndex((s) => s.key === filesSection) + dir];
+  if (next) setSection(next.key);
+}
+const sectionSwipe = new SwipeDetector(stepSection);
+$('filesBar').addEventListener('wheel', (e) => {
+  if ($('filesBar').classList.contains('front')) sectionSwipe.wheel(e.deltaX, e.deltaY, e.timeStamp);
+}, { passive: true });
+function closeSectionMenu() {
+  $('sectionMenu').classList.add('hidden');
+  $('sectionPicker').classList.remove('open');
+}
+$('sectionPicker').onclick = (e) => {
+  e.stopPropagation();
+  if (!$('sectionMenu').classList.contains('hidden')) return closeSectionMenu();
+  $('sectionMenu').replaceChildren(...SECTIONS.map((s) => {
+    const row = div(`pm-row${s.key === filesSection ? ' selected' : ''}`);
+    row.innerHTML = `<span class="pm-icon">${s.icon}</span><span class="pm-name">${s.label}</span>`;
+    row.onclick = () => { closeSectionMenu(); setSection(s.key); };
+    return row;
+  }));
+  $('sectionMenu').classList.remove('hidden');
+  $('sectionPicker').classList.add('open');
+};
+$('sectionMenu').onclick = (e) => e.stopPropagation();
+document.addEventListener('click', closeSectionMenu);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSectionMenu(); });
+
+// ---------- Git ----------
+const FETCH_EVERY_MS = 5 * 60 * 1000;
+const lastFetch = new Map(); // (folder → when: what comes down is counted from the last fetch)
+let gitState = null;
+let gitRefresh = 0;
+let gitSyncing = false;
+let gitError = '';
+let diffFile = null; // the file in the diff panel: { path, oldPath, staged }
+let collapsedGit = new Set();
+try { collapsedGit = new Set(JSON.parse(localStorage.getItem('gitCollapsed') || '[]')); } catch {}
+
+async function refreshGit({ force = false } = {}) {
+  if (filesSection !== 'git') return;
+  const dir = offMode() ? '' : activeDir();
+  const run = ++gitRefresh;
+  const st = dir ? await window.api.gitStatus().catch(() => ({ repo: false })) : { repo: false };
+  if (run !== gitRefresh) return; // (a newer one is on its way, perhaps for another project)
+  gitState = st;
+  renderGit();
+  renderFilesHead();
+  if (diffFile) {
+    const file = (diffFile.staged ? st.staged : st.unstaged)?.find((f) => f.path === diffFile.path);
+    if (file) openDiff(file, diffFile.staged, { keepScroll: true }); else closeDiffPanel();
+  }
+  if (!st.hasRemote || gitSyncing || (!force && Date.now() - (lastFetch.get(dir) ?? 0) < FETCH_EVERY_MS)) return;
+  lastFetch.set(dir, Date.now());
+  try { await window.api.gitFetch(); } catch { return; } // (offline: the counts stay as they are)
+  if (run === gitRefresh) refreshGit();
+}
+window.addEventListener('focus', () => refreshGit()); // (a commit made elsewhere)
+
+function gitGroup(key, label, count) {
+  const group = div(`group foldable git-group${collapsedGit.has(key) ? ' collapsed' : ''}`);
+  group.innerHTML = '<div class="group-head"><span class="name"></span><span class="count"></span><span class="chev">▾</span></div><ul class="list tree"></ul>';
+  group.querySelector('.name').textContent = label;
+  group.querySelector('.count').textContent = count;
+  group.querySelector('.group-head').onclick = () => {
+    if (collapsedGit.has(key)) collapsedGit.delete(key); else collapsedGit.add(key);
+    try { localStorage.setItem('gitCollapsed', JSON.stringify([...collapsedGit])); } catch {}
+    group.classList.toggle('collapsed');
+  };
+  return group;
+}
+function gitFileRow(file, staged) {
+  const name = baseName(file.path);
+  const folder = file.path.slice(0, -name.length - 1);
+  const li = document.createElement('li');
+  const node = li.appendChild(div('node git-file'));
+  node.dataset.git = `${staged ? 'staged' : 'unstaged'}:${file.path}`;
+  node.classList.toggle('active', Boolean(diffFile) && diffFile.staged === staged && diffFile.path === file.path);
+  node.innerHTML = `${fileIconSvg(name)}<span class="name"></span><span class="git-dir"></span><span class="git-letter ${esc(file.status)}">${esc(file.status)}</span>`;
+  node.querySelector('.name').textContent = name;
+  node.querySelector('.git-dir').textContent = folder;
+  node.title = file.oldPath ? `${file.oldPath} → ${file.path}` : file.path;
+  node.onclick = () => openDiff(file, staged);
+  return li;
+}
+function renderGit() {
+  const pane = $('gitPane');
+  const st = gitState;
+  if (!st?.repo) {
+    const none = div('git-empty muted');
+    none.textContent = 'Pas de dépôt Git ici.';
+    pane.replaceChildren(none);
+    return;
+  }
+  const sync = document.createElement('button');
+  sync.type = 'button';
+  sync.className = 'git-sync';
+  sync.disabled = gitSyncing || !st.hasRemote || !st.branch;
+  sync.textContent = gitSyncing ? 'Synchronisation…' : 'Synchroniser';
+  if (st.upstream) {
+    const counts = sync.appendChild(document.createElement('span'));
+    counts.className = 'git-counts';
+    counts.textContent = `↑${st.ahead} ↓${st.behind}`;
+  }
+  sync.dataset.tip = !st.hasRemote ? 'Aucun dépôt distant' : !st.branch ? 'Aucune branche : la tête est détachée' : st.upstream ? `Avec ${st.upstream}` : 'Publier la branche';
+  sync.onclick = syncGit;
+  const items = [sync];
+  if (gitError) {
+    const error = div('git-error');
+    error.textContent = gitError;
+    items.push(error);
+  }
+  for (const [key, label, files, staged] of [['staged', 'Indexés', st.staged, true], ['unstaged', 'Modifiés', st.unstaged, false]]) {
+    const group = gitGroup(key, label, files.length);
+    group.querySelector('.list').append(...files.map((f) => gitFileRow(f, staged)));
+    items.push(group);
+  }
+  const history = div('group git-group');
+  history.innerHTML = '<div class="group-head"><span class="name">Historique</span></div>';
+  for (const c of st.commits) {
+    const row = history.appendChild(div('git-commit'));
+    row.innerHTML = `<div class="git-subject"></div><div class="git-meta"><code>${esc(c.hash)}</code> · ${esc(c.author)} · ${esc(relativeTime(c.time))}</div>`;
+    row.querySelector('.git-subject').textContent = c.subject;
+    row.title = c.subject;
+  }
+  if (!st.commits.length) history.appendChild(div('git-none muted')).textContent = 'Aucun commit.';
+  items.push(history);
+  pane.replaceChildren(...items);
+}
+async function syncGit() {
+  const dir = activeDir();
+  gitSyncing = true;
+  gitError = '';
+  renderGit();
+  try {
+    await window.api.gitSync();
+    lastFetch.set(dir, Date.now());
+  } catch (e) {
+    gitError = errorText(e);
+  }
+  gitSyncing = false;
+  renderGit();
+  onFilesChanged(); // (what came down changed the files)
+}
+
+// The diff of a file, in its own side panel.
+function closeDiffPanel() {
+  diffFile = null;
+  $('diffPanel').classList.add('hidden');
+  document.querySelectorAll('.git-file.active').forEach((n) => n.classList.remove('active'));
+}
+$('diffPanelClose').onclick = closeDiffPanel;
+async function openDiff(file, staged, { keepScroll = false } = {}) {
+  const body = $('diffPanelBody');
+  const scroll = keepScroll ? body.scrollTop : 0;
+  if (!keepScroll) {
+    closeViewer(); // (one side panel at a time)
+    closeAgentPanel();
+    if (liveBubble) closeLivePanel();
+  }
+  const shown = diffFile = { path: file.path, oldPath: file.oldPath, staged };
+  $('diffPanel').classList.remove('hidden');
+  $('diffPanelSide').textContent = staged ? 'Indexé' : 'Modifié';
+  $('diffPanelPath').textContent = file.path;
+  $('diffPanelPath').title = file.path;
+  for (const n of document.querySelectorAll('.git-file')) n.classList.toggle('active', n.dataset.git === `${staged ? 'staged' : 'unstaged'}:${file.path}`);
+  let r;
+  try {
+    r = await window.api.gitDiff(file.path, { staged, oldPath: file.oldPath });
+  } catch (e) {
+    r = { error: errorText(e) };
+  }
+  if (shown !== diffFile) return; // (another file was clicked meanwhile)
+  const added = (r.diff?.match(/^\+(?!\+\+)/gm) || []).length;
+  const removed = (r.diff?.match(/^-(?!--)/gm) || []).length;
+  $('diffPanelInfo').textContent = `+${added} −${removed}${r.truncated ? ' · tronqué' : ''}`;
+  body.innerHTML = r.diff ? renderDiff(r.diff.trimEnd()) : `<div class="center">${esc(r.error ?? 'Aucune différence.')}</div>`;
+  body.scrollTop = scroll;
+}
+renderSection();
 
 /** Called after the agent writes/edits/runs: refresh the tree and the open file. */
 function onFilesChanged(changedPath) {
@@ -2403,6 +2629,7 @@ function formatSize(n) {
 }
 
 function closeViewer() {
+  closeDiffPanel();
   openPath = null;
   $('viewer').classList.add('hidden');
   document.querySelectorAll('.tree .node.active').forEach((n) => n.classList.remove('active'));
@@ -2421,6 +2648,7 @@ async function openFile(rel, { keepScroll = false } = {}) {
   openPath = f.path;
   if (panelAgent) closeAgentPanel(); // (one side panel at a time)
   if (liveBubble) closeLivePanel();
+  closeDiffPanel();
   $('viewer').classList.remove('hidden');
   $('viewerPath').textContent = f.path;
   $('viewerPath').title = f.path;
