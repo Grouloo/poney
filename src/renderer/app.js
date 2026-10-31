@@ -1756,6 +1756,12 @@ window.api.onSwipe(() => {
   if (!filesInFront) swapDeck();
 });
 
+/** How long a conversation has been working (its card counts the seconds). */
+const workTime = (ms) => (ms < 10000 ? `${Math.floor(Math.max(0, ms) / 1000)} s` : fmtDuration(ms));
+setInterval(() => {
+  for (const el of document.querySelectorAll('.conv-card .when[data-since]')) el.textContent = workTime(Date.now() - Number(el.dataset.since));
+}, 1000);
+
 function relativeTime(ts) {
   const s = (Date.now() - ts) / 1000;
   if (s < 60) return 'à l’instant';
@@ -2067,7 +2073,7 @@ function conversationItem(c, current) {
   li.dataset.place = c.id;
   li.dataset.project = projectOf(c);
   li.classList.toggle('active', c.id === current);
-  li.innerHTML = '<div class="card-top"><span class="title"></span><span class="pill"></span><span class="card-actions"><button class="ren">✎</button><button class="del" title="Supprimer">✕</button></span></div><div class="card-meta"><span class="state"></span><span class="project"></span><span class="when"></span></div>';
+  li.innerHTML = '<div class="card-top"><span class="title"></span><span class="state"></span><span class="pill"></span><span class="card-actions"><button class="ren">✎</button><button class="del" title="Supprimer">✕</button></span></div><div class="card-meta"><span class="project"></span><span class="when"></span></div>';
   li.querySelector('.title').textContent = c.title;
   li.querySelector('.title').title = c.title;
   // How many things wait for the user: approvals (orange), answers to read (blue).
@@ -2083,7 +2089,11 @@ function conversationItem(c, current) {
   const project = li.querySelector('.project');
   project.innerHTML = `${projectGlyph(projectOf(c))} ${esc(c.offProject ? 'Hors projet' : baseName(c.workspace || ''))}`;
   project.title = c.offProject ? 'Conversation sans dossier de projet' : c.workspace || '';
-  li.querySelector('.when').textContent = relativeTime(c.updatedAt);
+  const when = li.querySelector('.when');
+  if (category(c) === 'busy' && c.workingSince) {
+    when.dataset.since = c.workingSince;
+    when.textContent = workTime(Date.now() - c.workingSince);
+  } else when.textContent = relativeTime(c.updatedAt);
   li.onclick = () => openConversation(c.id);
   li.querySelector('.ren').dataset.tip = renameTip();
   li.querySelector('.ren').onclick = (e) => { e.stopPropagation(); startRename(li, c); };

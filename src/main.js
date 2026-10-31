@@ -97,6 +97,7 @@ class Session {
     this.finished = false; // finished while shown: stays with the finished ones until the user leaves it
     this.draft = conv?.draft ?? ''; // what is typed in the input, not sent
     this.draftTimer = null;
+    this.workingSince = null; // when the turn under way started
     this.usedAt = Date.now();
   }
 
@@ -135,6 +136,7 @@ class Session {
     if (this === active) send('agent:event', { ...ev, session: this.key });
     if (ev.type === 'turn_start' || ev.type === 'turn_end') {
       this.finished = ev.type === 'turn_end';
+      this.workingSince = ev.type === 'turn_start' ? Date.now() : null;
       if (this.finished && this !== active) this.unread++;
       send('sessions:changed');
     }
@@ -423,6 +425,7 @@ ipcMain.handle('conversations:list', () => {
     c.running = s.running;
     c.finished = s.finished;
     c.draft = Boolean(s.draft.trim());
+    c.workingSince = s.workingSince;
   }
   return { current: active?.key ?? null, all };
 });

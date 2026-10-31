@@ -481,7 +481,7 @@ img.proj-icon { width: 1.15em; height: 1.15em; object-fit: contain; vertical-ali
 .conv-card .when { flex-shrink: 0; }
 .card-actions { display: none; position: absolute; right: 0; top: 50%; transform: translateY(-50%); gap: 6px; font-size: 13px; line-height: 1; }
 .conv-card:hover .card-actions { display: flex; }
-.conv-card:hover .pill { visibility: hidden; }
+.conv-card:hover .pill, .conv-card:hover .state { visibility: hidden; }
 .conv-card:hover .title { -webkit-mask-image: linear-gradient(to left, transparent 46px, #000 70px); mask-image: linear-gradient(to left, transparent 46px, #000 70px); }
 .conv-card .pill {
   flex: none; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; box-sizing: border-box;
@@ -657,11 +657,16 @@ fieldset label.check input { width: auto; }
 body.running .resume-btn { display: none; }
 .msg-editor .edit-error { margin: 6px 0; }
 
-/* ---------- agent's plan (pinned above the input) ---------- */
+/* ---------- agent's plan, in the conversation ---------- */
 .plan-panel { border: 1px solid var(--border); border-radius: 10px; background: var(--surface); font-size: 14px; }
 #transcript > .plan-panel { padding: 0; max-width: 820px; width: calc(100% - 40px); margin-top: 8px; margin-bottom: 8px; }
 .plan-head { display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; color: var(--text); padding: 6px 10px; font-size: 13px; }
 .plan-head:hover .resume-btn, .plan-list li:hover > .resume-btn { display: inline-block; }
+/* (over the end of the line, on hover: the text does not move) */
+.plan-head, .plan-list > li { position: relative; }
+.plan-head .resume-btn, .plan-list > li > .resume-btn { position: absolute; top: 4px; margin: 0; background: var(--sheet-solid); border-color: var(--border); }
+.plan-head .resume-btn { right: 28px; }
+.plan-list > li > .resume-btn { right: 6px; }
 .plan-title { font-weight: 600; }
 .plan-count { color: var(--muted); }
 .plan-chev { margin-left: auto; color: var(--muted); transition: transform 0.15s; }
@@ -748,7 +753,7 @@ body.running .resume-btn { display: none; }
 
 /* a conversation at work: a small spinner before its project */
 .conv-card .state { display: none; }
-.conv-card.busy .state { display: inline-block; flex: none; width: 6px; height: 6px; border-radius: 50%; border: 2px solid var(--accent); border-right-color: transparent; animation: spin 0.9s linear infinite; }
+.conv-card.busy .state { display: inline-block; flex: none; width: 14px; height: 14px; margin: 2px; border-radius: 50%; border: 2px solid var(--accent); border-right-color: transparent; animation: spin 0.9s linear infinite; }
 .msg.user .fetched { margin: 4px 0 0 15%; font-size: 13px; color: var(--muted); white-space: pre-line; }
 .msg.user .triage { margin: 4px 0 0 15%; font-family: var(--ui); font-size: 13px; color: var(--muted); }
 #transcript > .triage, .agent-view .triage { margin: 6px auto; font-family: var(--ui); font-size: 13px; color: var(--muted); }
