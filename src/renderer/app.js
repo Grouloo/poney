@@ -2143,7 +2143,7 @@ function conversationItem(c, current) {
   li.dataset.place = c.id;
   li.dataset.project = projectOf(c);
   li.classList.toggle('active', c.id === current);
-  li.innerHTML = '<div class="card-top"><span class="title"></span><span class="state"></span><span class="pill"></span><span class="card-actions"><button class="ren">✎</button><button class="del" title="Supprimer">✕</button></span></div><div class="card-meta"><span class="project"></span><span class="card-engine"></span><span class="when"></span></div>';
+  li.innerHTML = '<div class="card-top"><span class="title"></span><span class="state"></span><span class="pill"></span><span class="card-actions"><button class="ren">✎</button><button class="del" title="Supprimer">✕</button></span></div><div class="card-meta"><span class="project"></span><span class="when"></span><span class="card-engine"></span></div>';
   li.querySelector('.title').textContent = c.title;
   li.querySelector('.title').title = c.title;
   // How many things wait for the user: approvals (orange), answers to read (blue).
