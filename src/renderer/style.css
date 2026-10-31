@@ -905,6 +905,8 @@ body.running .resume-btn { display: none; }
 .provider-model { display: flex; align-items: center; gap: 8px; font-size: 13.5px; }
 .provider-model span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .provider-model input { flex: none; width: 110px; }
+.model-sep { display: flex; align-items: center; gap: 8px; padding: 8px 8px 4px; color: var(--muted); font-size: 12px; }
+.model-sep::after { content: ''; flex: 1; height: 1px; background: var(--border); }
 .model-row { width: 100%; background: none; border: none; color: var(--text); text-align: left; }
 .model-row:disabled { opacity: 0.45; cursor: default; }
 .model-row.selected .pm-name { color: var(--accent); }

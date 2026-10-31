@@ -125,10 +125,12 @@ async function setChoice(patch) {
   settings = await window.api.setChoice(patch);
   renderSettings();
   refreshGauge();
+  refreshConversations();
 }
 
 /** The provider of the conversation shown (one from before providers: the first server). */
-const choiceProvider = () => choice().provider ?? settings.providers?.find((p) => p.type !== 'poney' && p.type !== 'claude')?.id;
+const firstServer = () => settings.providers?.find((p) => p.type !== 'poney' && p.type !== 'claude')?.id;
+const choiceProvider = () => choice().provider ?? firstServer();
 
 async function refreshModels() {
   modelGroups = await window.api.providerModels().catch(() => []);
@@ -139,6 +141,7 @@ async function refreshModels() {
   renderChoice();
   claude = await window.api.claudeStatus().catch(() => claude);
   renderChoice();
+  refreshConversations(); // (the cards show their provider's icon)
   if ($('settingsDialog').open) renderProviders();
 }
 
@@ -190,12 +193,14 @@ function openModelMenu() {
     };
   };
   const started = settings.active?.started;
+  const label = (text) => menu.appendChild(div('model-sep')).appendChild(document.createElement('span')).append(text);
   for (const g of modelGroups) {
+    if (g.provider.type !== 'poney' && (g.models.length || g.error)) label(g.name);
     for (const m of g.models) row('local', m.id, m.name, started && c.engine !== 'local', g);
     if (g.error) menu.appendChild(div('pm-row muted', `<span class="pm-icon">${groupIcon(g)}</span><span class="pm-name">${esc(g.name)} : injoignable</span>`));
   }
   if (!modelGroups.some((g) => g.models.length || g.error)) menu.appendChild(div('pm-row muted', 'aucun modèle local'));
-  if (claude.available || claude.installed) menu.appendChild(div('ctx-sep'));
+  if (claude.available || claude.installed) label('Claude');
   for (const m of claude.models) row('claude', m.value, m.name, started && c.engine !== 'claude');
   if (claude.installed && !claude.available) {
     menu.appendChild(div('pm-row muted model-hint', `<span class="pm-icon">${CLAUDE_ICON}</span><span class="pm-name">Pour les modèles Claude : lancez « claude auth login » dans un terminal</span>`));
@@ -2281,8 +2286,9 @@ function conversationItem(c, current) {
   const project = li.querySelector('.project');
   project.innerHTML = `${projectGlyph(projectOf(c))} ${esc(c.offProject ? 'Hors projet' : baseName(c.workspace || ''))}`;
   project.title = c.offProject ? 'Conversation sans dossier de projet' : c.workspace || '';
-  li.querySelector('.card-engine').innerHTML = engineIcon(c.engine);
-  li.querySelector('.card-engine').title = c.engine === 'claude' ? 'Modèle Claude' : 'Modèle local';
+  const group = modelGroups.find((g) => g.provider.id === (c.provider ?? firstServer()));
+  li.querySelector('.card-engine').innerHTML = c.engine === 'claude' ? CLAUDE_ICON : groupIcon(group);
+  li.querySelector('.card-engine').title = c.engine === 'claude' ? 'Modèle Claude' : group?.name ? `Modèle ${group.name}` : 'Modèle local';
   const when = li.querySelector('.when');
   if (category(c) === 'busy' && c.workingSince) {
     when.dataset.since = c.workingSince;

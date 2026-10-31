@@ -574,6 +574,8 @@ ipcMain.handle('conversations:list', () => {
     c.running = s.running;
     c.finished = s.finished;
     c.draft = Boolean(s.draft.trim());
+    c.engine = s.choice.engine ?? 'local';
+    c.provider = s.choice.provider;
     c.workingSince = s.workingSince;
     c.engine = s.choice.engine;
   }
