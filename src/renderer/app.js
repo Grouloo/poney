@@ -1757,9 +1757,11 @@ function openProjectSettings(key) {
   settingsProject = key;
   $('ipSearch').value = '';
   pickerTab = settings.projectIcons?.[key]?.icon ? 'icon' : 'emoji';
-  $('projectDialogTitle').textContent = projectLabel(key);
   $('projectDialogPath').textContent = key === OFF_KEY ? 'Les conversations sans dossier de projet.' : shortPath(key);
   $('projectDanger').classList.toggle('hidden', key === OFF_KEY);
+  $('projectNameField').classList.toggle('hidden', key === OFF_KEY);
+  $('projectName').value = settings.projectNames?.[key] ?? '';
+  $('projectName').placeholder = key === OFF_KEY ? '' : baseName(key);
   renderProjectSettings();
   if (!$('projectDialog').open) $('projectDialog').showModal();
   $('projectDialog').querySelector('.nav-pages').scrollTop = 0;
@@ -1767,22 +1769,55 @@ function openProjectSettings(key) {
 }
 function renderProjectSettings() {
   const key = settingsProject;
+  $('projectDialogTitle').textContent = projectLabel(key);
   $('projectIconPreview').innerHTML = projectGlyph(key);
   renderProjectNav();
   renderIconPicker();
 }
+const EYE = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/></svg>';
+const EYE_OFF = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z"/><path d="M3 13 13 3"/></svg>';
 function renderProjectNav() {
-  $('projectNav').replaceChildren(...projectKeys().filter((key) => key !== ALL).map((key) => {
-    const b = document.createElement('button');
+  $('projectNav').replaceChildren(...allProjectKeys().filter((key) => key !== ALL).map((key) => {
+    const hidden = isHiddenProject(key);
+    const row = div(`project-row${key === OFF_KEY ? '' : ' has-eye'}${hidden ? ' hidden-project' : ''}`);
+    const b = row.appendChild(document.createElement('button'));
     b.type = 'button';
-    b.className = key === settingsProject ? 'active' : '';
+    b.className = `project-open${key === settingsProject ? ' active' : ''}`;
     b.innerHTML = `<span class="pm-icon">${projectGlyph(key)}</span><span class="pm-name"></span>`;
     b.querySelector('.pm-name').textContent = projectLabel(key);
     b.title = key === OFF_KEY ? '' : key;
     b.onclick = () => openProjectSettings(key);
-    return b;
+    if (key !== OFF_KEY) { // ('Hors projet' stays: new conversations land there)
+      const eye = row.appendChild(document.createElement('button'));
+      eye.type = 'button';
+      eye.className = 'project-eye';
+      eye.innerHTML = hidden ? EYE_OFF : EYE;
+      eye.dataset.tip = hidden ? 'Afficher ce projet dans la barre des conversations' : 'Masquer ce projet et ses conversations (rien n’est supprimé)';
+      eye.onclick = () => setProjectHidden(key, !hidden);
+    }
+    return row;
   }));
 }
+async function applyProjectChange(call) {
+  try {
+    settings = await call();
+  } catch (e) {
+    $('status').textContent = errorText(e);
+    alert(errorText(e));
+    return false;
+  }
+  renderSettings();
+  await refreshConversations();
+  renderConvHead();
+  renderProjectSettings();
+  return true;
+}
+async function setProjectHidden(key, hidden) {
+  if (!(await applyProjectChange(() => window.api.setProjectHidden(key, hidden))) || !hidden) return;
+  if (projectFilter === key) setProjectFilter(ALL);
+  if (activeProject() === key) await newConversationHere(); // (what is shown leaves with it)
+}
+$('projectName').addEventListener('change', (e) => applyProjectChange(() => window.api.setProjectName(settingsProject, e.target.value)));
 async function applyProjectIcon(call) {
   try {
     settings = await call();
@@ -1857,7 +1892,7 @@ $('projectDialogClose').onclick = () => $('projectDialog').close();
 $('projectSettingsBtn').onclick = () => openProjectSettings(projectFilter);
 $('projectDelete').onclick = async () => {
   const dir = settingsProject;
-  const n = lastConversations.filter((c) => projectOf(c) === dir).length;
+  const n = everyConversation.filter((c) => projectOf(c) === dir).length;
   if (!confirm(`Supprimer le projet « ${projectLabel(dir)} » de Poney ?\n\n${n ? `${n} conversation${n > 1 ? 's seront supprimées' : ' sera supprimée'}. ` : ''}Le dossier ${shortPath(dir)} et ses fichiers ne sont pas touchés.`)) return;
   const before = activeDir();
   try {
@@ -1993,15 +2028,19 @@ const ALL = '@all';
 const OFF_KEY = '@off-project';
 let projectFilter = ALL;
 try { projectFilter = localStorage.getItem('projectFilter') || ALL; } catch {}
-let lastConversations = [];
+let everyConversation = [];
+let lastConversations = []; // (without those of hidden projects)
+const isHiddenProject = (key) => Boolean(settings.hiddenProjects?.includes(key));
 
-function projectKeys(all = lastConversations) {
+function allProjectKeys(all = everyConversation) {
   const dirs = new Set(settings.recent || []);
   if (settings.workspace) dirs.add(settings.workspace);
   for (const c of all) if (!c.offProject && c.workspace) dirs.add(c.workspace);
-  return [ALL, ...[...dirs].sort((a, b) => baseName(a).localeCompare(baseName(b), 'fr')), OFF_KEY];
+  return [ALL, ...[...dirs].sort((a, b) => projectLabel(a).localeCompare(projectLabel(b), 'fr')), OFF_KEY];
 }
-const projectLabel = (key) => key === ALL ? 'Tous' : key === OFF_KEY ? 'Hors projet' : baseName(key);
+/** The projects of the sidebar. */
+const projectKeys = () => allProjectKeys().filter((key) => !isHiddenProject(key));
+const projectLabel = (key) => key === ALL ? 'Tous' : key === OFF_KEY ? 'Hors projet' : settings.projectNames?.[key] ?? baseName(key);
 const projectOf = (c) => c.offProject ? OFF_KEY : c.workspace;
 // Among the dots, 'Tous': four small squares, every project at once…
 const ALL_ICON = '<svg class="proj-icon dot-icon" viewBox="0 0 12 12" aria-hidden="true"><rect x="1" y="1" width="4" height="4" rx="1.2"/><rect x="7" y="1" width="4" height="4" rx="1.2"/><rect x="1" y="7" width="4" height="4" rx="1.2"/><rect x="7" y="7" width="4" height="4" rx="1.2"/></svg>';
@@ -2119,7 +2158,7 @@ function renderConvHead() {
   const dir = c ? c.workspace : activeDir();
   const key = off ? OFF_KEY : dir;
   const project = $('convHead').querySelector('.head-project');
-  project.innerHTML = off || dir ? `${projectGlyph(key)} ${esc(off ? 'Hors projet' : baseName(dir))}` : '';
+  project.innerHTML = off || dir ? `${projectGlyph(key)} ${esc(projectLabel(key))}` : '';
   const title = c?.title || 'Nouvelle conversation';
   $('convHead').querySelector('.head-title').textContent = title;
   $('convHead').title = title;
@@ -2140,12 +2179,13 @@ async function refreshConversations({ slide = 0 } = {}) {
   if (renaming || !settings) return;
   const { current, all: every } = await window.api.listConversations();
   currentConversation = current;
-  lastConversations = every;
+  everyConversation = every;
+  lastConversations = every.filter((c) => !isHiddenProject(projectOf(c)));
   renderConvHead();
-  const keys = projectKeys(every);
+  const keys = projectKeys();
   if (!keys.includes(projectFilter)) projectFilter = ALL;
   renderProjectBar(keys);
-  const all = projectFilter === ALL ? every : every.filter((c) => projectOf(c) === projectFilter);
+  const all = projectFilter === ALL ? lastConversations : lastConversations.filter((c) => projectOf(c) === projectFilter);
   const list = $('convList');
   const before = slide ? null : sidebarPlaces();
   list.innerHTML = '';
@@ -2284,7 +2324,7 @@ function conversationItem(c, current) {
     pill.title = c.unread > 1 ? `${c.unread} réponses à lire` : 'Une réponse à lire';
   } else pill.remove();
   const project = li.querySelector('.project');
-  project.innerHTML = `${projectGlyph(projectOf(c))} ${esc(c.offProject ? 'Hors projet' : baseName(c.workspace || ''))}`;
+  project.innerHTML = `${projectGlyph(projectOf(c))} ${esc(projectLabel(projectOf(c) || ''))}`;
   project.title = c.offProject ? 'Conversation sans dossier de projet' : c.workspace || '';
   const group = modelGroups.find((g) => g.provider.id === (c.provider ?? firstServer()));
   li.querySelector('.card-engine').innerHTML = c.engine === 'claude' ? CLAUDE_ICON : groupIcon(group);

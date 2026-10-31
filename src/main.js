@@ -55,7 +55,7 @@ function logError(what, detail) {
 
 // ---------- settings ----------
 const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
-let settings = { config: { ...DEFAULT_CONFIG }, workspace: '', recent: [], projectIcons: {}, modelContexts: {}, engine: { idleMinutes: 15, cacheGb: 10 } };
+let settings = { config: { ...DEFAULT_CONFIG }, workspace: '', recent: [], projectIcons: {}, modelContexts: {}, engine: { idleMinutes: 15, cacheGb: 10 }, projectNames: {}, hiddenProjects: [] };
 
 function loadSettings() {
   try {
@@ -342,6 +342,7 @@ const publicSettings = () => ({
 function setWorkspace(dir) {
   settings.workspace = dir;
   settings.recent = [dir, ...settings.recent.filter((d) => d !== dir)].slice(0, 8);
+  settings.hiddenProjects = settings.hiddenProjects.filter((d) => d !== dir); // (chosen again: it is wanted)
   saveSettings();
 }
 
@@ -393,6 +394,25 @@ ipcMain.handle('project:setIcon', (_, key, icon) => {
   if (emoji) settings.projectIcons[key] = { emoji };
   else if (name) settings.projectIcons[key] = { icon: name, color };
   else delete settings.projectIcons[key];
+  saveSettings();
+  return publicSettings();
+});
+// The name shown, the folder staying as it is. Empty: the folder's.
+ipcMain.handle('project:setName', (_, dir, name) => {
+  settings.projectNames = { ...settings.projectNames };
+  const clean = String(name ?? '').trim().slice(0, 80);
+  if (clean) settings.projectNames[dir] = clean;
+  else delete settings.projectNames[dir];
+  saveSettings();
+  return publicSettings();
+});
+// Hidden: out of the sidebar with its conversations, nothing removed.
+ipcMain.handle('project:setHidden', (_, dir, hidden) => {
+  if (hidden && [...sessions.values()].some((s) => !s.offProject && s.cwd === dir && s.running)) {
+    throw new Error('Une conversation de ce projet est en cours : arrêtez-la d’abord.');
+  }
+  settings.hiddenProjects = settings.hiddenProjects.filter((d) => d !== dir);
+  if (hidden) settings.hiddenProjects.push(dir);
   saveSettings();
   return publicSettings();
 });
@@ -742,6 +762,9 @@ ipcMain.handle('project:delete', (_, dir) => {
   settings.recent = (settings.recent || []).filter((d) => d !== dir);
   settings.projectIcons = { ...settings.projectIcons };
   delete settings.projectIcons[dir];
+  settings.projectNames = { ...settings.projectNames };
+  delete settings.projectNames[dir];
+  settings.hiddenProjects = settings.hiddenProjects.filter((d) => d !== dir);
   if (settings.workspace === dir) settings.workspace = settings.recent[0] || '';
   saveSettings();
   if (shown) {

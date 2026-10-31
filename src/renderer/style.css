@@ -302,7 +302,14 @@ details.thinking div { white-space: pre-wrap; border-left: 2px solid var(--borde
 
 /* project settings */
 .project-nav { overflow-y: auto; }
-.project-nav button { flex: none; display: flex; align-items: center; gap: 8px; }
+.project-row { flex: none; position: relative; display: flex; }
+.project-row .project-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
+.project-row.has-eye .project-open { padding-right: 30px; }
+.project-row.hidden-project .project-open { opacity: 0.5; }
+.dialog-nav .project-eye { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); display: flex; padding: 4px; border-radius: 6px; visibility: hidden; }
+.project-row:hover .project-eye, .project-row.hidden-project .project-eye, .project-eye:focus-visible { visibility: visible; }
+#projectName { padding: 6px 9px; border-radius: 8px; border: 1px solid var(--border); color: var(--text); font: inherit; outline: none; }
+#projectName:focus { border-color: var(--accent-2); }
 .project-path { font-family: var(--mono); font-size: 13px; word-break: break-all; }
 .project-field { display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
 .project-icon-row { display: flex; align-items: center; gap: 8px; }
