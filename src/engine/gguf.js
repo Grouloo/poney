@@ -2,6 +2,7 @@
 import fs from 'node:fs/promises';
 
 const CHUNK = 1 << 20;
+const MAX_ARRAY = 2048;
 const FIXED = { 0: 1, 1: 1, 2: 2, 3: 2, 4: 4, 5: 4, 6: 4, 7: 1, 10: 8, 11: 8, 12: 8 };
 
 class Reader {
@@ -34,6 +35,11 @@ class Reader {
     if (type === 9) {
       const itemType = await this.u32();
       const n = await this.u64();
+      if (FIXED[itemType] && n <= MAX_ARRAY) { // (per-layer values)
+        const items = [];
+        for (let i = 0; i < n; i++) items.push(await this.value(itemType));
+        return items;
+      }
       if (FIXED[itemType]) { this.pos += n * FIXED[itemType]; return null; }
       for (let i = 0; i < n; i++) await this.value(itemType);
       return null;
@@ -43,7 +49,7 @@ class Reader {
   }
 }
 
-/** { arch, contextLength, blockCount, embeddingLength, headCount }, or null if it is not a GGUF file. */
+/** The model's size in the header (its attention values may be per layer), or null if it is not a GGUF file. */
 export async function readGguf(path) {
   const file = await fs.open(path, 'r');
   try {
@@ -64,7 +70,14 @@ export async function readGguf(path) {
       contextLength: kv[`${arch}.context_length`] ?? null,
       blockCount: kv[`${arch}.block_count`] ?? null,
       embeddingLength: kv[`${arch}.embedding_length`] ?? null,
-      headCount: kv[`${arch}.attention.head_count_kv`] ?? kv[`${arch}.attention.head_count`] ?? null,
+      headCount: kv[`${arch}.attention.head_count`] ?? null,
+      headCountKv: kv[`${arch}.attention.head_count_kv`] ?? null,
+      keyLength: kv[`${arch}.attention.key_length`] ?? null,
+      valueLength: kv[`${arch}.attention.value_length`] ?? null,
+      slidingWindow: kv[`${arch}.attention.sliding_window`] ?? null,
+      slidingPattern: kv[`${arch}.attention.sliding_window_pattern`] ?? null,
+      keyLengthSwa: kv[`${arch}.attention.key_length_swa`] ?? null,
+      valueLengthSwa: kv[`${arch}.attention.value_length_swa`] ?? null,
     };
   } catch {
     return null;

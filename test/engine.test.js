@@ -142,8 +142,30 @@ test('memory comes before the limit: with no limit, a second model waits for the
 
 test('a model that can never fit says so at once', async () => {
   const { engine, spawned } = fakeEngine({ totalMemory: 8 * GB });
-  await assert.rejects(engine.acquire({ model: model('a', 16 * GB), numCtx: 4000 }), /Réduisez son contexte/);
+  await assert.rejects(engine.acquire({ model: model('a', 16 * GB), numCtx: 4000 }), /pèse 16,0 Go/);
   assert.equal(spawned.length, 0);
+});
+
+test('an estimate above the budget refuses nothing: the model gets the machine and tries', async () => {
+  const { engine, spawned } = fakeEngine({ totalMemory: 10 * GB, cacheDir: await tmp() });
+  const big = model('big', 8 * GB, { blockCount: 40, embeddingLength: 4096, headCount: 16 });
+  assert.ok(estimateMemory(big, 32000) > engine.budget);
+  (await engine.acquire({ model: model('small', GB), numCtx: 4000 })).release();
+  const lease = await engine.acquire({ model: big, numCtx: 32000 });
+  assert.deepEqual(engine.status().map((s) => s.id), ['big']);
+  assert.equal(spawned[0].dead, true);
+  lease.release();
+  await engine.shutdown();
+});
+
+test('the memory estimate follows the layers: sliding-window layers do not grow with the context', () => {
+  const swa = { blockCount: 4, embeddingLength: 2816, headCount: 16, headCountKv: [4, 4, 4, 4], keyLength: 512, valueLength: 512, slidingWindow: 1024, slidingPattern: [true, true, true, false], keyLengthSwa: 256, valueLengthSwa: 256 };
+  const base = estimateMemory(model('a', GB, swa), 4000);
+  const grown = estimateMemory(model('a', GB, swa), 5000);
+  assert.equal(grown - base, 1000 * 4 * 1024 * 2); // (the one full layer: the windows are past their reach)
+  const flat = { blockCount: 40, embeddingLength: 2048, headCount: 16, headCountKv: 2, keyLength: 256, valueLength: 256 };
+  const kv = estimateMemory(model('b', 0, flat), 32000) - estimateMemory(model('b', 0, flat), 0);
+  assert.equal(kv, 32000 * 40 * 2 * 512 * 2);
 });
 
 test('the context never exceeds what the model was trained for', async () => {
@@ -275,7 +297,12 @@ function gguf(entries) {
   parts[3].writeBigUInt64LE(BigInt(entries.length));
   for (const [k, type, v] of entries) {
     parts.push(str(k));
-    const t = Buffer.alloc(4); t.writeUInt32LE(type); parts.push(t);
+    const t = Buffer.alloc(4); t.writeUInt32LE(type === 'ints' ? 9 : type); parts.push(t);
+    if (type === 'ints') {
+      const h = Buffer.alloc(12 + v.length * 4); h.writeUInt32LE(4); h.writeBigUInt64LE(BigInt(v.length), 4);
+      v.forEach((n, i) => h.writeUInt32LE(n, 12 + i * 4));
+      parts.push(h);
+    }
     if (type === 8) parts.push(str(v));
     else if (type === 4) { const b = Buffer.alloc(4); b.writeUInt32LE(v); parts.push(b); } else if (type === 9) {
       const h = Buffer.alloc(12); h.writeUInt32LE(8); h.writeBigUInt64LE(BigInt(v.length), 4); parts.push(h, ...v.map(str));
@@ -287,8 +314,10 @@ function gguf(entries) {
 test('the header of a GGUF file gives what memory needs', async () => {
   const dir = await tmp();
   const file = path.join(dir, 'm.gguf');
-  await fs.writeFile(file, gguf([['general.architecture', 8, 'gemma4'], ['general.tags', 9, ['a', 'b']], ['gemma4.context_length', 4, 262144], ['gemma4.block_count', 4, 30], ['gemma4.embedding_length', 4, 2048], ['gemma4.attention.head_count', 4, 8], ['tokenizer.ggml.model', 8, 'x']]));
-  assert.deepEqual(await readGguf(file), { arch: 'gemma4', contextLength: 262144, blockCount: 30, embeddingLength: 2048, headCount: 8 });
+  await fs.writeFile(file, gguf([['general.architecture', 8, 'gemma4'], ['general.tags', 9, ['a', 'b']], ['gemma4.context_length', 4, 262144], ['gemma4.block_count', 4, 30], ['gemma4.embedding_length', 4, 2048], ['gemma4.attention.head_count', 4, 8], ['gemma4.attention.head_count_kv', 'ints', [4, 2]], ['tokenizer.ggml.model', 8, 'x']]));
+  const info = await readGguf(file);
+  assert.deepEqual([info.arch, info.contextLength, info.blockCount, info.embeddingLength, info.headCount], ['gemma4', 262144, 30, 2048, 8]);
+  assert.deepEqual(info.headCountKv, [4, 2]);
   await fs.writeFile(file, 'not a model at all');
   assert.equal(await readGguf(file), null);
 });

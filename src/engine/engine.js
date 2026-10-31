@@ -12,20 +12,37 @@ import os from 'node:os';
 import path from 'node:path';
 import { InferenceGate } from './gate.js';
 
+const GB = 1024 ** 3;
 const MEMORY_SHARE = 0.85; // of the RAM, for the models: the system and the apps keep the rest
-const CACHE_RAM_MIB = 2048; // llama-server's prompt cache in memory
+const CACHE_RAM_MIB = 1024; // llama-server's prompt cache in memory
 const MAX_SLOTS = 8;
 const LOAD_TIMEOUT_MS = 10 * 60 * 1000;
-const GB = 1024 ** 3;
-
 const gb = (n) => (n / GB).toFixed(1).replace('.', ',');
 
-/** Bytes a model needs with this context on each slot: its weights, its KV cache, the prompt cache. */
+const BASE_OVERHEAD = 0.5 * GB; // (graphs and buffers, whatever the context)
+
+/** Bytes of the KV cache: for each layer, its cells (a sliding-window layer keeps only its window) by its heads. */
+function kvBytes(info, numCtx, slots) {
+  const { blockCount, embeddingLength, headCount, headCountKv, keyLength, valueLength, slidingWindow, slidingPattern, keyLengthSwa, valueLengthSwa } = info ?? {};
+  if (!blockCount) return null;
+  const heads = (i) => (Array.isArray(headCountKv) ? headCountKv[i] ?? 0 : headCountKv ?? headCount ?? 1);
+  const headSize = embeddingLength && headCount ? Math.floor(embeddingLength / headCount) : 0;
+  let cellBytes = 0; // over all the layers, for one cell of the full context
+  let windowBytes = 0; // the same for the sliding-window layers, whose cells do not grow with the context
+  for (let i = 0; i < blockCount; i++) {
+    const sliding = Boolean(slidingWindow && slidingPattern?.[i]);
+    const key = (sliding && keyLengthSwa) || keyLength || headSize;
+    const value = (sliding && valueLengthSwa) || valueLength || headSize;
+    const bytes = heads(i) * (key + value) * 2; // (16 bits each)
+    if (sliding) windowBytes += bytes; else cellBytes += bytes;
+  }
+  return slots * (numCtx * cellBytes + Math.min(numCtx, (slidingWindow ?? 0) * 2) * windowBytes);
+}
+
+/** Bytes a model needs with this context on each slot: its weights, its KV cache, the prompt cache. An estimate. */
 export function estimateMemory(model, numCtx, slots = 1) {
-  const { blockCount, embeddingLength, headCount } = model.info ?? {};
-  // (keys and values, 16 bits each; without these numbers, a share of the weights)
-  const kv = blockCount && embeddingLength ? 4 * numCtx * slots * blockCount * Math.min(embeddingLength, 2 * (headCount || 8) * 128) : model.size * 0.2;
-  return Math.round(model.size * 1.05 + kv + CACHE_RAM_MIB * 1024 * 1024);
+  const kv = kvBytes(model.info, numCtx, slots) ?? model.size * 0.2;
+  return Math.round(model.size * 1.02 + kv + BASE_OVERHEAD + CACHE_RAM_MIB * 1024 * 1024);
 }
 
 const freePort = () => new Promise((resolve, reject) => {
@@ -58,6 +75,11 @@ export class ModelEngine {
   }
 
   // ---------- memory ----------
+  /** What to reserve. The estimate is one: beyond the budget, the model just gets the whole machine and tries. */
+  need(model, numCtx, slots = 1) {
+    return Math.min(estimateMemory(model, numCtx, slots), this.budget);
+  }
+
   used() {
     let n = 0;
     for (const s of this.servers.values()) n += s.memory;
@@ -67,7 +89,7 @@ export class ModelEngine {
   /** The slots to load: as many as the limit asks and the memory allows beside what stays. */
   slotsFor(model, numCtx, room) {
     const wanted = Math.min(this.gate.limit || MAX_SLOTS, MAX_SLOTS);
-    for (let n = wanted; n > 1; n--) if (estimateMemory(model, numCtx, n) <= room) return n;
+    for (let n = wanted; n > 1; n--) if (estimateMemory(model, numCtx, n) <= room) return n; // (an extra slot only if it surely fits)
     return 1;
   }
 
@@ -89,7 +111,7 @@ export class ModelEngine {
     const s = this.servers.get(model.id);
     if (s && s.numCtx === numCtx) return s.active < s.slots;
     if (s?.active) return false; // (its context changes: once its calls are done)
-    return estimateMemory(model, numCtx) <= this.roomWithoutIdle(model.id);
+    return this.need(model, numCtx) <= this.roomWithoutIdle(model.id);
   }
 
   start({ model, numCtx }) {
@@ -99,7 +121,7 @@ export class ModelEngine {
       if (s) this.unload(s);
       const room = this.roomWithoutIdle(model.id);
       const slots = this.slotsFor(model, numCtx, room);
-      const memory = estimateMemory(model, numCtx, slots);
+      const memory = this.need(model, numCtx, slots);
       // The idle models that must go, the longest unused first.
       const idle = [...this.servers.values()].filter((x) => !x.active && x.state === 'ready').sort((a, b) => a.usedAt - b.usedAt);
       while (this.used() + memory > this.budget && idle.length) this.unload(idle.shift());
@@ -122,9 +144,8 @@ export class ModelEngine {
   async acquire({ model = null, numCtx = 0, signal, onStatus }) {
     if (model) {
       numCtx = Math.min(numCtx, model.info?.contextLength || numCtx);
-      const need = estimateMemory(model, numCtx);
-      if (need > this.budget) {
-        throw new Error(`Ce modèle demande environ ${gb(need)} Go de mémoire pour ${numCtx} tokens de contexte, alors que ${gb(this.budget)} Go sont disponibles ici. Réduisez son contexte dans Réglages › Fournisseurs.`);
+      if (model.size > this.budget) { // (only the weights count here: they are known, and no context helps)
+        throw new Error(`Ce modèle pèse ${gb(model.size)} Go, alors que ${gb(this.budget)} Go sont disponibles ici pour les modèles.`);
       }
     }
     const req = { model, numCtx };
