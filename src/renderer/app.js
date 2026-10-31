@@ -1811,44 +1811,61 @@ function renderProjectNav() {
     return row;
   }));
 }
-// A row dragged moves among the others as it goes. (By pointer events: the native
-// drag cannot show the list as it will be.)
+// A row dragged stays under the pointer while the others make room for it. (By
+// pointer events: the native drag cannot show the list as it will be.)
 $('projectNav').addEventListener('pointerdown', (down) => {
   const nav = $('projectNav');
   const row = down.target.closest('.project-row');
   if (!row || down.button || down.target.closest('.project-eye')) return;
+  const others = () => [...nav.querySelectorAll('.project-row')].filter((r) => r !== row);
+  const grab = down.clientY - row.getBoundingClientRect().top;
   let dragging = false;
+  let shift = 0; // how far the row is from its place in the list
   const move = (e) => {
     if (!dragging && Math.abs(e.clientY - down.clientY) < 5) return;
-    dragging = true;
-    row.classList.add('dragging');
-    nav.classList.add('reordering');
-    for (const other of nav.querySelectorAll('.project-row')) {
-      if (other === row) continue;
-      const r = other.getBoundingClientRect();
-      if (e.clientY < r.top || e.clientY > r.bottom) continue;
-      other.before(row);
-      if (e.clientY > r.top + r.height / 2) other.after(row);
-      break;
+    if (!dragging) {
+      dragging = true;
+      row.classList.add('dragging');
+      nav.classList.add('reordering');
+      getSelection()?.removeAllRanges();
     }
     const box = nav.getBoundingClientRect();
+    const toScreen = row.getBoundingClientRect().top - shift - row.offsetTop; // (offsetTop ignores transforms)
+    const top = Math.max(box.top, Math.min(e.clientY - grab, box.bottom - row.offsetHeight));
+    const middle = top - toScreen + row.offsetHeight / 2;
+    const rest = others();
+    const next = rest.find((r) => middle < r.offsetTop + r.offsetHeight / 2) ?? null;
+    if (next !== row.nextElementSibling) {
+      const before = new Map(rest.map((r) => [r, r.offsetTop]));
+      nav.insertBefore(row, next);
+      for (const r of rest) {
+        const gap = before.get(r) - r.offsetTop;
+        if (gap) r.animate([{ transform: `translateY(${gap}px)` }, { transform: 'none' }], { duration: calm ? 0 : 140, easing: 'ease-out' });
+      }
+    }
+    shift = top - toScreen - row.offsetTop;
+    row.style.transform = `translateY(${shift}px)`;
     if (e.clientY < box.top + 24) nav.scrollTop -= 8;
     else if (e.clientY > box.bottom - 24) nav.scrollTop += 8;
   };
-  const up = () => {
+  const up = async () => {
     document.removeEventListener('pointermove', move);
     document.removeEventListener('pointerup', up);
+    document.removeEventListener('pointercancel', up);
     if (!dragging) return;
-    row.classList.remove('dragging');
-    nav.classList.remove('reordering');
     // (the click that ends a drag opens nothing)
     const swallow = (e) => { e.stopPropagation(); e.preventDefault(); };
     nav.addEventListener('click', swallow, { capture: true, once: true });
     setTimeout(() => nav.removeEventListener('click', swallow, { capture: true }));
+    row.style.transform = '';
+    await row.animate([{ transform: `translateY(${shift}px)` }, { transform: 'none' }], { duration: calm ? 0 : 140, easing: 'ease-out' }).finished;
+    row.classList.remove('dragging');
+    nav.classList.remove('reordering');
     applyProjectChange(() => window.api.setProjectOrder([...nav.querySelectorAll('.project-row')].map((r) => r.dataset.project)));
   };
   document.addEventListener('pointermove', move);
   document.addEventListener('pointerup', up);
+  document.addEventListener('pointercancel', up);
 });
 async function applyProjectChange(call) {
   try {
