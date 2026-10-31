@@ -2078,14 +2078,14 @@ function relativeTime(ts) {
 let renaming = false; // a title is being edited: don't rebuild the list under the cursor
 
 // ---------- conversations, by where they stand ----------
-// Working, asleep until a background task ends, waiting for an approval, finished (answers not read yet, or the one
-// shown that just finished), then the archived ones: done and read.
+// Finished (answers not read yet, or the one shown that just finished), asleep until
+// a background task ends, waiting for an approval, working, then the archived ones: done and read.
 const CATEGORIES = [
   { key: 'drafts', label: 'Brouillons' },
-  { key: 'busy', label: 'En cours' },
+  { key: 'done', label: 'Terminé' },
   { key: 'sleeping', label: 'En veille' },
   { key: 'waiting', label: 'Action demandée' },
-  { key: 'done', label: 'Terminé' },
+  { key: 'busy', label: 'En cours' },
   { key: 'archived', label: 'Archivées', foldable: true },
 ];
 // (the conversation shown stays where it is: its text is a draft once the user leaves it)

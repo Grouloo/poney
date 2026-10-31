@@ -108,8 +108,8 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   background (its events are recorded, not drawn). Coming back shows it as it is now, the answer being written
   included, at the same reading position (or following the end if you were there). Idle conversations stay in
   memory (8 at most) for a quick return. Generations at the same time share the GPU.
-- **Sidebar by state**: the conversations are sorted into *En cours* (generating), *Action demandée* (waiting for an
-  approval), *Terminé* (answers not read yet) and *Archivées* (done and read; foldable). Each is a card with its
+- **Sidebar by state**: the conversations are sorted into *Terminé* (answers not read yet), *En veille* (Claude waits for a
+  background task), *Action demandée* (waiting for an approval), *En cours* (generating) and *Archivées* (done and read; foldable). Each is a card with its
   title, project and date, and a pill counting the approvals waiting (orange) or the answers to read (blue). The
   unread count is saved with the conversation.
 - **Projects**: a picker at the top of the sidebar lists one project's conversations, all of them ("Tous", the
