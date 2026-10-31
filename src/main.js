@@ -818,6 +818,7 @@ ipcMain.handle('steps:set', (_, steps) => {
 
 ipcMain.handle('prompt:get', async () => {
   const a = current().getAgent();
+  if (a.isClaude) return null; // (the Claude harness has its own)
   return { default: await a.defaultSystemPrompt(), custom: a.systemPrompt, running: a.running };
 });
 ipcMain.handle('prompt:set', async (_, text) => {

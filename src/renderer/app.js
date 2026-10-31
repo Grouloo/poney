@@ -149,6 +149,9 @@ async function refreshModels() {
 function renderChoice() {
   const c = choice();
   const isClaude = c.engine === 'claude';
+  // (steps and system prompt belong to Poney's harness)
+  $('convSettingsBtn').disabled = isClaude;
+  $('convSettingsBtn').title = isClaude ? 'Les modèles Claude n’utilisent ni les étapes ni le prompt système de Poney' : 'Étapes et prompt système de cette conversation';
   const picker = $('modelPicker');
   const group = modelGroups.find((g) => g.provider.id === choiceProvider());
   picker.querySelector('.model-icon').innerHTML = isClaude ? CLAUDE_ICON : groupIcon(group);
