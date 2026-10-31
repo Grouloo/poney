@@ -270,6 +270,18 @@ test('an engine that cannot be installed fails the call, and the next one tries 
   await engine.shutdown();
 });
 
+test('stopped before its process starts, a model never starts it', async () => {
+  const { engine, spawned } = fakeEngine({ cacheDir: await tmp() });
+  let found;
+  engine.binary = () => new Promise((resolve) => { found = resolve; });
+  const lease = engine.acquire({ model: model('a'), numCtx: 8000 });
+  while (!found) await flush();
+  await engine.shutdown();
+  found('/bin/llama-server');
+  await assert.rejects(lease);
+  assert.equal(spawned.length, 0);
+});
+
 // ---------- installing ----------
 test('the engine is installed once, and only if it matches its digest', async () => {
   const work = await tmp();

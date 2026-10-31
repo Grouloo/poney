@@ -198,6 +198,7 @@ export class ModelEngine {
     const binary = await this.binary((text) => s.onStatus?.(text));
     await fs.mkdir(this.cacheDir, { recursive: true });
     s.port = await freePort();
+    if (this.servers.get(s.model.id) !== s) throw new Error('Chargement annulé.'); // (stopped meanwhile: nothing would stop this process)
     const args = [
       '-m', s.model.file, '--host', '127.0.0.1', '--port', String(s.port),
       '-c', String(s.numCtx * s.slots), '-np', String(s.slots), '--no-kv-unified', '-ngl', 'all',
@@ -327,6 +328,6 @@ export class ModelEngine {
   }
 
   status() {
-    return [...this.servers.values()].map((s) => ({ id: s.model.id, state: s.state, active: s.active, slots: s.slots, numCtx: s.numCtx, memory: s.memory }));
+    return [...this.servers.values()].map((s) => ({ id: s.model.id, state: s.state, active: s.active, slots: s.slots, numCtx: s.numCtx, memory: s.memory, pid: s.proc?.pid ?? null }));
   }
 }

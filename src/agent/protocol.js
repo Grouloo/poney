@@ -452,25 +452,33 @@ function jsonToTag(name, a = {}) {
  * - Hermes/Qwen: <tool_call>{"name": "...", "arguments": {...}}</tool_call>
  *   (also what the client emits for API-level tool_calls).
  */
-export function normalizeToolCalls(text) {
+export function normalizeToolCalls(text, onCall = null) {
+  // onCall(tag, as, written): told of each rewrite (see callOrigins).
   // 1. Complete native calls: <|tool_call>call:name{args}<tool_call|> (or attributes inside).
   let t = text.replace(/<\|tool_call>\s*call:\s*([a-z_]+)([\s\S]*?)<tool_call\|>/gi, (m, name, rest) => {
     let r = rest.trim();
     const json = r.startsWith('{') ? parseLooseArgs(r) : null;
-    if (json && typeof json === 'object') return jsonToTag(name, json) ?? m;
-    r = r.replace(/\/?>?\s*$/, '').trim();
-    const tool = ALIASES[name] || name;
-    return TOOLS[tool] ? `<${tool}${r ? ` ${r}` : ''} />` : m;
+    let tag = null;
+    if (json && typeof json === 'object') tag = jsonToTag(name, json);
+    else {
+      r = r.replace(/\/?>?\s*$/, '').trim();
+      const tool = ALIASES[name] || name;
+      if (TOOLS[tool]) tag = `<${tool}${r ? ` ${r}` : ''} />`;
+    }
+    if (tag) onCall?.(tag, `gemma:${name}`, m);
+    return tag ?? m;
   });
   // 2. Unclosed calls with braces: <|tool_call>call:name{args} (no <tool_call|>),
   // once the braces are balanced (not while the arguments are still streaming).
   t = t.replace(/<\|tool_call>\s*call:\s*([a-z_]+)\s*(?=\{)/gi, (m, name, offset, whole) =>
     (matchingBrace(whole, offset + m.length) < 0 ? m : `\u0003${name}\u0004`));
-  t = replaceBraceCalls(t);
+  t = replaceBraceCalls(t, onCall);
   // 3. Unclosed calls written like our tags: <|tool_call>call:read path="a.py" />
-  t = t.replace(/<\|tool_call>\s*call:\s*([a-z_]+)(?=[\s/>])/gi, (m, name) => {
+  t = t.replace(/<\|tool_call>\s*call:\s*([a-z_]+)(?=[\s/>])/gi, (m, name, offset, whole) => {
     const tool = ALIASES[name] || name;
-    return TOOLS[tool] ? `<${tool}` : m;
+    if (!TOOLS[tool]) return m;
+    onCall?.(`<${tool}${whole.slice(offset + m.length).match(/^[^>]*>/)?.[0] ?? ''}`, `gemma:${name}`, m); // (its opening tag)
+    return `<${tool}`;
   });
   t = t.replace(/<tool_call\|>/g, ''); // stray closers left by the forms above
   // 4. Hermes/Qwen JSON calls.
@@ -478,9 +486,25 @@ export function normalizeToolCalls(text) {
     const o = tryJson(body);
     if (!o?.name) return m;
     const args = typeof o.arguments === 'string' ? tryJson(o.arguments) ?? {} : o.arguments ?? o.parameters ?? {};
-    return jsonToTag(o.name, args) ?? m;
+    const tag = jsonToTag(o.name, args);
+    if (tag) onCall?.(tag, `hermes:${o.name}`, m);
+    return tag ?? m;
   });
   return t;
+}
+
+/** The calls of a text that are not written as our tags: [{ tag, as }]. native: the calls the server gave as tool_calls. */
+export function callOrigins(text, native = new Set()) {
+  const origins = [];
+  normalizeToolCalls(text, (tag, as, written) => origins.push({ tag, as: native.has(written) ? as.replace('hermes', 'tool_calls') : as }));
+  return origins;
+}
+
+/** How a call was really written: its name for a tag (an alias stays one), else "gemma:name", "hermes:name", "tool_calls:name". */
+export function calledAs(raw, origins = []) {
+  return origins.find((o) => o.tag.includes(raw) || raw.startsWith(o.tag))?.as
+    ?? raw.match(/^<\|tool_call>\s*call:\s*[a-z_]+/i)?.[0].replace(/^<\|tool_call>\s*call:\s*/i, 'gemma:')
+    ?? raw.match(/^<([a-z_]+)/i)?.[1] ?? null;
 }
 
 /** Index of the "}" closing the "{" at `start`, skipping strings ("…" and Gemma's <|"|>…<|"|>); -1 if not closed yet. */
@@ -506,7 +530,7 @@ function matchingBrace(s, start) {
 }
 
 /** Rewrites marked unclosed brace calls (\u0003name\u0004{...}) into our tags. */
-function replaceBraceCalls(t) {
+function replaceBraceCalls(t, onCall) {
   let out = '';
   let i = 0;
   while (true) {
@@ -517,6 +541,7 @@ function replaceBraceCalls(t) {
     const end = matchingBrace(t, b + 1);
     const args = parseLooseArgs(t.slice(b + 1, end + 1));
     const tag = args && jsonToTag(name, args);
+    if (tag) onCall?.(tag, `gemma:${name}`, `<|tool_call>call:${name}${t.slice(b + 1, end + 1)}`);
     out += t.slice(i, a) + (tag ?? `<|tool_call>call:${name}${t.slice(b + 1, end + 1)}`);
     i = end + 1;
   }

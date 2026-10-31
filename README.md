@@ -289,6 +289,34 @@ in `cmd.exe` (the model is told so), a stopped command kills its whole process t
 Windows line endings (CRLF) can be edited and keep them, paths are shown with `/`, and the Python syntax check uses
 `py -3` or `python`. Linux should work like macOS.
 
+## Driving Poney from a program
+
+`src/cli.js` lets another program run the engine and the harness, as the app does, without touching the app's data
+(`node src/cli.js --help` lists everything):
+
+```bash
+node src/cli.js engine-serve --model ID --num-ctx 16384 --cache-dir DIR --engine-dir DIR   # prints {baseUrl, apiKey, pid, numCtx, memory, build}
+node src/cli.js --provider poney --engine-url URL --engine-key-file FILE --json --yes "task"
+node src/cli.js models --json --models-dir DIR
+node src/cli.js version --json     # {commit, dirty, engineBuild, systemPromptHash}
+```
+
+- **`engine-serve`** keeps a model loaded until SIGTERM. `--engine-dir` is an installed engine, used read only (nothing
+  is downloaded); `--models-dir` defaults to the app's folders, read only. `--max-inferences` sets its slots.
+  Do not point `--engine-dir` at the app's own folder while the app may start: at launch it kills whatever names that folder.
+- **`--provider poney`** goes through the same calls as the app (template and path chosen from the served model's
+  architecture, read from its file; the app's limit of calls). The window is the engine's, or smaller if asked. The key
+  is read from a file and stays out of the environment, which commands inherit.
+- **`--settings FILE`** applies `config` and `modelContexts` as the app does, read only. Explicit options win.
+- **`--script FILE.json`** sends a list of messages in one conversation, and stops at the first turn that does not finish.
+- **`--json`** writes every event as one line, sub-agents included (`agentId`; their `turn_start` and `turn_end` too).
+  `assistant_end` gains `rawText`, the output before parsing (with a raw completion, its channel markers and reasoning),
+  and `action_start` gains `calledAs`: the name for a tag (`read_file` for an alias), else `gemma:name`, `hermes:name` or
+  `tool_calls:name`. Actions run by the app itself have none. Only the command line asks for these two fields: the
+  app's transcripts stay as they were.
+- **Exit codes**: 0 turn finished, 2 `--max-steps` reached, 3 model or server error (a loop or silence included),
+  130 stopped, 1 wrong usage. Without a terminal on stdin and without `--yes`, commands are refused.
+
 ## Bun
 
 `bun install`, `bun start` and `bun run test` work (the tests then run with Node). The app itself always runs in

@@ -46,6 +46,18 @@ export function unavailable(provider) {
   return null;
 }
 
+/** The config of a settings file, brought up to date. Writes nothing: saving it is the caller's choice. */
+export function savedConfig(saved) {
+  const config = { ...saved.config };
+  // The setting for sub-agents became the limit of all the calls to local models.
+  if (saved.config && saved.config.maxInferences === undefined) {
+    config.maxInferences = saved.config.parallelAgents === false ? 1 : saved.config.maxParallelAgents ?? 2;
+  }
+  // 0.2 used to be the default (saved as is): now the model's own temperature is used.
+  if (!saved.temperatureFromModel && config.temperature === 0.2) config.temperature = null;
+  return config;
+}
+
 /** What calls to this conversation's model use: its provider's address, and the model's context. */
 export function modelConfig(config, provider, model, contexts = {}) {
   const name = model || config.model;

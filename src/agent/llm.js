@@ -44,6 +44,8 @@ async function checkResponse(res) {
  * (0..1) while the prompt is being read when the server reports it, and at the
  * end (if the server reports them) {type: 'usage', promptTokens, outputTokens,
  * promptMs?, evalMs?} and {type: 'done', reason} ('length' = the answer was cut).
+ * Text from a native tool call has native: true; {type: 'raw', text} is what a raw
+ * completion wrote before it was split into text and thinking.
  * opts.jsonSchema: the answer must be JSON following this schema (structured output).
  * opts.noThinking: the model answers at once, without reasoning first, where the
  * server allows it (Gemma in LM Studio's raw mode, Ollama's think: false).
@@ -234,7 +236,10 @@ async function* streamRaw({ baseUrl, apiKey, model, prompt, temperature, maxToke
       yield { type: 'usage', promptTokens: data.usage.prompt_tokens || 0, outputTokens: data.usage.completion_tokens, ...timingsOf(data) };
     }
     const choice = data.choices?.[0];
-    if (choice?.text) yield* split(choice.text);
+    if (choice?.text) {
+      yield { type: 'raw', text: choice.text }; // (the markers included, for those who trace the output)
+      yield* split(choice.text);
+    }
     if (choice?.finish_reason) finish = choice.finish_reason;
   }
   yield* split('', true);
@@ -427,7 +432,7 @@ async function* streamHTTP({ provider, baseUrl, apiKey, model, messages, numCtx,
       if (m.content) yield { type: 'text', text: m.content };
       for (const call of m.tool_calls || []) {
         // Native function call (the model ignored our tags): pass it on as text.
-        yield { type: 'text', text: `\n<tool_call>${JSON.stringify({ name: call.function?.name, arguments: call.function?.arguments ?? {} })}</tool_call>` };
+        yield { type: 'text', native: true, text: `\n<tool_call>${JSON.stringify({ name: call.function?.name, arguments: call.function?.arguments ?? {} })}</tool_call>` };
       }
       if (data.done) {
         if (data.prompt_eval_count || data.eval_count) {
@@ -460,7 +465,7 @@ async function* streamHTTP({ provider, baseUrl, apiKey, model, messages, numCtx,
   const toolCalls = []; // native function calls, streamed in pieces
   const flushToolCalls = function* () {
     for (const c of toolCalls.splice(0)) {
-      if (c.name) yield { type: 'text', text: `\n<tool_call>${JSON.stringify({ name: c.name, arguments: c.arguments })}</tool_call>` };
+      if (c.name) yield { type: 'text', native: true, text: `\n<tool_call>${JSON.stringify({ name: c.name, arguments: c.arguments })}</tool_call>` };
     }
   };
   for await (const line of readLines(res.body)) {

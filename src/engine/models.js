@@ -6,6 +6,9 @@ import { readGguf } from './gguf.js';
 
 const SHARD = /-(\d{5})-of-\d{5}\.gguf$/i;
 
+/** The id of the model in this file (for a split model, of its first part). */
+export const modelId = (file) => path.basename(file).replace(SHARD, '').replace(/\.gguf$/i, '').toLowerCase();
+
 async function ggufFiles(dir, out = []) {
   let entries;
   try {
@@ -29,7 +32,7 @@ export async function scanModels(dirs) {
       const shard = file.match(SHARD);
       if (shard && shard[1] !== '00001') continue;
       const name = path.basename(file).replace(SHARD, '').replace(/\.gguf$/i, '');
-      const id = name.toLowerCase();
+      const id = modelId(file);
       if (models.has(id)) continue;
       const info = await readGguf(file);
       if (!info) continue;

@@ -11,7 +11,7 @@ import { listModels, lmStudioModels, setInferenceService } from './agent/llm.js'
 import { ModelEngine } from './engine/engine.js';
 import { ENGINE_BUILD, engineSupported, installEngine, installedEngine } from './engine/install.js';
 import { scanModels, sameModelFile } from './engine/models.js';
-import { addServer, loadProviders, modelConfig, providerOf, removeProvider, unavailable, updateProvider } from './providers.js';
+import { addServer, loadProviders, modelConfig, providerOf, removeProvider, savedConfig, unavailable, updateProvider } from './providers.js';
 import { ConversationStore, moveAppData } from './conversations.js';
 import { listDir, readFileForViewer } from './files.js';
 import { gitStatus, gitDiff, gitFetch, gitSync } from './git.js';
@@ -60,14 +60,8 @@ let settings = { config: { ...DEFAULT_CONFIG }, workspace: '', recent: [], proje
 function loadSettings() {
   try {
     const saved = JSON.parse(fs.readFileSync(settingsFile(), 'utf8'));
-    settings = { ...settings, ...saved, config: { ...DEFAULT_CONFIG, ...saved.config } };
-    // The setting for sub-agents became the limit of all the calls to local models.
-    if (saved.config && saved.config.maxInferences === undefined) {
-      settings.config.maxInferences = saved.config.parallelAgents === false ? 1 : saved.config.maxParallelAgents ?? 2;
-    }
-    // 0.2 used to be the default (saved as is): now the model's own temperature is used.
+    settings = { ...settings, ...saved, config: { ...DEFAULT_CONFIG, ...savedConfig(saved) } };
     if (!settings.temperatureFromModel) {
-      if (settings.config.temperature === 0.2) settings.config.temperature = null;
       settings.temperatureFromModel = true;
       saveSettings();
     }

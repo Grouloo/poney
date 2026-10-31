@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { streamChat, complete, serverContextLength } from './llm.js';
-import { liveAction, partialEditPairs, TOOLS, buildSystemPrompt, parseActions, splitThinking, formatResult, isToolEnabled, withReasoning, findRepetition, normalizeToolCalls, stripReasoning, legacyReasoningToNotes, stripChannelMarkers, toolSchemas, answerInReasoning } from './protocol.js';
+import { callOrigins, calledAs, liveAction, partialEditPairs, TOOLS, buildSystemPrompt, parseActions, splitThinking, formatResult, isToolEnabled, withReasoning, findRepetition, normalizeToolCalls, stripReasoning, legacyReasoningToNotes, stripChannelMarkers, toolSchemas, answerInReasoning } from './protocol.js';
 import { executeAction, runShell, truncateMiddle, checkOldBlock } from './tools.js';
 import { remember, forget, memoryBlock, standingInstructions, instructionNote, replacedAutoNote } from './memory.js';
 import { loadSkills, skillDirs, mentionedSkills, matchingSkills, skillBlock } from './skills.js';
@@ -169,6 +169,7 @@ export class Agent extends EventEmitter {
     this.serverCtx = null; // context length actually loaded on the server, if it says
     this.serverCtxKey = null;
     this.serverCtxAt = 0;
+    this.trace = false; // the events also tell what the model wrote exactly (rawText, calledAs): for the command line
   }
 
   /**
@@ -550,7 +551,7 @@ export class Agent extends EventEmitter {
   async runSubAgent(action, signal, maxReportChars, id = nextId++) {
     const title = String(action.args.title || 'sous-agent').slice(0, 60);
     const task = String(action.args.task || '').trim();
-    this.emit('event', { type: 'action_start', id, tool: 'agent', args: { title, task } });
+    this.emit('event', { type: 'action_start', id, tool: 'agent', args: { title, task }, calledAs: action.calledAs });
     if (!task) {
       this.emit('event', { type: 'action_end', id, ok: false, output: 'Tâche vide.', meta: { title } });
       return formatResult('agent', { title }, 'Empty task: write the task between <agent> and </agent>.');
@@ -564,6 +565,7 @@ export class Agent extends EventEmitter {
       triage: this.steps?.triage ?? this.triageByDefault, // its own assessment, as its parent's conversation says
       approve: (req) => this.approve({ ...req, agentTitle: title }),
     });
+    child.trace = this.trace;
     child.serverCtx = this.serverCtx;
     child.virtualFiles = action.outputs ?? null; // the main agent's steps in full (see turnDigest)
     child.parentHistory = [...this.archives, [...this.messages]];
@@ -590,8 +592,8 @@ export class Agent extends EventEmitter {
       }
       if (ev.type === 'final') report = ev.text;
       if (ev.type === 'error') error = ev.message;
-      if (ev.type === 'turn_end') { stats = ev.stats; endReason = ev.reason; return; }
-      if (ev.type === 'turn_start') return;
+      if (ev.type === 'turn_end') { stats = ev.stats; endReason = ev.reason; }
+      if (ev.type === 'turn_start' || ev.type === 'turn_end') return void this.emit('sub_turn', { ...ev, agentId: id }); // (for the card, its action_end says it)
       this.emit('event', { ...ev, agentId: id }); // shown inside the sub-agent's card
     });
     const onAbort = () => child.stop();
@@ -747,6 +749,9 @@ export class Agent extends EventEmitter {
     signal.addEventListener('abort', onAbort);
     let text = '';
     let thinking = '';
+    let rawOutput = ''; // what the server gave before any splitting, when it differs from text (see streamRaw)
+    const nativeCalls = new Set();
+    const rawOf = () => (this.trace ? { rawText: rawOutput || text } : {});
     let cutAt = -1;
     let narrationCut = false;
     let streamError = null;
@@ -792,6 +797,8 @@ export class Agent extends EventEmitter {
         signal: ctrl.signal,
       })) {
         if (chunk.type === 'done') { doneReason = chunk.reason; continue; }
+        if (chunk.type === 'raw') { rawOutput += chunk.text; continue; }
+        if (chunk.native) nativeCalls.add(chunk.text.trim());
         if (chunk.type === 'tool_progress') {
           visibleSeen = true;
           tFirst ??= Date.now();
@@ -877,7 +884,7 @@ export class Agent extends EventEmitter {
               oldChecks.add(key);
               const r = await checkOldBlock(this.cwd, live.path, pair.old);
               if (r.ok) this.emit('event', { type: 'edit_located', id, pair: k, path: r.rel, startLine: r.startLine, endLine: r.endLine });
-              else { earlyEdit = { path: live.path, old: pair.old, message: r.message }; break; }
+              else { earlyEdit = { path: live.path, old: pair.old, message: r.message, calledAs: calledAs(visible.slice(live.start)) }; break; }
             }
             if (earlyEdit) { cutAt = live.start; break; }
           }
@@ -912,7 +919,7 @@ export class Agent extends EventEmitter {
         // Stopped by the user: keep what was produced in the transcript.
         const partial = splitThinking(text);
         if (partial.text.trim() || thinking || partial.thinking) {
-          this.emit('event', { type: 'assistant_end', id, text: parseActions(normalizeToolCalls(partial.text)).text, thinking: thinking + partial.thinking, hasActions: false, interrupted: true });
+          this.emit('event', { type: 'assistant_end', id, text: parseActions(normalizeToolCalls(partial.text)).text, thinking: thinking + partial.thinking, hasActions: false, interrupted: true, ...rawOf() });
         }
         throw e;
       }
@@ -934,6 +941,7 @@ export class Agent extends EventEmitter {
     let visible = normalizeToolCalls(split.text);
     if (cutAt >= 0) visible = visible.slice(0, cutAt);
     thinking += split.thinking;
+    const origins = this.trace ? callOrigins(`${text}\n${thinking}`, nativeCalls) : null; // (before calls move from the reasoning to the answer)
     const leaked = earlyEdit ? null : answerInReasoning(thinking);
     if (leaked) {
       // Its calls written after a made-up end of reasoning: run them, before those
@@ -979,7 +987,7 @@ export class Agent extends EventEmitter {
     const stats = generationStats({ t0, tFirst, tEnd: Date.now(), usage, est: this.est, text: text + thinking });
     if (narrationCut) this.emit('event', { type: 'notice', text: 'Le modèle continuait à écrire après son action au lieu d’attendre le résultat : génération arrêtée, l’action est exécutée.' });
     if (looped) this.emit('event', { type: 'notice', text: 'Le modèle répétait le même passage en boucle : génération arrêtée, la répétition est retirée.' });
-    return { id, text: visible, thinking, truncated, looped, earlyEdit, contextLimited: truncated && !streamError && maxTokens < this.config.maxTokens, stats, invisible };
+    return { id, text: visible, thinking, truncated, looped, earlyEdit, contextLimited: truncated && !streamError && maxTokens < this.config.maxTokens, stats, invisible, origins, ...rawOf() };
   }
 
   /**
@@ -1195,7 +1203,7 @@ export class Agent extends EventEmitter {
         let gen = await this.generate(system, signal);
         // Cut because the window was full: compact now and redo this step once.
         if (gen.contextLimited) {
-          this.emit('event', { type: 'assistant_end', id: gen.id, text: '', thinking: '', hasActions: false });
+          this.emit('event', { type: 'assistant_end', id: gen.id, text: '', thinking: '', hasActions: false, rawText: gen.rawText });
           notice('Réponse coupée faute de place : compactage du contexte puis nouvelle tentative.');
           await this.maybeCompact(system, signal, { force: true });
           addStats(gen.stats);
@@ -1203,7 +1211,7 @@ export class Agent extends EventEmitter {
         }
         addStats(gen.stats);
         if (gen.invisible) {
-          this.emit('event', { type: 'assistant_end', id: gen.id, text: '', thinking: '', hasActions: false });
+          this.emit('event', { type: 'assistant_end', id: gen.id, text: '', thinking: '', hasActions: false, rawText: gen.rawText });
           if (!invisibleRetried) {
             // Seen with Gemma when earlier reasoning is in the history: retry without it.
             invisibleRetried = true;
@@ -1219,7 +1227,7 @@ export class Agent extends EventEmitter {
         // (e.g. half a file in <write>): never execute those.
         const parsed = parseActions(gen.text, { final: !gen.truncated });
         const prose = parsed.text;
-        actions = parsed.actions.filter((a) => a.complete);
+        actions = parsed.actions.filter((a) => a.complete).map((a) => (gen.origins ? { ...a, calledAs: calledAs(a.raw, gen.origins) } : a));
         const unfinished = parsed.actions.find((a) => !a.complete);
         if (gen.truncated) {
           cutNote = unfinished
@@ -1227,7 +1235,7 @@ export class Agent extends EventEmitter {
             : 'Your message was cut at the length limit. Continue from where it stopped, more briefly.';
           notice(unfinished ? `Réponse coupée (limite de longueur) : <${unfinished.tool}> incomplet, non exécuté.` : 'Réponse coupée (limite de longueur).');
         }
-        this.emit('event', { type: 'assistant_end', id: gen.id, text: prose, thinking: gen.thinking, hasActions: actions.length > 0, stats: gen.stats });
+        this.emit('event', { type: 'assistant_end', id: gen.id, text: prose, thinking: gen.thinking, hasActions: actions.length > 0, stats: gen.stats, rawText: gen.rawText });
         if (gen.truncated && !actions.length) {
           this.messages.push({ role: 'assistant', content: this.assistantContent(gen, gen.text.slice(0, unfinished?.start ?? gen.text.length).trim() || '(cut)') });
           this.messages.push({ role: 'user', content: cutNote });
@@ -1236,11 +1244,11 @@ export class Agent extends EventEmitter {
 
         // ---------- an edit whose <old> block failed while it was being written ----------
         if (gen.earlyEdit) {
-          const { path: p, old, message } = gen.earlyEdit;
+          const { path: p, old, message, calledAs: as } = gen.earlyEdit;
           const attempt = `<edit path="${p}">\n<old>${old}</old>`;
           this.messages.push({ role: 'assistant', content: this.assistantContent(gen, `${gen.text.trim()}\n${attempt}`.trim()) });
           const actId = nextId++;
-          this.emit('event', { type: 'action_start', id: actId, tool: 'edit', args: { path: p, body: `<old>${old}</old>` } });
+          this.emit('event', { type: 'action_start', id: actId, tool: 'edit', args: { path: p, body: `<old>${old}</old>` }, calledAs: this.trace ? as : undefined });
           this.emit('event', { type: 'action_end', id: actId, ok: false, output: message, meta: { path: p } });
           notice('Bloc <old> introuvable ou ambigu : génération arrêtée avant la fin de la modification.');
           this.messages.push({ role: 'user', content: `${formatResult('edit', { path: p }, message)}\n(You were stopped as soon as this <old> block was written: the edit was not applied. Fix the <old> block, it must match the file exactly.)` });
@@ -1362,7 +1370,7 @@ export class Agent extends EventEmitter {
           if (!isToolEnabled('agent', config)) {
             for (const action of toRun) {
               const actId = nextId++;
-              this.emit('event', { type: 'action_start', id: actId, tool: 'agent', args: action.args });
+              this.emit('event', { type: 'action_start', id: actId, tool: 'agent', args: action.args, calledAs: action.calledAs });
               this.emit('event', { type: 'action_end', id: actId, ok: false, output: 'Sous-agents désactivés.', meta: {} });
               results.push(formatResult('agent', { title: action.args.title }, 'Sub-agents are disabled. Do the task yourself.'));
             }
@@ -1382,7 +1390,7 @@ export class Agent extends EventEmitter {
           const actId = action.resumeId ?? nextId++;
           if (!action.resumeId) {
             resumePoint([actId], k);
-            this.emit('event', { type: 'action_start', id: actId, tool: action.tool, args: action.args });
+            this.emit('event', { type: 'action_start', id: actId, tool: action.tool, args: action.args, calledAs: action.calledAs });
           }
           if (!isToolEnabled(action.tool, config)) {
             const what = action.tool === 'run' ? 'Running commands' : 'Internet access';
