@@ -231,7 +231,7 @@ details.thinking div { white-space: pre-wrap; border-left: 2px solid var(--borde
 .composer-box { position: relative; }
 /* /skill: what can be called, above the input */
 .skill-menu {
-  position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); z-index: 20; padding: 4px; border-radius: 10px; max-height: 248px; overflow-y: auto;
+  position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); z-index: 20; padding: 4px; border-radius: 10px; max-height: min(248px, var(--room, 248px)); overflow-y: auto;
   background: var(--sheet-solid); border: 1px solid var(--glass-edge); box-shadow: var(--float); font: 14px var(--ui);
 }
 .skill-row { display: flex; align-items: baseline; gap: 10px; width: 100%; padding: 5px 9px; border: none; border-radius: 7px; background: none; color: var(--text); text-align: left; }
@@ -895,7 +895,7 @@ body.running .resume-btn { display: none; }
 .model-picker .model-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .engine-icon { display: block; width: 14px; height: 14px; flex: none; }
 .model-icon { flex: none; }
-.model-menu { left: auto; right: 0; top: auto; bottom: calc(100% + 6px); min-width: 240px; max-height: 50vh; }
+.model-menu { left: auto; right: 0; top: auto; bottom: calc(100% + 6px); min-width: 240px; max-height: min(50vh, var(--room, 50vh)); }
 .model-row { width: 100%; background: none; border: none; color: var(--text); text-align: left; }
 .model-row:disabled { opacity: 0.45; cursor: default; }
 .model-row.selected .pm-name { color: var(--accent); }

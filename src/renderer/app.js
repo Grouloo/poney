@@ -165,6 +165,12 @@ function renderChoice() {
 $('effortSelect').addEventListener('change', (e) => setChoice({ effort: e.target.value }));
 $('modeSelect').addEventListener('change', (e) => setChoice({ mode: e.target.value }));
 
+// (a menu opening upward stops below the top bar: the system takes the clicks there before the page does)
+function fitBelowBar(menu, anchor) {
+  const room = anchor.getBoundingClientRect().top - document.querySelector('.topbar').getBoundingClientRect().bottom - 14;
+  menu.style.setProperty('--room', `${Math.max(room, 0)}px`);
+}
+
 function openModelMenu() {
   const menu = $('modelMenu');
   const c = choice();
@@ -190,9 +196,11 @@ function openModelMenu() {
   if (claude.installed && !claude.available) {
     menu.appendChild(div('pm-row muted model-hint', `<span class="pm-icon">${CLAUDE_ICON}</span><span class="pm-name">Pour les modèles Claude : lancez « claude auth login » dans un terminal</span>`));
   }
+  fitBelowBar(menu, $('modelPicker'));
   menu.classList.remove('hidden');
 }
 function closeModelMenu() { $('modelMenu').classList.add('hidden'); }
+window.addEventListener('resize', closeModelMenu);
 $('modelPicker').onclick = async (e) => {
   e.stopPropagation();
   if (!$('modelMenu').classList.contains('hidden')) return closeModelMenu();
@@ -772,6 +780,7 @@ async function updateSkillMenu() {
   if (!skillMatches.length) return skillMenu.classList.add('hidden');
   skillPick = 0;
   renderSkillMenu();
+  fitBelowBar(skillMenu, skillMenu.parentElement);
   skillMenu.classList.remove('hidden');
 }
 function renderSkillMenu() {
