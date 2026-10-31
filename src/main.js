@@ -55,7 +55,7 @@ function logError(what, detail) {
 
 // ---------- settings ----------
 const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
-let settings = { config: { ...DEFAULT_CONFIG }, workspace: '', recent: [], projectIcons: {}, modelContexts: {}, engine: { idleMinutes: 15, cacheGb: 10 }, projectNames: {}, hiddenProjects: [] };
+let settings = { config: { ...DEFAULT_CONFIG }, workspace: '', recent: [], projectIcons: {}, modelContexts: {}, engine: { idleMinutes: 15, cacheGb: 10 }, projectNames: {}, hiddenProjects: [], projectOrder: [] };
 
 function loadSettings() {
   try {
@@ -403,6 +403,11 @@ ipcMain.handle('project:setName', (_, dir, name) => {
   const clean = String(name ?? '').trim().slice(0, 80);
   if (clean) settings.projectNames[dir] = clean;
   else delete settings.projectNames[dir];
+  saveSettings();
+  return publicSettings();
+});
+ipcMain.handle('project:setOrder', (_, keys) => {
+  settings.projectOrder = keys.filter((k) => typeof k === 'string');
   saveSettings();
   return publicSettings();
 });
@@ -765,6 +770,7 @@ ipcMain.handle('project:delete', (_, dir) => {
   settings.projectNames = { ...settings.projectNames };
   delete settings.projectNames[dir];
   settings.hiddenProjects = settings.hiddenProjects.filter((d) => d !== dir);
+  settings.projectOrder = settings.projectOrder.filter((d) => d !== dir);
   if (settings.workspace === dir) settings.workspace = settings.recent[0] || '';
   saveSettings();
   if (shown) {

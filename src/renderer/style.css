@@ -304,6 +304,8 @@ details.thinking div { white-space: pre-wrap; border-left: 2px solid var(--borde
 .project-nav { overflow-y: auto; }
 .project-row { flex: none; position: relative; display: flex; }
 .project-row .project-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
+.project-row.dragging { z-index: 1; opacity: 0.75; }
+.project-nav.reordering, .project-nav.reordering * { cursor: grabbing !important; }
 .project-row.has-eye .project-open { padding-right: 30px; }
 .project-row.hidden-project .project-open { opacity: 0.5; }
 .dialog-nav .project-eye { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); display: flex; padding: 4px; border-radius: 6px; visibility: hidden; }

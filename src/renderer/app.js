@@ -1792,6 +1792,7 @@ function renderProjectNav() {
   $('projectNav').replaceChildren(...allProjectKeys().filter((key) => key !== ALL).map((key) => {
     const hidden = isHiddenProject(key);
     const row = div(`project-row${key === OFF_KEY ? '' : ' has-eye'}${hidden ? ' hidden-project' : ''}`);
+    row.dataset.project = key;
     const b = row.appendChild(document.createElement('button'));
     b.type = 'button';
     b.className = `project-open${key === settingsProject ? ' active' : ''}`;
@@ -1810,6 +1811,45 @@ function renderProjectNav() {
     return row;
   }));
 }
+// A row dragged moves among the others as it goes. (By pointer events: the native
+// drag cannot show the list as it will be.)
+$('projectNav').addEventListener('pointerdown', (down) => {
+  const nav = $('projectNav');
+  const row = down.target.closest('.project-row');
+  if (!row || down.button || down.target.closest('.project-eye')) return;
+  let dragging = false;
+  const move = (e) => {
+    if (!dragging && Math.abs(e.clientY - down.clientY) < 5) return;
+    dragging = true;
+    row.classList.add('dragging');
+    nav.classList.add('reordering');
+    for (const other of nav.querySelectorAll('.project-row')) {
+      if (other === row) continue;
+      const r = other.getBoundingClientRect();
+      if (e.clientY < r.top || e.clientY > r.bottom) continue;
+      other.before(row);
+      if (e.clientY > r.top + r.height / 2) other.after(row);
+      break;
+    }
+    const box = nav.getBoundingClientRect();
+    if (e.clientY < box.top + 24) nav.scrollTop -= 8;
+    else if (e.clientY > box.bottom - 24) nav.scrollTop += 8;
+  };
+  const up = () => {
+    document.removeEventListener('pointermove', move);
+    document.removeEventListener('pointerup', up);
+    if (!dragging) return;
+    row.classList.remove('dragging');
+    nav.classList.remove('reordering');
+    // (the click that ends a drag opens nothing)
+    const swallow = (e) => { e.stopPropagation(); e.preventDefault(); };
+    nav.addEventListener('click', swallow, { capture: true, once: true });
+    setTimeout(() => nav.removeEventListener('click', swallow, { capture: true }));
+    applyProjectChange(() => window.api.setProjectOrder([...nav.querySelectorAll('.project-row')].map((r) => r.dataset.project)));
+  };
+  document.addEventListener('pointermove', move);
+  document.addEventListener('pointerup', up);
+});
 async function applyProjectChange(call) {
   try {
     settings = await call();
@@ -2048,7 +2088,11 @@ function allProjectKeys(all = everyConversation) {
   const dirs = new Set(settings.recent || []);
   if (settings.workspace) dirs.add(settings.workspace);
   for (const c of all) if (!c.offProject && c.workspace) dirs.add(c.workspace);
-  return [ALL, ...[...dirs].sort((a, b) => projectLabel(a).localeCompare(projectLabel(b), 'fr')), OFF_KEY];
+  // In the order chosen; those not placed yet after, by name, 'Hors projet' last.
+  const order = settings.projectOrder ?? [];
+  const placed = order.filter((k) => dirs.has(k) || k === OFF_KEY);
+  const rest = [...dirs].filter((k) => !order.includes(k)).sort((a, b) => projectLabel(a).localeCompare(projectLabel(b), 'fr'));
+  return [ALL, ...placed, ...rest, ...(placed.includes(OFF_KEY) ? [] : [OFF_KEY])];
 }
 /** The projects of the sidebar. */
 const projectKeys = () => allProjectKeys().filter((key) => !isHiddenProject(key));

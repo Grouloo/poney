@@ -117,7 +117,8 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   at the bottom show where you are. A project can have an emoji, an icon in a color (a picker with a search, in its settings) or a small picture: it
   replaces the folder icon on its cards and its dot. "Ajouter un projet…" in the picker's menu. The button beside
   the picker opens "Paramètres des projets", one dialog with every project on its left, at the project listed.
-  There a project can be renamed (its folder stays as it is) and hidden with the eye beside it: it leaves the
+  There projects are put in order by dragging them, which also orders the dots, menus and ⌘1 to ⌘9. A project can be
+  renamed (its folder stays as it is) and hidden with the eye beside it: it leaves the
   sidebar with its conversations, nothing is removed, and the eye or choosing its folder again brings it back.
 - **Right click on the sidebar** (or on a project's dot, or a conversation's card): for that project, a new
   conversation (⌘N, or ⌘T), mark its conversations as read (⇧⌘U), its settings (⇧⌘P: emoji or picture,

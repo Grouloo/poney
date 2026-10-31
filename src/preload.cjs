@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('api', {
   revealWorkspace: () => ipcRenderer.invoke('workspace:reveal'),
   setProjectIcon: (key, icon) => ipcRenderer.invoke('project:setIcon', key, icon),
   setProjectName: (dir, name) => ipcRenderer.invoke('project:setName', dir, name),
+  setProjectOrder: (keys) => ipcRenderer.invoke('project:setOrder', keys),
   setProjectHidden: (dir, hidden) => ipcRenderer.invoke('project:setHidden', dir, hidden),
   pickProjectIcon: (key) => ipcRenderer.invoke('project:pickIcon', key),
   deleteProject: (dir) => ipcRenderer.invoke('project:delete', dir),
