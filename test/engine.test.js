@@ -12,7 +12,7 @@ import { ModelEngine, estimateMemory } from '../src/engine/engine.js';
 import { installEngine, installedEngine } from '../src/engine/install.js';
 import { readGguf } from '../src/engine/gguf.js';
 import { scanModels, sameModelFile } from '../src/engine/models.js';
-import { streamChat, setInferenceService } from '../src/agent/llm.js';
+import { listModels, streamChat, setInferenceService } from '../src/agent/llm.js';
 
 const tmp = () => fs.mkdtemp(path.join(os.tmpdir(), 'poney-engine-'));
 const GB = 1024 ** 3;
@@ -425,4 +425,13 @@ test('a call that stops early gives its place back', async (t) => {
   t.after(() => { setInferenceService(null); f.close(); });
   for await (const c of streamChat({ provider: 'poney', model: 'm', messages: [], maxTokens: 10 })) if (c.type === 'thinking') break;
   assert.equal(released, 1);
+});
+
+test('a server that takes the connection and never answers does not hold up the list of models', async (t) => {
+  const server = http.createServer(() => {}); // (it reads the request, and that is all)
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => server.closeAllConnections() || server.close());
+  const baseUrl = `http://127.0.0.1:${server.address().port}/v1`;
+  await assert.rejects(listModels({ provider: 'openai', baseUrl, timeoutMs: 50 }));
+  await assert.rejects(listModels({ provider: 'ollama', baseUrl, timeoutMs: 50 }));
 });

@@ -542,15 +542,16 @@ export async function serverContextLength({ provider, baseUrl, apiKey, model }) 
   return models?.data?.find((m) => m.id === model)?.max_model_len || null;
 }
 
-export async function listModels({ provider, baseUrl, apiKey }) {
+export async function listModels({ provider, baseUrl, apiKey, timeoutMs = 3000 }) {
+  const signal = AbortSignal.timeout(timeoutMs); // (a server can take the connection and never answer)
   if (provider === 'ollama') {
-    const res = await fetch(`${trimSlash(baseUrl)}/api/tags`);
+    const res = await fetch(`${trimSlash(baseUrl)}/api/tags`, { signal });
     await checkResponse(res);
     const data = await res.json();
     return (data.models || []).map((m) => m.name);
   }
   const headers = apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
-  const res = await fetch(`${openaiBase(baseUrl)}/models`, { headers });
+  const res = await fetch(`${openaiBase(baseUrl)}/models`, { headers, signal });
   await checkResponse(res);
   const data = await res.json();
   return (data.data || []).map((m) => m.id);
