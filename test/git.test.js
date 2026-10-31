@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseStatus, parseLog, gitStatus, gitDiff, gitSync, gitConnect, gitRemote, gitChangeRemote, gitRemoveRemote, createGithubRepo, githubAccount, readyGh } from '../src/git.js';
+import { parseStatus, parseLog, gitStatus, gitDiff, gitSync, gitConnect, gitRemote, gitChangeRemote, gitRemoveRemote, createGithubRepo, githubAccount, readyGh, GITHUB_TOKEN_PAGE } from '../src/git.js';
 
 const run = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
 const write = (dir, name, text) => fs.writeFileSync(path.join(dir, name), text);
@@ -305,4 +305,10 @@ test('a token is checked with GitHub, which says whose it is', async () => {
   assert.deepEqual(calls[0], ['https://api.github.com/user', 'Bearer tok']);
   const refused = async () => answer(401, { message: 'Bad credentials' });
   await assert.rejects(githubAccount({ token: 'tok', fetchFn: refused }), (e) => /Bad credentials/.test(e.message) && !e.message.includes('tok'));
+});
+
+test('the page for a new token asks only for what creating a repository needs', () => {
+  const url = new URL(GITHUB_TOKEN_PAGE);
+  assert.equal(`${url.origin}${url.pathname}`, 'https://github.com/settings/personal-access-tokens/new');
+  assert.deepEqual(Object.fromEntries(url.searchParams), { name: 'Poney', description: 'Création de dépôts depuis Poney', expires_in: '90', administration: 'write' });
 });

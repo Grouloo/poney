@@ -129,7 +129,7 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   "Synchroniser" with what goes up and down (fast-forward only: a diverged branch is refused; a branch without
   upstream is published; without a remote, the button sets one: an existing repository, whose branch is then followed
   and to which nothing is sent unless it is empty, or a new one on GitHub, private by default, through `gh` or a token,
-  the one of Réglages › GitHub, encrypted by the system, or one given for that time; the address can be changed or
+  the one of Réglages › GitHub (a button opens GitHub's form, filled in), encrypted by the system, or one given for that time; the address can be changed or
   removed in the project's settings, once the new one answers), the staged files, the tracked changes, recent commits. A click on a file opens its diff
   in a side panel. The remote is fetched at most every 5 minutes while this section is shown, or on ↻; through
   Tor when commands are.

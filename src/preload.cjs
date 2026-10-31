@@ -75,6 +75,7 @@ contextBridge.exposeInMainWorld('api', {
   gitSetRemote: (dir, url) => ipcRenderer.invoke('git:setRemote', dir, url),
   gitRemoveRemote: (dir) => ipcRenderer.invoke('git:removeRemote', dir),
   githubStatus: () => ipcRenderer.invoke('github:status'),
+  githubOpenTokenPage: () => ipcRenderer.invoke('github:openTokenPage'),
   githubSetToken: (token) => ipcRenderer.invoke('github:setToken', token),
   githubRemoveToken: () => ipcRenderer.invoke('github:removeToken'),
   gitCreateGithub: (repo) => ipcRenderer.invoke('git:createGithub', repo),

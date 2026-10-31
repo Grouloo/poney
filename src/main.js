@@ -14,7 +14,7 @@ import { scanModels, sameModelFile } from './engine/models.js';
 import { addServer, loadProviders, modelConfig, providerOf, removeProvider, savedConfig, unavailable, updateProvider } from './providers.js';
 import { ConversationStore, moveAppData } from './conversations.js';
 import { listDir, readFileForViewer } from './files.js';
-import { createGithubRepo, findGh, gitChangeRemote, githubAccount, gitStatus, gitConnect, gitDiff, gitFetch, gitRemote, gitRemoveRemote, gitSync, readyGh } from './git.js';
+import { createGithubRepo, findGh, GITHUB_TOKEN_PAGE, gitChangeRemote, githubAccount, gitStatus, gitConnect, gitDiff, gitFetch, gitRemote, gitRemoveRemote, gitSync, readyGh } from './git.js';
 import { migrateLegacy, rebuildHistory, rebuildForAction } from './agent/rebuild.js';
 import { checkTor, torStatus, newCircuits, findTorProxy, requireTor, proxyEnv } from './agent/tor.js';
 
@@ -901,6 +901,7 @@ async function githubStatus() {
   };
 }
 ipcMain.handle('github:status', githubStatus);
+ipcMain.handle('github:openTokenPage', () => shell.openExternal(GITHUB_TOKEN_PAGE));
 ipcMain.handle('github:setToken', async (_, token) => {
   if (noDirectGithub()) throw new Error('Un jeton ne peut pas être vérifié à travers Tor : utilisez gh.');
   if (!safeStorage.isEncryptionAvailable()) throw new Error('Le chiffrement du système n’est pas disponible : le jeton ne peut pas être enregistré.');

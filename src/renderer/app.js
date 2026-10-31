@@ -2867,7 +2867,7 @@ async function openRemoteDialog() {
     ? 'Le dépôt est créé avec le compte connecté à gh, puis la branche y est envoyée.'
     : gh?.tokenSaved
       ? 'Le dépôt est créé avec le jeton des réglages, puis la branche y est envoyée avec votre connexion Git habituelle.'
-      : 'gh n’est pas disponible : il faut un jeton GitHub pouvant créer des dépôts (à enregistrer dans Réglages › GitHub, ou pour cette fois ici). La branche est ensuite envoyée avec votre connexion Git habituelle.';
+      : 'gh n’est pas disponible : il faut un jeton GitHub (à enregistrer dans Réglages › GitHub, ou pour cette fois ici). Le formulaire de GitHub s’ouvre pré-rempli : choisissez seulement « All repositories ». La branche est ensuite envoyée avec votre connexion Git habituelle.';
 }
 
 for (const radio of remoteDialog.querySelectorAll('[name=remoteKind]')) radio.onchange = showRemoteKind;
@@ -2918,6 +2918,7 @@ async function changeGithub(change) {
 }
 const saveGithubToken = () => changeGithub(() => window.api.githubSetToken($('githubToken').value));
 $('githubSave').onclick = saveGithubToken;
+for (const id of ['githubCreateToken', 'remoteCreateToken']) $(id).onclick = () => window.api.githubOpenTokenPage();
 $('githubRemove').onclick = () => { if (confirm('Retirer le jeton GitHub de Poney ? Il reste valide chez GitHub tant que vous ne l’y révoquez pas.')) changeGithub(window.api.githubRemoveToken); };
 $('githubToken').addEventListener('keydown', (e) => {
   if (e.key !== 'Enter') return;

@@ -275,7 +275,10 @@
         <div id="remoteGithub" class="remote-page hidden">
           <label>Nom du dépôt <input id="remoteName" type="text" spellcheck="false" autocomplete="off" placeholder="projet ou organisation/projet"></label>
           <label class="remote-check"><input id="remotePrivate" type="checkbox" checked> Dépôt privé</label>
-          <label id="remoteTokenRow">Jeton GitHub <input id="remoteToken" type="password" autocomplete="off" placeholder="github_pat_…"></label>
+          <div id="remoteTokenRow" class="remote-page">
+            <label>Jeton GitHub <input id="remoteToken" type="password" autocomplete="off" placeholder="github_pat_…"></label>
+            <div class="github-actions"><button type="button" id="remoteCreateToken" class="ghost">Créer un jeton sur GitHub…</button></div>
+          </div>
           <p id="remoteNote" class="muted"></p>
         </div>
         <div id="remoteError" class="git-error"></div>
@@ -362,8 +365,9 @@
         <label>Jeton GitHub
           <input id="githubToken" type="password" autocomplete="off" placeholder="github_pat_…">
         </label>
-        <small>Sert à créer des dépôts quand gh n’est pas connecté, avec le droit de créer des dépôts. Il est vérifié auprès de GitHub, puis chiffré par le système. Les envois (push) gardent votre connexion Git habituelle.</small>
+        <small>Sert à créer des dépôts quand gh n’est pas connecté. Le formulaire de GitHub s’ouvre pré-rempli : choisissez seulement « All repositories », puis collez le jeton ici. Il est vérifié auprès de GitHub, puis chiffré par le système. Les envois (push) gardent votre connexion Git habituelle.</small>
         <div class="github-actions">
+          <button type="button" id="githubCreateToken" class="ghost">Créer un jeton sur GitHub…</button>
           <button type="button" id="githubSave" class="ghost">Enregistrer le jeton</button>
           <button type="button" id="githubRemove" class="ghost">Retirer le jeton</button>
         </div>

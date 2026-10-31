@@ -249,6 +249,11 @@ export async function createGithubRepo({ name, isPrivate = true, gh = null, toke
   return JSON.parse(text).clone_url;
 }
 
+// GitHub's form for a new token, filled in: only what creating a repository needs.
+// (it cannot be told which repositories: the interface asks for all of them)
+const TOKEN_FORM = { name: 'Poney', description: 'Création de dépôts depuis Poney', expires_in: '90', administration: 'write' };
+export const GITHUB_TOKEN_PAGE = `https://github.com/settings/personal-access-tokens/new?${new URLSearchParams(TOKEN_FORM)}`;
+
 /** The account behind gh or a token: its login. Throws when GitHub refuses it. */
 export async function githubAccount({ gh = null, token = '', fetchFn = fetch, env }) {
   if (gh) return JSON.parse(await runGh(gh, ['api', 'user'], env)).login;
