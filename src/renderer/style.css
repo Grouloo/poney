@@ -450,10 +450,12 @@ img.proj-icon { width: 1.15em; height: 1.15em; object-fit: contain; vertical-ali
 .pdot:hover { opacity: 1; }
 .pdot:not(.has-icon):hover { background: var(--text); }
 .dot-icon { width: 11px; height: 11px; display: block; fill: var(--text); }
-#sectionDots { gap: 4px; padding-bottom: 8px; }
-#sectionDots .pdot { padding: 6px; border-radius: 7px; }
-#sectionDots .pdot:hover { background: color-mix(in srgb, var(--text) 9%, transparent); }
-#sectionDots .dot-icon { width: 18px; height: 18px; }
+.project-dots { gap: 2px; padding-bottom: 8px; }
+.pdot.has-icon { padding: 5px; border-radius: 7px; font-size: 15px; }
+.pdot.has-icon:hover { background: color-mix(in srgb, var(--text) 9%, transparent); }
+.pdot:not(.has-icon) { width: 8px; height: 8px; margin: 0 5px; }
+.pdot span.proj-icon { display: block; line-height: 15px; }
+.pdot .dot-icon, .pdot img.proj-icon, .pdot svg.proj-icon.svg-icon { width: 15px; height: 15px; display: block; }
 .dot-icon .line { fill: none; stroke: var(--text); stroke-width: 1.3; }
 .pm-icon .dot-icon { margin: 0 auto; }
 #convList.slide-next, .pane.slide-next { animation: slide-next 0.22s ease-out; }

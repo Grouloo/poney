@@ -1651,6 +1651,14 @@ const projectActions = {
 window.addEventListener('keydown', (e) => {
   const mod = MAC ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
   if (!mod || e.altKey) return;
+  // (by the key's place, not its character: on an AZERTY keyboard, the top row gives &, é…)
+  const digit = e.code.match(/^Digit([1-9])$/);
+  if (digit && !e.shiftKey) {
+    e.preventDefault();
+    hideContextMenu();
+    showProjectAt(Number(digit[1]) - 1);
+    return;
+  }
   const name = Object.keys(SHORTCUTS).find((n) => SHORTCUTS[n].keys.includes(e.key.toLowerCase()) && Boolean(SHORTCUTS[n].shift) === e.shiftKey);
   if (!name) return;
   e.preventDefault();
@@ -2075,6 +2083,15 @@ function setProjectFilter(key, dir = 0) {
   refreshConversations({ slide: dir });
 }
 
+/** From anywhere: the card of the conversations in front, at this place among the dots. */
+function showProjectAt(place) {
+  const keys = projectKeys();
+  if (!keys[place]) return;
+  document.body.classList.remove('no-sidebar');
+  if (filesInFront) swapDeck();
+  setProjectFilter(keys[place], Math.sign(place - keys.indexOf(projectFilter)));
+}
+
 function stepProject(dir) {
   const keys = projectKeys();
   // (past either end, round to the other)
@@ -2091,7 +2108,8 @@ function renderProjectBar(keys) {
     b.type = 'button';
     b.className = `pdot${key === projectFilter ? ' active' : ''}`;
     b.dataset.project = key;
-    b.title = projectLabel(key);
+    const place = keys.indexOf(key) + 1;
+    b.dataset.tip = place <= 9 ? `Afficher : ${projectLabel(key)} (${MAC ? '⌘' : 'Ctrl+'}${place})` : `Afficher : ${projectLabel(key)}`;
     b.innerHTML = key === ALL ? ALL_ICON : projectIcon(key, key === OFF_KEY ? OFF_ICON : '');
     if (b.innerHTML) b.classList.add('has-icon');
     b.onclick = () => setProjectFilter(key, Math.sign(keys.indexOf(key) - keys.indexOf(projectFilter)));
