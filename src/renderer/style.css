@@ -450,6 +450,10 @@ img.proj-icon { width: 1.15em; height: 1.15em; object-fit: contain; vertical-ali
 .pdot:hover { opacity: 1; }
 .pdot:not(.has-icon):hover { background: var(--text); }
 .dot-icon { width: 11px; height: 11px; display: block; fill: var(--text); }
+#sectionDots { gap: 4px; padding-bottom: 8px; }
+#sectionDots .pdot { padding: 6px; border-radius: 7px; }
+#sectionDots .pdot:hover { background: color-mix(in srgb, var(--text) 9%, transparent); }
+#sectionDots .dot-icon { width: 18px; height: 18px; }
 .dot-icon .line { fill: none; stroke: var(--text); stroke-width: 1.3; }
 .pm-icon .dot-icon { margin: 0 auto; }
 #convList.slide-next, .pane.slide-next { animation: slide-next 0.22s ease-out; }

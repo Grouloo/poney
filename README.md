@@ -124,7 +124,7 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   delete the project from the app: its conversations go, its folder and files stay), add a project (⇧⌘O).
   The shortcuts act on the project listed in the sidebar (Ctrl instead of ⌘ outside macOS). ⇧⌘E swaps the
   conversations and the files.
-- **Git**, the second section of the files' card (selector at the top, icons at the bottom, or a two-finger swipe):
+- **Git**, the second section of the files' card (selector at the top, icons at the bottom, a two-finger swipe, or ⇧⌘F for the files and ⇧⌘G for Git):
   "Synchroniser" with what goes up and down (fast-forward only: a diverged branch is refused; a branch without
   upstream is published), the staged files, the tracked changes, recent commits. A click on a file opens its diff
   in a side panel. The remote is fetched at most every 5 minutes while this section is shown, or on ↻; through

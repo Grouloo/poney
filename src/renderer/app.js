@@ -1626,6 +1626,8 @@ const SHORTCUTS = {
   projectSettings: { keys: ['p'], shift: true },
   addProject: { keys: ['o'], shift: true },
   swapDeck: { keys: ['e'], shift: true },
+  showFiles: { keys: ['f'], shift: true },
+  showGit: { keys: ['g'], shift: true },
 };
 const shortcutText = ({ keys: [k], shift }) => MAC ? `${shift ? '⇧' : ''}⌘${k.toUpperCase()}` : `Ctrl+${shift ? 'Maj+' : ''}${k.toUpperCase()}`;
 $('projectSettingsBtn').dataset.tip = `Paramètres des projets (${shortcutText(SHORTCUTS.projectSettings)})`;
@@ -1642,6 +1644,8 @@ const projectActions = {
   projectSettings: (key) => openProjectSettings(key),
   addProject: () => addProject(),
   swapDeck: () => swapOrShowDeck(),
+  showFiles: () => showSection('files'),
+  showGit: () => showSection('git'),
 };
 
 window.addEventListener('keydown', (e) => {
@@ -1950,8 +1954,8 @@ let filesInFront = false;
 try { filesInFront = localStorage.getItem('deckFront') === 'files'; } catch {}
 // On the card of the files, two sections, gone through as the projects are on the other card.
 const SECTIONS = [
-  { key: 'files', label: 'Fichiers', icon: '<svg class="proj-icon dot-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M1 3a1 1 0 0 1 1-1h2.6l1.2 1.3H10a1 1 0 0 1 1 1V9a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1z"/></svg>' },
-  { key: 'git', label: 'Git', icon: '<svg class="proj-icon dot-icon" viewBox="0 0 12 12" aria-hidden="true"><circle cx="3" cy="2.5" r="1.6"/><circle cx="3" cy="9.5" r="1.6"/><circle cx="9" cy="3.5" r="1.6"/><path class="line" d="M3 3v6M9 4.5C9 7 3 6 3 8.5"/></svg>' },
+  { key: 'files', label: 'Fichiers', shortcut: 'showFiles', icon: '<svg class="proj-icon dot-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M1 3a1 1 0 0 1 1-1h2.6l1.2 1.3H10a1 1 0 0 1 1 1V9a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1z"/></svg>' },
+  { key: 'git', label: 'Git', shortcut: 'showGit', icon: '<svg class="proj-icon dot-icon" viewBox="0 0 12 12" aria-hidden="true"><circle cx="3" cy="2.5" r="1.6"/><circle cx="3" cy="9.5" r="1.6"/><circle cx="9" cy="3.5" r="1.6"/><path class="line" d="M3 3v6M9 4.5C9 7 3 6 3 8.5"/></svg>' },
 ];
 let filesSection = 'files';
 try { if (localStorage.getItem('filesSection') === 'git') filesSection = 'git'; } catch {}
@@ -2537,7 +2541,7 @@ function renderSection() {
     const b = dots.appendChild(document.createElement('button'));
     b.type = 'button';
     b.className = `pdot has-icon${s.key === filesSection ? ' active' : ''}`;
-    b.dataset.tip = s.label;
+    b.dataset.tip = `Afficher : ${s.label} (${shortcutText(SHORTCUTS[s.shortcut])})`;
     b.innerHTML = s.icon;
     b.onclick = () => setSection(s.key);
   }
@@ -2554,6 +2558,12 @@ function setSection(key, dir = Math.sign(SECTIONS.findIndex((s) => s.key === key
   void pane.offsetWidth; // (changed again during the animation: it starts over)
   pane.classList.add(dir > 0 ? 'slide-next' : 'slide-prev');
   refreshGit();
+}
+/** From anywhere: the card of the files in front, at this section. */
+function showSection(key) {
+  document.body.classList.remove('no-sidebar');
+  if (!filesInFront) swapDeck();
+  setSection(key);
 }
 function stepSection(dir) {
   setSection(SECTIONS[(SECTIONS.findIndex((s) => s.key === filesSection) + dir + SECTIONS.length) % SECTIONS.length].key, dir);
