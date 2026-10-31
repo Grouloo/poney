@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseStatus, parseLog, gitStatus, gitDiff, gitSync, gitConnect, gitRemote, gitChangeRemote, gitRemoveRemote, createGithubRepo, githubAccount, readyGh, GITHUB_TOKEN_PAGE } from '../src/git.js';
+import { parseStatus, parseLog, fileStates, gitFileStates, gitStatus, gitDiff, gitSync, gitConnect, gitRemote, gitChangeRemote, gitRemoveRemote, createGithubRepo, githubAccount, readyGh, GITHUB_TOKEN_PAGE } from '../src/git.js';
 
 const run = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
 const write = (dir, name, text) => fs.writeFileSync(path.join(dir, name), text);
@@ -311,4 +311,22 @@ test('the page for a new token asks only for what creating a repository needs', 
   const url = new URL(GITHUB_TOKEN_PAGE);
   assert.equal(`${url.origin}${url.pathname}`, 'https://github.com/settings/personal-access-tokens/new');
   assert.deepEqual(Object.fromEntries(url.searchParams), { name: 'Poney', description: 'Création de dépôts depuis Poney', expires_in: '90', administration: 'write' });
+});
+
+test('a folder shows the most urgent state of what it holds', () => {
+  const states = fileStates({ staged: [{ path: 'src/new.js', status: 'A' }], unstaged: [{ path: 'src/a/b.js', status: 'M' }, { path: 'c.js', status: 'U' }, { path: 'gone.js', status: 'D' }], untracked: ['docs/x.md', 'src/z.js'] });
+  assert.deepEqual(states, { src: 'M', 'src/new.js': 'A', 'src/a': 'M', 'src/a/b.js': 'M', 'c.js': 'U', 'gone.js': 'M', docs: 'A', 'docs/x.md': 'A', 'src/z.js': 'A' });
+});
+
+test('the states of the files, from a subfolder and outside a repository', async () => {
+  const dir = repo();
+  fs.mkdirSync(path.join(dir, 'sub', 'deep'), { recursive: true });
+  commit(dir, 'sub/x.txt', 'x\n');
+  commit(dir, 'top.txt', 'x\n');
+  write(dir, 'sub/x.txt', 'changed\n');
+  write(dir, 'sub/deep/new.txt', 'new\n');
+  write(dir, 'top.txt', 'changed\n');
+  assert.deepEqual(await gitFileStates(path.join(dir, 'sub')), { 'x.txt': 'M', deep: 'A', 'deep/new.txt': 'A' });
+  assert.equal((await gitFileStates(dir)).sub, 'M');
+  assert.deepEqual(await gitFileStates(fs.mkdtempSync(path.join(os.tmpdir(), 'poney-norepo-'))), {});
 });

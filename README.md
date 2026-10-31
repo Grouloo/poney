@@ -125,6 +125,7 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   delete the project from the app: its conversations go, its folder and files stay), add a project (⇧⌘O).
   The shortcuts act on the project listed in the sidebar (Ctrl instead of ⌘ outside macOS). ⌘1 to ⌘9 go to the project at that place among the dots. ⇧⌘E swaps the
   conversations and the files.
+- **File tree colors**: names and folders take their git state: orange changed, green new, red in conflict.
 - **Git**, the second section of the files' card (selector at the top, icons at the bottom, a two-finger swipe, or ⇧⌘F for the files and ⇧⌘G for Git):
   "Synchroniser" with what goes up and down (fast-forward only: a diverged branch is refused; a branch without
   upstream is published; without a remote, the button sets one: an existing repository, whose branch is then followed
@@ -156,7 +157,7 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   another model.
 - **Poney's engine**: GGUF models run without any other app. `llama-server` (a pinned llama.cpp build, downloaded on
   first use and checked against its digest) runs as a separate process on 127.0.0.1, per model. Models come from
-  `<data>/models` and, read only, `~/.lmstudio/models`; a file both can run shows under Poney only. A message loads
+  `<data>/models` (a button in the provider's settings opens it) and, read only, `~/.lmstudio/models`; a file both can run shows under Poney only. A message loads
   its model; an idle one goes after 15 minutes. The context is set per model (a change reloads at the next message)
   and the prompt cache survives unloading, on disk, up to 10 GB, the unused going first.
 - **Calls to local models** go through one queue ("Inférences en même temps", 0 for no limit), conversations and
@@ -204,6 +205,10 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   optional reason that is passed on to the model, so it can change its approach.
 
 ![A command waiting for approval; the sidebar sorts the conversations by state](docs/screenshots/approval.png)
+- **A turn ended by an error** puts its conversation under "Erreur", with "Reprendre" on its card and in the
+  transcript: the conversation goes on from where it stopped.
+- **Plan usage** beside the context gauge with a Claude model: the 5-hour and 7-day limits (the SDK marks this call
+  as experimental; without an answer the gauge does not show).
 - **Context gauge** under the input (the tick marks the compaction threshold); a click compacts on demand. With a
   Claude model it shows the API's counts, from the first message on, and the Claude harness compacts by itself.
   Each sub-agent has its own, on its card and in its panel (kept with its result).

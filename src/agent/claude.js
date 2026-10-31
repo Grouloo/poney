@@ -64,6 +64,26 @@ export async function claudeModels(executable, { query } = {}) {
   }
 }
 
+/**
+ * How much of the plan's limits is used: { fiveHour, sevenDay }, each
+ * { utilization (0-100), resetsAt }, or null where plan limits do not apply.
+ * (The SDK marks this call as experimental: anything else than the expected shape counts as null.)
+ */
+export async function claudeUsage(executable, { query } = {}) {
+  const run = query ?? (await sdk()).query;
+  const idle = (async function* () { await new Promise(() => {}); })(); // (no message: only the numbers)
+  const q = run({ prompt: idle, options: { pathToClaudeCodeExecutable: executable } });
+  try {
+    const r = await q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?.({ skipBehaviors: true });
+    if (!r?.rate_limits_available) return null;
+    const window = (w) => (typeof w?.utilization === 'number' ? { utilization: w.utilization, resetsAt: w.resets_at ?? null } : null);
+    const usage = { fiveHour: window(r.rate_limits?.five_hour), sevenDay: window(r.rate_limits?.seven_day) };
+    return usage.fiveHour || usage.sevenDay ? usage : null;
+  } finally {
+    q.close();
+  }
+}
+
 const inside = (cwd, file) => {
   const rel = path.relative(cwd, String(file ?? ''));
   return rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? rel : String(file ?? '');

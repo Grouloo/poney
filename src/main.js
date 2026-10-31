@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Agent, DEFAULT_CONFIG } from './agent/agent.js';
 import { loadSkills, skillDirs } from './agent/skills.js';
-import { ClaudeAgent, findClaude, claudeLoggedIn, claudeModels } from './agent/claude.js';
+import { ClaudeAgent, findClaude, claudeLoggedIn, claudeModels, claudeUsage } from './agent/claude.js';
 import { listModels, lmStudioModels, setInferenceService } from './agent/llm.js';
 import { ModelEngine } from './engine/engine.js';
 import { ENGINE_BUILD, engineSupported, installEngine, installedEngine } from './engine/install.js';
@@ -14,7 +14,7 @@ import { scanModels, sameModelFile } from './engine/models.js';
 import { addServer, loadProviders, modelConfig, providerOf, removeProvider, savedConfig, unavailable, updateProvider } from './providers.js';
 import { ConversationStore, moveAppData } from './conversations.js';
 import { listDir, readFileForViewer } from './files.js';
-import { createGithubRepo, findGh, GITHUB_TOKEN_PAGE, gitChangeRemote, githubAccount, gitStatus, gitConnect, gitDiff, gitFetch, gitRemote, gitRemoveRemote, gitSync, readyGh } from './git.js';
+import { gitFileStates, createGithubRepo, findGh, GITHUB_TOKEN_PAGE, gitChangeRemote, githubAccount, gitStatus, gitConnect, gitDiff, gitFetch, gitRemote, gitRemoveRemote, gitSync, readyGh } from './git.js';
 import { migrateLegacy, rebuildHistory, rebuildForAction } from './agent/rebuild.js';
 import { checkTor, torStatus, newCircuits, findTorProxy, requireTor, proxyEnv } from './agent/tor.js';
 
@@ -140,6 +140,7 @@ class Session {
     this.partial = null; // the answer being written: { id, text, thinking }
     this.unread = conv?.unread ?? 0; // answers finished in the background, not seen since (saved with the conversation)
     this.finished = false; // finished while shown: stays with the finished ones until the user leaves it
+    this.failed = conv?.failed ?? false; // its last turn ended on an error: until it is taken up again
     this.draft = conv?.draft ?? ''; // what is typed in the input, not sent
     // The model of this conversation: { engine: 'local' | 'claude', model, effort, mode }.
     this.choice = conv ? conv.choice ?? { engine: 'local', model: null } : { ...(settings.lastChoice ?? { engine: 'local', model: null }) };
@@ -204,6 +205,7 @@ class Session {
     if (this === active) send('agent:event', { ...ev, session: this.key });
     if (ev.type === 'turn_start' || ev.type === 'turn_end') {
       this.finished = ev.type === 'turn_end';
+      this.failed = ev.type === 'turn_end' && ev.reason === 'error';
       this.workingSince = ev.type === 'turn_start' ? Date.now() : null;
       if (this.finished && this !== active) this.unread++;
       send('sessions:changed');
@@ -240,6 +242,7 @@ class Session {
       conv.archives = agent.archives;
     }
     conv.choice = this.choice;
+    conv.failed = this.failed;
     if (agent?.isClaude) {
       conv.claudeSession = agent.sessionId;
       conv.claudeContext = agent.context;
@@ -489,6 +492,10 @@ ipcMain.handle('engine:status', async () => ({
   loaded: engine.status(),
   folder: modelDirs()[0],
 }));
+ipcMain.handle('engine:openModels', async () => {
+  fs.mkdirSync(modelDirs()[0], { recursive: true });
+  await shell.openPath(modelDirs()[0]);
+});
 ipcMain.handle('engine:setContext', (_, model, numCtx) => {
   if (numCtx) settings.modelContexts = { ...settings.modelContexts, [model]: numCtx };
   else {
@@ -560,6 +567,14 @@ ipcMain.handle('agent:reset', () => {
   return publicSettings();
 });
 
+// What to send to take up a turn that failed. A Claude conversation that failed before
+// it had a session has nothing to go on from: its request again.
+ipcMain.handle('agent:retryText', () => {
+  const s = current();
+  const a = s.getAgent();
+  const asked = a.isClaude && !a.sessionId ? s.conv?.events.findLast((e) => e.type === 'user_message')?.text : null;
+  return asked ?? 'Reprends là où tu t’es arrêté.';
+});
 // Resume the conversation from a past action: everything after it is removed,
 // the action runs again and the agent goes on (events stream as for a message).
 ipcMain.handle('agent:resumeFrom', (_, actId) => {
@@ -599,6 +614,7 @@ ipcMain.handle('conversations:list', () => {
     c.running = s.running;
     c.sleeping = s.sleeping;
     c.finished = s.finished;
+    c.failed = s.failed;
     c.draft = Boolean(s.draft.trim());
     c.engine = s.choice.engine ?? 'local';
     c.provider = s.choice.provider;
@@ -631,6 +647,16 @@ ipcMain.handle('claude:status', async () => {
     return { available: false, installed: true, models: [] };
   });
   return claudeInfo;
+});
+// The plan's limits, asked at most once a minute (it starts a process).
+let claudeUsageInfo = { at: 0, usage: null };
+ipcMain.handle('claude:usage', async () => {
+  const executable = findClaude();
+  if (!executable) return null;
+  if (Date.now() - claudeUsageInfo.at > 60000) {
+    claudeUsageInfo = { at: Date.now(), usage: await claudeUsage(executable).catch((e) => { logError('claude usage', e); return null; }) };
+  }
+  return claudeUsageInfo.usage;
 });
 // The model of the conversation shown. Once it has started, its engine stays: the two
 // keep their histories apart.
@@ -866,6 +892,7 @@ ipcMain.handle('files:reveal', (_, rel) => shell.showItemInFolder(path.join(acti
 // (git goes through the network like a terminal command: the same Tor setting)
 const gitEnv = async () => settings.config.torEnabled && settings.config.torShell ? proxyEnv(await requireTor(settings.config.torProxy)) : {};
 ipcMain.handle('git:status', () => gitStatus(activeCwd()));
+ipcMain.handle('git:fileStates', () => gitFileStates(activeCwd()));
 ipcMain.handle('git:diff', (_, file, opts) => gitDiff(activeCwd(), file, opts));
 ipcMain.handle('git:fetch', async () => gitFetch(activeCwd(), await gitEnv()));
 ipcMain.handle('git:sync', async () => gitSync(activeCwd(), await gitEnv()));

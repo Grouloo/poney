@@ -293,6 +293,12 @@ async function poneyCard(p) {
     : engine.loaded.length ? `En mémoire : ${engine.loaded.map((m) => m.id).join(', ')}`
       : engine.installed ? 'Prêt. Les modèles se chargent au premier message.' : 'Le moteur sera téléchargé à la première utilisation d’un de ces modèles.';
   if (!engine.supported) return card;
+  const folder = card.appendChild(document.createElement('button'));
+  folder.type = 'button';
+  folder.className = 'ghost provider-folder';
+  folder.textContent = 'Ouvrir le dossier des modèles';
+  folder.title = engine.folder;
+  folder.onclick = () => window.api.openModelsFolder();
   const options = settings.engine;
   fieldIn(card, 'Décharger un modèle inactif après (minutes)', options.idleMinutes, (v) => changeProvider(window.api.setEngineOptions({ idleMinutes: Math.max(1, Number(v) || 15) })), { type: 'number', min: 1 });
   fieldIn(card, 'Cache de prompt sur disque (Go)', options.cacheGb, (v) => changeProvider(window.api.setEngineOptions({ cacheGb: Math.max(0, Number(v) || 0) })), { type: 'number', min: 0 });
@@ -648,6 +654,7 @@ function fillUserBubble(bubble, text) {
 }
 
 function addUserMessage(text, turnId) {
+  document.querySelectorAll('.retry-row').forEach((r) => r.remove()); // (taken up, or a new message)
   if (!target) planBlock = null; // a plan is the plan of one request
   const m = div('msg user');
   fillUserBubble(m.appendChild(div('bubble')), text);
@@ -715,6 +722,12 @@ function addResumeButton(card, ev) {
   btn.title = 'Relancer cette action et reprendre la conversation à partir d’elle (la suite est retirée)';
   btn.onclick = (e) => { e.stopPropagation(); resumeFromAction(ev.id); };
   card.querySelector('.card-head').appendChild(btn);
+}
+
+/** Takes up a turn that ended on an error. */
+async function retryTurn() {
+  if (running) return;
+  await sendMessage(await window.api.retryText());
 }
 
 async function resumeFromAction(id) {
@@ -1562,6 +1575,15 @@ function onEvent(ev) {
     case 'turn_end':
       promptProgress = null;
       liveGen = null;
+      if (ev.reason === 'error') {
+        const row = div('retry-row');
+        const retry = row.appendChild(document.createElement('button'));
+        retry.type = 'button';
+        retry.className = 'ghost';
+        retry.textContent = '↻ Reprendre';
+        retry.onclick = retryTurn;
+        add(row);
+      }
       // One timing line for the whole answer, not one per tool call.
       if (ev.stats) {
         const meta = div('gen-meta', esc(formatStats(ev.stats) + (ev.reason === 'stopped' ? ' · interrompu' : '')));
@@ -1570,6 +1592,7 @@ function onEvent(ev) {
       }
       if (replaying) break;
       setRunning(false);
+      refreshUsage();
       for (const b of bubbles.values()) b.bubble.classList.remove('cursor');
       input.focus();
       break;
@@ -2074,8 +2097,8 @@ function renderDeck() {
   front.inert = false;
   back.inert = true; // (under the other card: out of reach of the keyboard too)
   $('deckTab').textContent = filesInFront ? 'Conversations' : sectionLabel();
-  $('deckTab').setAttribute('aria-label', `Afficher : ${$('deckTab').textContent}`);
-  for (const b of document.querySelectorAll('.deck-swap')) b.dataset.tip = `Afficher : ${$('deckTab').textContent} (${shortcutText(SHORTCUTS.swapDeck)})`;
+  $('deckTab').setAttribute('aria-label', $('deckTab').textContent);
+  for (const b of document.querySelectorAll('.deck-swap')) b.dataset.tip = `${$('deckTab').textContent} (${shortcutText(SHORTCUTS.swapDeck)})`;
 }
 function swapDeck() {
   filesInFront = !filesInFront;
@@ -2119,6 +2142,7 @@ let renaming = false; // a title is being edited: don't rebuild the list under t
 // a background task ends, waiting for an approval, working, then the archived ones: done and read.
 const CATEGORIES = [
   { key: 'drafts', label: 'Brouillons' },
+  { key: 'failed', label: 'Erreur' },
   { key: 'done', label: 'Terminé' },
   { key: 'sleeping', label: 'En veille' },
   { key: 'waiting', label: 'Action demandée' },
@@ -2126,7 +2150,7 @@ const CATEGORIES = [
   { key: 'archived', label: 'Archivées', foldable: true },
 ];
 // (the conversation shown stays where it is: its text is a draft once the user leaves it)
-const category = (c) => c.draft && c.id !== currentConversation ? 'drafts' : c.approvals ? 'waiting' : c.sleeping ? 'sleeping' : c.running ? 'busy' : c.unread || c.finished ? 'done' : 'archived';
+const category = (c) => c.draft && c.id !== currentConversation ? 'drafts' : c.approvals ? 'waiting' : c.sleeping ? 'sleeping' : c.running ? 'busy' : c.failed ? 'failed' : c.unread || c.finished ? 'done' : 'archived';
 let collapsedCategories = new Set();
 try { collapsedCategories = new Set(JSON.parse(localStorage.getItem('collapsedCategories') || '[]')); } catch {}
 const baseName = (p) => p.split(/[\\/]/).filter(Boolean).pop() || p;
@@ -2211,7 +2235,7 @@ function renderProjectBar(keys) {
     b.className = `pdot${key === projectFilter ? ' active' : ''}`;
     b.dataset.project = key;
     const place = keys.indexOf(key) + 1;
-    b.dataset.tip = place <= 9 ? `Afficher : ${projectLabel(key)} (${MAC ? '⌘' : 'Ctrl+'}${place})` : `Afficher : ${projectLabel(key)}`;
+    b.dataset.tip = place <= 9 ? `${projectLabel(key)} (${MAC ? '⌘' : 'Ctrl+'}${place})` : projectLabel(key);
     b.innerHTML = key === ALL ? ALL_ICON : projectIcon(key, key === OFF_KEY ? OFF_ICON : '');
     if (b.innerHTML) b.classList.add('has-icon');
     b.onclick = () => setProjectFilter(key, Math.sign(keys.indexOf(key) - keys.indexOf(projectFilter)));
@@ -2321,7 +2345,6 @@ async function refreshConversations({ slide = 0 } = {}) {
   add.innerHTML = '<button class="new-conv" type="button">＋ Nouvelle conversation<span class="kbd"></span></button>';
   const key = window.api.platform === 'darwin' ? '⌘' : 'Ctrl+';
   add.firstChild.querySelector('.kbd').textContent = `${key}N`;
-  add.firstChild.dataset.tip = `Nouvelle conversation dans le projet affiché (${key}N ou ${key}T) — clic droit : autres actions`;
   add.firstChild.onclick = newConversationHere;
   list.appendChild(add);
   for (const cat of CATEGORIES) {
@@ -2465,6 +2488,17 @@ function conversationItem(c, current) {
     when.textContent = workTime(Date.now() - c.workingSince);
   } else when.textContent = relativeTime(c.updatedAt);
   li.onclick = () => openConversation(c.id);
+  if (category(c) === 'failed') {
+    const retry = li.appendChild(document.createElement('button'));
+    retry.type = 'button';
+    retry.className = 'card-retry';
+    retry.textContent = '↻ Reprendre';
+    retry.onclick = async (e) => {
+      e.stopPropagation();
+      await openConversation(c.id);
+      retryTurn();
+    };
+  }
   li.querySelector('.ren').dataset.tip = renameTip();
   li.querySelector('.ren').onclick = (e) => { e.stopPropagation(); startRename(li, c); };
   li.querySelector('.title').ondblclick = (e) => { e.stopPropagation(); startRename(li, c); };
@@ -2610,7 +2644,7 @@ async function renderDir(rel, ul) {
   ul.innerHTML = '';
   for (const e of entries) {
     const li = document.createElement('li');
-    const node = div(`node${e.ignored ? ' ignored' : ''}${e.path === openPath ? ' active' : ''}`);
+    const node = div(`node${e.ignored ? ' ignored' : ''}${e.path === openPath ? ' active' : ''}${treeStates[e.path] ? ` gs-${treeStates[e.path]}` : ''}`);
     node.dataset.path = e.path;
     node.innerHTML = `<span class="caret">${e.dir ? (expanded.has(e.path) ? '▾' : '▸') : ''}</span>${e.dir ? folderIconSvg(expanded.has(e.path)) : fileIconSvg(e.name)}<span class="name"></span>`;
     node.querySelector('.name').textContent = e.name;
@@ -2639,6 +2673,7 @@ async function renderDir(rel, ul) {
 }
 
 let treeRefresh = null;
+let treeStates = {}; // the git state of each path, for its color
 async function refreshTree() {
   renderFilesHead();
   refreshGit();
@@ -2646,6 +2681,7 @@ async function refreshTree() {
     $('fileTree').innerHTML = '';
     return;
   }
+  treeStates = offMode() ? {} : await window.api.gitFileStates().catch(() => ({}));
   await renderDir('.', $('fileTree'));
 }
 $('refreshFiles').onclick = () => filesSection === 'git' ? refreshGit({ force: true }) : refreshTree();
@@ -2668,7 +2704,7 @@ function renderSection() {
     const b = dots.appendChild(document.createElement('button'));
     b.type = 'button';
     b.className = `pdot has-icon${s.key === filesSection ? ' active' : ''}`;
-    b.dataset.tip = `Afficher : ${s.label} (${shortcutText(SHORTCUTS[s.shortcut])})`;
+    b.dataset.tip = `${s.label} (${shortcutText(SHORTCUTS[s.shortcut])})`;
     b.innerHTML = s.icon;
     b.onclick = () => setSection(s.key);
   }
@@ -2748,7 +2784,7 @@ async function refreshGit({ force = false } = {}) {
   try { await window.api.gitFetch(); } catch { return; } // (offline: the counts stay as they are)
   if (run === gitRefresh) refreshGit();
 }
-window.addEventListener('focus', () => refreshGit()); // (a commit made elsewhere)
+window.addEventListener('focus', () => refreshTree()); // (a commit made elsewhere; this refreshes Git too)
 
 function gitGroup(key, label, count) {
   const group = div(`group foldable git-group${collapsedGit.has(key) ? ' collapsed' : ''}`);
@@ -3227,7 +3263,26 @@ function renderGauge(c, g = $('ctxGauge'), { sub = false } = {}) {
   ].filter(Boolean).join('\n');
 }
 
+// With a Claude model: how much of the plan's limits is used.
+const inTime = (iso) => new Date(iso).toLocaleString('fr-FR', { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+async function refreshUsage() {
+  const g = $('usageGauge');
+  const usage = usesClaude() ? await window.api.claudeUsage().catch(() => null) : null;
+  g.classList.toggle('hidden', !usage || !usesClaude());
+  if (!usage) return;
+  const { fiveHour: five, sevenDay: week } = usage;
+  const top = Math.max(five?.utilization ?? 0, week?.utilization ?? 0);
+  g.querySelector('.gauge-fill').style.width = `${Math.min(100, top)}%`;
+  g.classList.toggle('warn', top >= 80);
+  g.classList.toggle('full', top >= 100);
+  g.querySelector('.gauge-text').textContent = [five && `5 h ${Math.round(five.utilization)} %`, week && `7 j ${Math.round(week.utilization)} %`].filter(Boolean).join(' · ');
+  g.title = ['Utilisation de votre abonnement', five && `Sur 5 heures : ${Math.round(five.utilization)} %${five.resetsAt ? `, remise à zéro ${inTime(five.resetsAt)}` : ''}`,
+    week && `Sur 7 jours : ${Math.round(week.utilization)} %${week.resetsAt ? `, remise à zéro ${inTime(week.resetsAt)}` : ''}`].filter(Boolean).join('\n');
+}
+setInterval(refreshUsage, 5 * 60 * 1000);
+
 async function refreshGauge() {
+  refreshUsage();
   try {
     renderGauge(await window.api.getContext());
   } catch {

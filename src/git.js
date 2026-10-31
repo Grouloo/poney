@@ -24,7 +24,7 @@ function git(cwd, args, { timeout = 15000, env = {} } = {}) {
 
 /** `git status --porcelain=v2 --branch -z`: the branch, then the files on each side of the index. */
 export function parseStatus(out) {
-  const st = { branch: null, upstream: null, ahead: 0, behind: 0, staged: [], unstaged: [] };
+  const st = { branch: null, upstream: null, ahead: 0, behind: 0, staged: [], unstaged: [], untracked: [] };
   const records = out.split('\0');
   for (let i = 0; i < records.length; i++) {
     const r = records[i];
@@ -44,6 +44,8 @@ export function parseStatus(out) {
       const oldPath = r[0] === '2' ? records[++i] : undefined; // (a rename: the old name is the next record)
       if (x !== '.') st.staged.push({ path, oldPath, status: x });
       if (y !== '.') st.unstaged.push({ path, oldPath: y === 'R' ? oldPath : undefined, status: y });
+    } else if (r[0] === '?') {
+      st.untracked.push(r.slice(2));
     } else if (r[0] === 'u') {
       st.unstaged.push({ path: r.split(' ').slice(10).join(' '), status: 'U' });
     }
@@ -74,6 +76,38 @@ export async function gitStatus(cwd) {
   const st = parseStatus(await git(cwd, ['status', '--porcelain=v2', '--branch', '-z', '--untracked-files=no']));
   const log = await git(cwd, ['log', `-n${COMMITS}`, '--format=%h%x00%s%x00%an%x00%ct%x00']).catch(() => ''); // (no commit yet)
   return { repo: true, ...st, hasRemote: (await remotes(cwd)).length > 0, commits: parseLog(log) };
+}
+
+const RANK = { U: 3, M: 2, A: 1 }; // (a folder shows the most urgent of what it holds)
+
+/**
+ * The state of each file and folder from a status: 'U' conflict, 'M' changed,
+ * 'A' new, staged or not. Paths relative to `prefix`, the folder asked about.
+ */
+export function fileStates(st, prefix = '') {
+  const states = {};
+  const mark = (file, state) => {
+    if (!file.startsWith(prefix)) return;
+    const parts = file.slice(prefix.length).split('/');
+    for (let i = 1; i <= parts.length; i++) {
+      const p = parts.slice(0, i).join('/');
+      if ((RANK[states[p]] ?? 0) < RANK[state]) states[p] = state;
+    }
+  };
+  for (const f of [...st.staged, ...st.unstaged]) mark(f.path, f.status === 'U' ? 'U' : f.status === 'A' ? 'A' : 'M');
+  for (const f of st.untracked) mark(f, 'A');
+  return states;
+}
+
+/** For the file tree: { path: state } under cwd, untracked files included. Empty outside a repository. */
+export async function gitFileStates(cwd) {
+  if (!cwd) return {};
+  try {
+    const prefix = (await git(cwd, ['rev-parse', '--show-prefix'])).trim();
+    return fileStates(parseStatus(await git(cwd, ['status', '--porcelain=v2', '-z', '--untracked-files=all'])), prefix);
+  } catch {
+    return {};
+  }
 }
 
 /** A file's changes, in the index (staged) or in the working tree. Paths come from the root: the status gives them so. */

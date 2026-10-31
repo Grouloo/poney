@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { ClaudeAgent, toolView, claudeModels, claudeLoggedIn, claudeError } from '../src/agent/claude.js';
+import { ClaudeAgent, toolView, claudeModels, claudeUsage, claudeLoggedIn, claudeError } from '../src/agent/claude.js';
 
 const stream = (event, parent = null) => ({ type: 'stream_event', event, parent_tool_use_id: parent });
 const start = stream({ type: 'message_start' });
@@ -208,4 +208,15 @@ test('stopped while asleep, it does not stay asleep', async () => {
   await a.send('x');
   assert.deepEqual(sleeps(events), [true, false]);
   assert.equal(events.at(-1).reason, 'stopped');
+});
+
+test('the plan\'s usage, or nothing where limits do not apply or the call has changed', async () => {
+  const call = 'usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET';
+  let closed = 0;
+  const query = (answer) => () => ({ [call]: async () => answer, close() { closed++; } });
+  const usage = await claudeUsage('/bin/claude', { query: query({ rate_limits_available: true, rate_limits: { five_hour: { utilization: 22, resets_at: 'r5' }, seven_day: { utilization: 56, resets_at: 'r7' } } }) });
+  assert.deepEqual(usage, { fiveHour: { utilization: 22, resetsAt: 'r5' }, sevenDay: { utilization: 56, resetsAt: 'r7' } });
+  assert.equal(await claudeUsage('/bin/claude', { query: query({ rate_limits_available: false, rate_limits: null }) }), null);
+  assert.equal(await claudeUsage('/bin/claude', { query: () => ({ close() { closed++; } }) }), null);
+  assert.equal(closed, 3);
 });
