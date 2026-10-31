@@ -418,6 +418,7 @@ body.no-sidebar .deck { width: 0; margin-right: -12px; opacity: 0; transform: tr
 #convPane { position: relative; overflow-x: hidden; }
 .retry-row { margin: 6px 0 12px; }
 #usageGauge { cursor: default; }
+#usageGauge:not(.warn):not(.full) .gauge-fill { background: var(--accent); }
 .conv-card.leaving, .group-head.leaving { position: absolute; margin: 0; pointer-events: none; list-style: none; } /* (the cards slide in sideways when the project changes) */
 /* the project listed: its name and a chevron, highlighted on hover (no glass) */
 .project-bar { position: relative; display: flex; align-items: center; gap: 4px; padding: 8px 8px 0; }
