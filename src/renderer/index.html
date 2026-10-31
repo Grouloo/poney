@@ -27,11 +27,11 @@
   <button id="deckTab" class="deck-tab" type="button"></button>
   <aside id="sidebar">
     <div class="project-bar">
-      <button id="projectPicker" class="project-picker" type="button" title="Projet affiché (balayez à deux doigts pour changer)">
+      <button id="projectPicker" class="project-picker" type="button">
         <span class="picker-icon"></span><span class="picker-name"></span>
         <svg class="picker-chev" viewBox="0 0 12 12" width="11" height="11" aria-hidden="true"><path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
-      <button id="projectSettingsBtn" type="button" class="ghost icon" title="Paramètres des projets"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M2 4.5h6.5M12 4.5h2M2 11.5h2M7.5 11.5H14"/><circle cx="10.2" cy="4.5" r="1.7"/><circle cx="5.8" cy="11.5" r="1.7"/></svg></button>
+      <button id="projectSettingsBtn" type="button" class="ghost icon"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M2 4.5h6.5M12 4.5h2M2 11.5h2M7.5 11.5H14"/><circle cx="10.2" cy="4.5" r="1.7"/><circle cx="5.8" cy="11.5" r="1.7"/></svg></button>
       <button type="button" class="ghost icon deck-swap"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 5.5h10M10 3l2.5 2.5L10 8M13.5 10.5h-10M6 8l-2.5 2.5L6 13"/></svg></button>
       <div id="projectMenu" class="project-menu hidden"></div>
     </div>
@@ -44,7 +44,7 @@
     <div class="files-head">
       <span class="files-title">Fichiers</span>
       <span id="filesRoot" class="muted"></span>
-      <button id="refreshFiles" class="ghost icon" title="Rafraîchir">↻</button>
+      <button id="refreshFiles" class="ghost icon" data-tip="Rafraîchir">↻</button>
       <button type="button" class="ghost icon deck-swap"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 5.5h10M10 3l2.5 2.5L10 8M13.5 10.5h-10M6 8l-2.5 2.5L6 13"/></svg></button>
     </div>
     <div class="pane">

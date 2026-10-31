@@ -120,7 +120,8 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
 - **Right click on the sidebar** (or on a project's dot, or a conversation's card): for that project, a new
   conversation (⌘N, or ⌘T), mark its conversations as read (⇧⌘U), its settings (⇧⌘P: emoji or picture,
   delete the project from the app: its conversations go, its folder and files stay), add a project (⇧⌘O).
-  The shortcuts act on the project listed in the sidebar (Ctrl instead of ⌘ outside macOS).
+  The shortcuts act on the project listed in the sidebar (Ctrl instead of ⌘ outside macOS). ⇧⌘E swaps the
+  conversations and the files.
 - **Right click on a conversation's card**: mark it as read, rename it, delete it.
 - **Right click on text**: on a selection of the conversation, copy and "Citer dans le message"; in the input (and
   the other fields), undo, cut, copy, paste, select all, and the spelling checker's suggestions (or "Ajouter au

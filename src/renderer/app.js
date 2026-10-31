@@ -1526,8 +1526,10 @@ const SHORTCUTS = {
   markRead: { keys: ['u'], shift: true },
   projectSettings: { keys: ['p'], shift: true },
   addProject: { keys: ['o'], shift: true },
+  swapDeck: { keys: ['e'], shift: true },
 };
 const shortcutText = ({ keys: [k], shift }) => MAC ? `${shift ? '⇧' : ''}⌘${k.toUpperCase()}` : `Ctrl+${shift ? 'Maj+' : ''}${k.toUpperCase()}`;
+$('projectSettingsBtn').dataset.tip = `Paramètres des projets (${shortcutText(SHORTCUTS.projectSettings)})`;
 
 /** The conversations of a project (all of them for 'Tous') that have answers to read or just finished. */
 const toRead = (key) => lastConversations.filter((c) => (key === ALL || projectOf(c) === key) && (c.unread || c.finished));
@@ -1540,6 +1542,7 @@ const projectActions = {
   },
   projectSettings: (key) => openProjectSettings(key),
   addProject: () => addProject(),
+  swapDeck: () => swapOrShowDeck(),
 };
 
 window.addEventListener('keydown', (e) => {
@@ -1821,7 +1824,7 @@ function renderDeck() {
   back.inert = true; // (under the other card: out of reach of the keyboard too)
   $('deckTab').textContent = filesInFront ? 'Conversations' : 'Fichiers';
   $('deckTab').setAttribute('aria-label', `Afficher : ${$('deckTab').textContent}`);
-  for (const b of document.querySelectorAll('.deck-swap')) b.title = `Afficher : ${$('deckTab').textContent}`;
+  for (const b of document.querySelectorAll('.deck-swap')) b.dataset.tip = `Afficher : ${$('deckTab').textContent} (${shortcutText(SHORTCUTS.swapDeck)})`;
 }
 function swapDeck() {
   filesInFront = !filesInFront;
@@ -1836,11 +1839,12 @@ $('deck').addEventListener('animationend', (e) => { if (e.target.classList.conta
 $('deckTab').onclick = swapDeck;
 renderDeck();
 for (const b of document.querySelectorAll('.deck-swap')) b.onclick = swapDeck;
-window.api.onSwipe(() => {
+function swapOrShowDeck() {
   if (!document.body.classList.contains('no-sidebar')) return swapDeck();
   document.body.classList.remove('no-sidebar'); // (hidden: shown, with the files on top)
   if (!filesInFront) swapDeck();
-});
+}
+window.api.onSwipe(swapOrShowDeck);
 
 /** How long a conversation has been working (its card counts the seconds). */
 const workTime = (ms) => (ms < 10000 ? `${Math.floor(Math.max(0, ms) / 1000)} s` : fmtDuration(ms));
@@ -1963,7 +1967,7 @@ function openProjectMenu() {
   const add = document.createElement('div');
   add.className = 'pm-row';
   add.innerHTML = '<span class="pm-icon">＋</span><span class="pm-name">Ajouter un projet…</span>';
-  add.title = 'Choisir un dossier';
+  add.dataset.tip = `Choisir un dossier (${shortcutText(SHORTCUTS.addProject)})`;
   add.onclick = () => { closeProjectMenu(); addProject(); };
   menu.appendChild(add);
   menu.classList.remove('hidden');
@@ -2047,7 +2051,7 @@ async function refreshConversations({ slide = 0 } = {}) {
   add.innerHTML = '<button class="new-conv" type="button">＋ Nouvelle conversation<span class="kbd"></span></button>';
   const key = window.api.platform === 'darwin' ? '⌘' : 'Ctrl+';
   add.firstChild.querySelector('.kbd').textContent = `${key}N`;
-  add.firstChild.title = `Nouvelle conversation dans le projet affiché (${key}N ou ${key}T) — clic droit : autres actions`;
+  add.firstChild.dataset.tip = `Nouvelle conversation dans le projet affiché (${key}N ou ${key}T) — clic droit : autres actions`;
   add.firstChild.onclick = newConversationHere;
   list.appendChild(add);
   for (const cat of CATEGORIES) {
