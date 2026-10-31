@@ -143,7 +143,9 @@ async function refreshModels() {
   renderChoice();
   refreshConversations(); // (the cards show their provider's icon)
   if ($('settingsDialog').open) renderProviders();
+  if (!$('modelMenu').classList.contains('hidden')) openModelMenu();
 }
+window.api.onModelsChanged(refreshModels);
 
 /** The input follows the model: its name, and what can be set for it. */
 function renderChoice() {
@@ -219,6 +221,7 @@ $('modelPicker').onclick = async (e) => {
   settings = await window.api.getSettings(); // (has it started since?)
   if (!claude.available) claude = await window.api.claudeStatus().catch(() => claude); // (logged in since?)
   openModelMenu();
+  refreshModels(); // (a server started or stopped since)
 };
 $('modelMenu').onclick = (e) => e.stopPropagation();
 document.addEventListener('click', closeModelMenu);
@@ -403,6 +406,7 @@ function openSettings(page) {
   changeGithub(window.api.githubStatus);
   if (page) showSettingsPage(page);
   renderProviders();
+  refreshModels(); // (a server started or stopped since)
   if (!settingsDialog.open) settingsDialog.showModal();
 }
 $('settingsBtn').onclick = () => openSettings();

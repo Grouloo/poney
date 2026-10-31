@@ -88,8 +88,23 @@ function killLeftovers() {
     for (const pid of stdout.split('\n').filter(Boolean)) if (Number(pid) !== process.pid) try { process.kill(Number(pid)); } catch {}
   });
 }
+/** A model added to (or removed from) a folder shows at once. (A copy gives many events: the end counts.) */
+function watchModels() {
+  let timer = null;
+  const changed = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => send('models:changed'), 800);
+  };
+  fs.mkdirSync(modelDirs()[0], { recursive: true });
+  for (const dir of modelDirs()) {
+    try {
+      fs.watch(dir, { recursive: true }, changed).on('error', (e) => logError('models folder', e));
+    } catch {} // (LM Studio's may not exist)
+  }
+}
 function startEngine() {
   killLeftovers();
+  watchModels();
   engine = new ModelEngine({
     binary: (onStatus) => installEngine(engineDir(), { onProgress: (p) => onStatus(`Installation du moteur… ${Math.floor(p * 100)} %`) }),
     cacheDir: path.join(app.getPath('userData'), 'prompt-cache'),

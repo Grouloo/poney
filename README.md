@@ -157,7 +157,7 @@ node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   another model.
 - **Poney's engine**: GGUF models run without any other app. `llama-server` (a pinned llama.cpp build, downloaded on
   first use and checked against its digest) runs as a separate process on 127.0.0.1, per model. Models come from
-  `<data>/models` (a button in the provider's settings opens it) and, read only, `~/.lmstudio/models`; a file both can run shows under Poney only. A message loads
+  `<data>/models` (a button in the provider's settings opens it) and, read only, `~/.lmstudio/models`; a file both can run shows under Poney only. A file added to these folders shows at once. A message loads
   its model; an idle one goes after 15 minutes. The context is set per model (a change reloads at the next message)
   and the prompt cache survives unloading, on disk, up to 10 GB, the unused going first.
 - **Calls to local models** go through one queue ("Inférences en même temps", 0 for no limit), conversations and

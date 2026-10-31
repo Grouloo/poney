@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('api', {
   updateProvider: (id, patch) => ipcRenderer.invoke('providers:update', id, patch),
   removeProvider: (id) => ipcRenderer.invoke('providers:remove', id),
   engineStatus: () => ipcRenderer.invoke('engine:status'),
+  onModelsChanged: (fn) => ipcRenderer.on('models:changed', () => fn()),
   openModelsFolder: () => ipcRenderer.invoke('engine:openModels'),
   setModelContext: (model, numCtx) => ipcRenderer.invoke('engine:setContext', model, numCtx),
   setEngineOptions: (patch) => ipcRenderer.invoke('engine:setOptions', patch),
