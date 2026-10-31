@@ -2075,17 +2075,18 @@ function relativeTime(ts) {
 let renaming = false; // a title is being edited: don't rebuild the list under the cursor
 
 // ---------- conversations, by where they stand ----------
-// Working, waiting for an approval, finished (answers not read yet, or the one
+// Working, asleep until a background task ends, waiting for an approval, finished (answers not read yet, or the one
 // shown that just finished), then the archived ones: done and read.
 const CATEGORIES = [
   { key: 'drafts', label: 'Brouillons' },
   { key: 'busy', label: 'En cours' },
+  { key: 'sleeping', label: 'En veille' },
   { key: 'waiting', label: 'Action demandée' },
   { key: 'done', label: 'Terminé' },
   { key: 'archived', label: 'Archivées', foldable: true },
 ];
 // (the conversation shown stays where it is: its text is a draft once the user leaves it)
-const category = (c) => c.draft && c.id !== currentConversation ? 'drafts' : c.approvals ? 'waiting' : c.running ? 'busy' : c.unread || c.finished ? 'done' : 'archived';
+const category = (c) => c.draft && c.id !== currentConversation ? 'drafts' : c.approvals ? 'waiting' : c.sleeping ? 'sleeping' : c.running ? 'busy' : c.unread || c.finished ? 'done' : 'archived';
 let collapsedCategories = new Set();
 try { collapsedCategories = new Set(JSON.parse(localStorage.getItem('collapsedCategories') || '[]')); } catch {}
 const baseName = (p) => p.split(/[\\/]/).filter(Boolean).pop() || p;
@@ -2386,6 +2387,8 @@ async function newConversationIn(dir, { keepText = false } = {}) {
   input.focus();
 }
 
+const CLOCK_ICON = '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6.2"/><path d="M8 4.6V8l2.3 1.5"/></svg>';
+
 function conversationItem(c, current) {
   const li = document.createElement('li');
   li.className = `conv-card ${category(c)}`;
@@ -2396,11 +2399,16 @@ function conversationItem(c, current) {
   li.querySelector('.title').textContent = c.title;
   li.querySelector('.title').title = c.title;
   // How many things wait for the user: approvals (orange), answers to read (blue).
+  // Asleep, nothing does: a clock in the same place.
   const pill = li.querySelector('.pill');
   if (c.approvals) {
     pill.textContent = String(c.approvals);
     pill.classList.add('warn');
     pill.title = c.approvals > 1 ? `${c.approvals} autorisations en attente` : 'Une autorisation en attente';
+  } else if (c.sleeping) {
+    pill.innerHTML = CLOCK_ICON;
+    pill.classList.add('clock');
+    pill.title = 'En veille : attend la fin d’une tâche';
   } else if (c.unread) {
     pill.textContent = String(c.unread);
     pill.title = c.unread > 1 ? `${c.unread} réponses à lire` : 'Une réponse à lire';

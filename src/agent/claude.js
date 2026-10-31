@@ -108,6 +108,7 @@ export class ClaudeAgent extends EventEmitter {
     this.config = {};
     this.controller = null;
     this.context = null; // the context gauge: what the last message used, in the window of the model
+    this.sleeping = false; // its turn is over, a background task will bring it back (see updateSleep)
     // (what the app reads from any agent: all empty here, the Claude harness keeps its own)
     this.messages = [];
     this.untested = false;
@@ -149,7 +150,7 @@ export class ClaudeAgent extends EventEmitter {
     if (this.running) throw new Error('L’agent est déjà en cours d’exécution.');
     this.controller = new AbortController();
     this.emit('event', { type: 'turn_start' });
-    const state = { tools: new Map(), gens: new Map(), results: new Set() };
+    const state = { tools: new Map(), gens: new Map(), results: new Set(), tasks: 0, turnOver: false };
     this.planShown = false;
     this.resultError = false;
     let stats = null;
@@ -192,6 +193,8 @@ export class ClaudeAgent extends EventEmitter {
     }
     for (const gen of state.gens.values()) this.endGen(gen); // (cut short)
     this.closeTools(state);
+    state.tasks = 0;
+    this.updateSleep(state);
     this.controller = null;
     this.emit('event', { type: 'turn_end', reason, stats });
   }
@@ -218,6 +221,18 @@ export class ClaudeAgent extends EventEmitter {
     if (used) this.setContext({ used });
   }
 
+  /**
+   * Claude ended its turn but the session lives on: it gives its result, then waits
+   * for its background tasks and starts again when one ends. (Watchers do not count:
+   * ambient tasks are not activity.)
+   */
+  updateSleep(state) {
+    const sleeping = state.turnOver && state.tasks > 0;
+    if (sleeping === this.sleeping) return;
+    this.sleeping = sleeping;
+    this.emit('event', { type: 'sleeping', on: sleeping });
+  }
+
   emitFor(parent, state, ev) {
     const agentId = parent ? state.tools.get(parent)?.id : undefined;
     this.emit('event', agentId === undefined ? ev : { ...ev, agentId });
@@ -227,6 +242,10 @@ export class ClaudeAgent extends EventEmitter {
     switch (m.type) {
       case 'system':
         if (m.subtype === 'init') this.sessionId = m.session_id;
+        if (m.subtype === 'background_tasks_changed') {
+          state.tasks = m.tasks.filter((t) => !t.ambient).length;
+          this.updateSleep(state);
+        }
         return null;
       case 'stream_event': return this.onStream(state, m.event, m.parent_tool_use_id);
       case 'assistant':
@@ -238,7 +257,10 @@ export class ClaudeAgent extends EventEmitter {
           if (b.type === 'tool_result') this.endTool(state, b.tool_use_id, textOf(b.content), !b.is_error);
         }
         return null;
-      case 'result': return this.onResult(m);
+      case 'result':
+        state.turnOver = true;
+        this.updateSleep(state);
+        return this.onResult(m);
       default: return null;
     }
   }
@@ -246,7 +268,11 @@ export class ClaudeAgent extends EventEmitter {
   onStream(state, ev, parent) {
     const key = parent ?? 'main';
     if (ev.type === 'message_start') {
-      if (!parent) this.countContext(ev.message?.usage);
+      if (!parent) {
+        this.countContext(ev.message?.usage);
+        state.turnOver = false;
+        this.updateSleep(state);
+      }
       const id = nextId++;
       state.gens.set(key, { id, key, parent, state, text: '', thinking: '', tools: 0, blocks: new Map() });
       this.emitFor(parent, state, { type: 'assistant_start', id });

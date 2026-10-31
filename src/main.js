@@ -145,6 +145,7 @@ class Session {
     this.choice = conv ? conv.choice ?? { engine: 'local', model: null } : { ...(settings.lastChoice ?? { engine: 'local', model: null }) };
     this.draftTimer = null;
     this.workingSince = null; // when the turn under way started
+    this.sleeping = false; // its turn under way waits for a background task
     this.usedAt = Date.now();
   }
 
@@ -189,6 +190,11 @@ class Session {
   }
 
   onEvent(ev) {
+    if (ev.type === 'sleeping') { // (a state of the list, not of the conversation)
+      this.sleeping = ev.on;
+      send('sessions:changed');
+      return;
+    }
     // The answer being written, to draw it again when the user comes back mid-generation.
     if (!ev.agentId) {
       if (ev.type === 'assistant_start') this.partial = { id: ev.id, text: '', thinking: '' };
@@ -581,8 +587,8 @@ ipcMain.handle('agent:resumeFrom', (_, actId) => {
   return { events: conv.events };
 });
 
-// Every conversation, with its project, and where it stands: working, waiting for
-// approvals (how many), finished (answers not seen yet), or done and read.
+// Every conversation, with its project, and where it stands: working, asleep until
+// a background task ends, waiting for approvals (how many), finished (answers not seen yet), or done and read.
 ipcMain.handle('conversations:list', () => {
   const all = store.listAll();
   for (const c of all) {
@@ -591,6 +597,7 @@ ipcMain.handle('conversations:list', () => {
     c.unread = s.unread;
     c.approvals = s.approvals.size;
     c.running = s.running;
+    c.sleeping = s.sleeping;
     c.finished = s.finished;
     c.draft = Boolean(s.draft.trim());
     c.engine = s.choice.engine ?? 'local';

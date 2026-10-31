@@ -510,6 +510,7 @@ img.proj-icon { width: 1.15em; height: 1.15em; object-fit: contain; vertical-ali
   background: var(--accent-2); color: #fff; font-size: 12px; font-weight: 600;
 }
 .conv-card .pill.warn { background: #e3a008; color: #1a1300; }
+.conv-card .pill.clock { min-width: 0; padding: 0; background: none; color: #e8850c; }
 .conv-card .del, .conv-card .ren { background: none; border: none; color: var(--muted); padding: 0 2px; }
 .conv-card .del:hover { color: var(--err); }
 .conv-card .ren:hover { color: var(--accent); }

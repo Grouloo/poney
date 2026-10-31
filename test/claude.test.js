@@ -170,3 +170,42 @@ test('without what the harness says of the window, a turn goes on and the gauge 
   assert.equal(events.at(-1).reason, 'done');
   assert.equal(a.contextStats(), null);
 });
+
+const tasks = (...list) => ({ type: 'system', subtype: 'background_tasks_changed', tasks: list.map((description) => ({ task_id: description, task_type: 'local_bash', description })) });
+const sleeps = (events) => events.filter((e) => e.type === 'sleeping').map((e) => e.on);
+
+test('asleep from the end of its turn until the background task brings it back', async () => {
+  // (the order of a real run: the task, the result, the silence, the end of the task, the next message)
+  const { a, events } = agent([init, start, ...tool(1, 't1', 'Bash', { command: 'sleep 15', run_in_background: true }), stop, tasks('sleep'), result('t1', 'en fond'), start, text('J’attends.'), stop, done, tasks(), start, text('Fini.'), stop, done]);
+  await a.send('attends');
+  assert.deepEqual(sleeps(events), [true, false]);
+  const at = (i) => events.indexOf(events.filter((e) => e.type === 'sleeping')[i]);
+  assert.equal(events[at(0) + 1].type, 'final'); // asleep at the result, not before
+  assert.ok(at(1) < events.findLastIndex((e) => e.type === 'assistant_start'));
+  assert.equal(events.at(-1).type, 'turn_end');
+  assert.equal(a.sleeping, false);
+});
+
+test('a background task beside a turn that goes on is not sleep', async () => {
+  const { a, events } = agent([init, tasks('sleep'), start, text('Je continue.'), stop, tasks(), done]);
+  await a.send('x');
+  assert.deepEqual(sleeps(events), []);
+});
+
+test('a watcher is not a task it waits for', async () => {
+  const { a, events } = agent([init, { type: 'system', subtype: 'background_tasks_changed', tasks: [{ task_id: 'w', task_type: 'monitor', description: 'w', ambient: true }] }, start, stop, done]);
+  await a.send('x');
+  assert.deepEqual(sleeps(events), []);
+});
+
+test('stopped while asleep, it does not stay asleep', async () => {
+  const { a, events } = agent([]);
+  a.runQuery = () => (async function* () {
+    yield init; yield tasks('sleep'); yield done;
+    a.stop();
+    throw new Error('aborted');
+  })();
+  await a.send('x');
+  assert.deepEqual(sleeps(events), [true, false]);
+  assert.equal(events.at(-1).reason, 'stopped');
+});
