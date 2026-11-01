@@ -839,7 +839,19 @@ function flushDraft() {
 function noteDraft() {
   draftChanged = true;
   clearTimeout(draftTimer);
-  draftTimer = setTimeout(flushDraft, 250);
+  const c = lastConversations.find((x) => x.id === currentConversation);
+  if (c && !c.titleFromDraft) draftTimer = setTimeout(flushDraft, 250);
+  else { // (a new conversation: its card follows the keys, without waiting for the list)
+    if (c) showDraftTitle(c);
+    flushDraft();
+  }
+}
+/** The title of a conversation named by its input, as typed now (the list may be a key behind). */
+function showDraftTitle(c: ConversationSummary) {
+  c.title = input.value.replace(/\s+/g, ' ').trim().slice(0, 80) || c.title;
+  const title = document.querySelector<HTMLElement>('.conv-card.active .title');
+  if (title) title.textContent = title.title = c.title;
+  renderConvHead();
 }
 function setInput(text: string) {
   clearTimeout(draftTimer);
@@ -2393,7 +2405,9 @@ async function refreshConversations({ slide = 0 } = {}) {
   currentConversation = current;
   everyConversation = every;
   lastConversations = every.filter((c) => !isHiddenProject(projectOf(c)));
-  renderConvHead();
+  const named = lastConversations.find((c) => c.id === current && c.titleFromDraft);
+  if (named) showDraftTitle(named);
+  else renderConvHead();
   const keys = projectKeys();
   if (!keys.includes(projectFilter)) projectFilter = ALL;
   renderProjectBar(keys);

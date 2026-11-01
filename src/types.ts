@@ -294,6 +294,7 @@ export interface ConversationSummary {
   engine?: EngineName;
   provider?: string;
   failed: boolean;
+  titleFromDraft: boolean;
   unread: number;
   approvals?: number;
   running?: boolean;

@@ -96,7 +96,7 @@ export class ConversationStore {
       if (!name.endsWith('.json')) continue;
       try {
         const c = readConversation(path.join(this.dir, name));
-        out.push({ id: c.id, title: c.title, updatedAt: c.updatedAt, workspace: c.workspace, offProject: Boolean(c.offProject), draft: Boolean(c.draft), engine: c.choice?.engine ?? 'local', provider: c.choice?.provider, failed: Boolean(c.failed), unread: c.unread || 0 });
+        out.push({ id: c.id, title: c.title, updatedAt: c.updatedAt, workspace: c.workspace, offProject: Boolean(c.offProject), draft: Boolean(c.draft), titleFromDraft: Boolean(c.titleFromDraft), engine: c.choice?.engine ?? 'local', provider: c.choice?.provider, failed: Boolean(c.failed), unread: c.unread || 0 });
       } catch {}
     }
     return out.sort((a, b) => b.updatedAt - a.updatedAt);
