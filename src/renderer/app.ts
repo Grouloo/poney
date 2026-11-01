@@ -3345,7 +3345,10 @@ function renderGauge(c: ContextStats | null | undefined, g: HTMLElement = $('ctx
 }
 
 // With a Claude model: how much of the plan's session (5 hours) is used.
-const inTime = (iso: string | number) => new Date(iso).toLocaleString('fr-FR', { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+const resetDate = (iso: string | number) => {
+  const d = new Date(iso);
+  return `${d.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })} à ${d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`;
+};
 async function refreshUsage() {
   const g = $('usageGauge');
   const usage = usesClaude() ? await window.api.claudeUsage().catch(() => null) : null;
@@ -3356,7 +3359,7 @@ async function refreshUsage() {
   g.classList.toggle('warn', used >= 80);
   g.classList.toggle('full', used >= 100);
   g.querySelector<HTMLElement>('.gauge-text')!.textContent = `session ${used} %`;
-  g.title = `Utilisation de la session de votre abonnement : ${used} %${usage.resetsAt ? `\nRemise à zéro ${inTime(usage.resetsAt)}` : ''}`;
+  g.dataset.tip = `Session de votre abonnement : ${used} % utilisés${usage.resetsAt ? `. Remise à zéro le ${resetDate(usage.resetsAt)}` : ''}`;
 }
 setInterval(refreshUsage, 5 * 60 * 1000);
 
