@@ -2467,7 +2467,7 @@ function conversationItem(c, current) {
   li.innerHTML = '<div class="card-top"><span class="title"></span><span class="state"></span><span class="pill"></span><span class="card-actions"><button class="ren">✎</button><button class="del" title="Supprimer">✕</button></span></div><div class="card-meta"><span class="project"></span><span class="when"></span><span class="card-engine"></span></div>';
   li.querySelector('.title').textContent = c.title;
   li.querySelector('.title').title = c.title;
-  // How many things wait for the user: approvals (orange), answers to read (blue).
+  // How many things wait for the user: approvals (orange), answers to read (blue, or red after an error).
   // Asleep, nothing does: a clock in the same place.
   const pill = li.querySelector('.pill');
   if (c.approvals) {
@@ -2480,7 +2480,8 @@ function conversationItem(c, current) {
     pill.title = 'En veille : attend la fin d’une tâche';
   } else if (c.unread) {
     pill.textContent = String(c.unread);
-    pill.title = c.unread > 1 ? `${c.unread} réponses à lire` : 'Une réponse à lire';
+    pill.title = category(c) === 'failed' ? (c.unread > 1 ? `${c.unread} messages à consulter` : 'Un message à consulter')
+      : c.unread > 1 ? `${c.unread} réponses à lire` : 'Une réponse à lire';
   } else pill.remove();
   const project = li.querySelector('.project');
   project.innerHTML = `${projectGlyph(projectOf(c))} ${esc(projectLabel(projectOf(c) || ''))}`;
