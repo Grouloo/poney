@@ -9,7 +9,7 @@ Ollama, LM Studio, llama.cpp server, vLLM. The interface is in French.
 npm install
 npm start            # desktop app
 npm test             # unit tests
-node src/cli.js --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
+node src/cli.ts --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
 ```
 
 ## What is done for small models
@@ -299,14 +299,14 @@ Windows line endings (CRLF) can be edited and keep them, paths are shown with `/
 
 ## Driving Poney from a program
 
-`src/cli.js` lets another program run the engine and the harness, as the app does, without touching the app's data
-(`node src/cli.js --help` lists everything):
+`src/cli.ts` lets another program run the engine and the harness, as the app does, without touching the app's data
+(`node src/cli.ts --help` lists everything):
 
 ```bash
-node src/cli.js engine-serve --model ID --num-ctx 16384 --cache-dir DIR --engine-dir DIR   # prints {baseUrl, apiKey, pid, numCtx, memory, build}
-node src/cli.js --provider poney --engine-url URL --engine-key-file FILE --json --yes "task"
-node src/cli.js models --json --models-dir DIR
-node src/cli.js version --json     # {commit, dirty, engineBuild, systemPromptHash}
+node src/cli.ts engine-serve --model ID --num-ctx 16384 --cache-dir DIR --engine-dir DIR   # prints {baseUrl, apiKey, pid, numCtx, memory, build}
+node src/cli.ts --provider poney --engine-url URL --engine-key-file FILE --json --yes "task"
+node src/cli.ts models --json --models-dir DIR
+node src/cli.ts version --json     # {commit, dirty, engineBuild, systemPromptHash}
 ```
 
 - **`engine-serve`** keeps a model loaded until SIGTERM. `--engine-dir` is an installed engine, used read only (nothing
@@ -331,8 +331,8 @@ node src/cli.js version --json     # {commit, dirty, engineBuild, systemPromptHa
 Electron, so its runtime is Node whatever starts it. Two limits when Bun is the runtime:
 
 - `bun test` (Bun's own test runner) only partly emulates `node:test`: use `bun run test`.
-- `bun src/cli.js` works, but **Tor is refused** under Bun: its `node:http` ignores the SOCKS agent, so requests
-  would go out in the clear. Use `node src/cli.js --tor` for Tor from the command line.
+- `bun src/cli.ts` works, but **Tor is refused** under Bun: its `node:http` ignores the SOCKS agent, so requests
+  would go out in the clear. Use `node src/cli.ts --tor` for Tor from the command line.
 
 ## Without Tor
 
@@ -343,15 +343,15 @@ the status dot is red.
 ## Layout
 
 - `src/agent/` — core, independent of the UI (loop, protocol, tools, LLM client, web, Tor)
-- `src/main.js`, `src/preload.cjs`, `src/renderer/` — Electron app
-- `src/conversations.js`, `src/files.js` — conversation storage, file access for the viewer
-- `src/cli.js` — command-line runner
-- `src/git.js` — Git for the sidebar: status, diff, fetch, sync
-- `src/providers.js` — the list of providers, and what a conversation's model calls
-- `src/engine/` — Poney's engine: `install.js` (the pinned llama-server), `models.js` and `gguf.js` (the models here), `gate.js` (the queue), `engine.js` (processes, memory, prompt cache)
-- `scripts/compare-engine.mjs` — compares the engine with LM Studio on the same prompts
+- `src/main.ts`, `src/preload.cts`, `src/renderer/` — Electron app
+- `src/conversations.ts`, `src/files.ts` — conversation storage, file access for the viewer
+- `src/cli.ts` — command-line runner
+- `src/git.ts` — Git for the sidebar: status, diff, fetch, sync
+- `src/providers.ts` — the list of providers, and what a conversation's model calls
+- `src/engine/` — Poney's engine: `install.ts` (the pinned llama-server), `models.ts` and `gguf.ts` (the models here), `gate.ts` (the queue), `engine.ts` (processes, memory, prompt cache)
+- `scripts/compare-engine.ts` — compares the engine with LM Studio on the same prompts
 - `docs/instances.md` — where Poney instances talking to each other would fit
-- `scripts/brand-electron.mjs` — macOS, development: renames the Electron bundle to `Poney.app` and gives it the app's icon, so the Dock shows them (run by `npm start`)
+- `scripts/brand-electron.ts` — macOS, development: renames the Electron bundle to `Poney.app` and gives it the app's icon, so the Dock shows them (run by `npm start`)
 - `assets/` — app icon (`icon.svg` source; `icon.png` for the macOS Dock, `icon.icns` for the bundle, `icon-square.png` for the Windows/Linux taskbar)
 
 ## Tor on a network that blocks Tor

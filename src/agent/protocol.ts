@@ -1,0 +1,872 @@
+// Text-based tool protocol designed for small models.
+//
+// Instead of JSON function calling (small models break JSON escaping as soon as
+// the payload is code), actions are plain tags. Short arguments are attributes,
+// long ones (file content, commands) are the tag body, so nothing needs escaping:
+//
+//   <write path="app.py">
+//   print("hi")
+//   </write>
+//   <run>python3 app.py</run>
+//
+// The parser is deliberately forgiving: arguments may also be given as child
+// tags (<path>app.py</path>), quotes are optional, code fences inside bodies are
+// stripped, and a missing closing tag is tolerated for body-less tools.
+
+import { isRecord, list, parseJson, rec } from '../unknown.ts';
+import type { Config, ParsedAction, ToolArgs, ToolSchema } from '../types.ts';
+
+interface ToolSpec {
+  args: string[];
+  bodyArg: string;
+  needsBody: boolean;
+  observes: boolean;
+}
+
+/** How a call was written when it was not as one of our tags. */
+type CallOrigin = { tag: string; as: string };
+type OnCall = (tag: string, as: string, written: string) => void;
+type LooseArgs = Record<string, unknown>;
+
+export const TOOLS: Record<string, ToolSpec> = {
+  list: { args: ['path', 'depth'], bodyArg: 'path', needsBody: false, observes: true },
+  read: { args: ['path', 'start', 'end'], bodyArg: 'path', needsBody: false, observes: true },
+  // Keywords in the body: ranked search over the project; pattern="regex": every matching line.
+  search: { args: ['pattern', 'path', 'query'], bodyArg: 'query', needsBody: false, observes: true },
+  write: { args: ['path'], bodyArg: 'content', needsBody: true, observes: false },
+  edit: { args: ['path'], bodyArg: 'body', needsBody: true, observes: false },
+  run: { args: ['timeout'], bodyArg: 'command', needsBody: true, observes: true },
+  web_search: { args: ['query'], bodyArg: 'query', needsBody: false, observes: true },
+  fetch: { args: ['url'], bodyArg: 'url', needsBody: false, observes: true },
+  // Delegates a task to a sub-agent. Consecutive <agent> tags run at the same time.
+  agent: { args: ['title'], bodyArg: 'task', needsBody: true, observes: true },
+  // The task list (see plan.ts). Tasks marked @agent start in sub-agents.
+  plan: { args: [], bodyArg: 'body', needsBody: true, observes: false },
+  // The conversation's memory (see memory.ts).
+  remember: { args: [], bodyArg: 'note', needsBody: true, observes: false },
+  forget: { args: ['id'], bodyArg: 'id', needsBody: true, observes: false },
+  // Search the earlier part of the conversation, out of the context (see history.js).
+  recall: { args: ['query'], bodyArg: 'query', needsBody: false, observes: true },
+};
+
+// Common aliases small models reach for. Mapped to canonical names.
+const ALIASES: Record<string, string> = {
+  ls: 'list', list_files: 'list', list_dir: 'list',
+  read_file: 'read', cat: 'read', open: 'read', view: 'read',
+  grep: 'search', find: 'search',
+  write_file: 'write', create: 'write', create_file: 'write',
+  edit_file: 'edit', replace: 'edit', patch: 'edit',
+  bash: 'run', shell: 'run', exec: 'run', execute: 'run', command: 'run', terminal: 'run',
+  search_web: 'web_search', websearch: 'web_search', google: 'web_search',
+  fetch_url: 'fetch', browse: 'fetch', open_url: 'fetch',
+  subagent: 'agent', sub_agent: 'agent', delegate: 'agent', spawn_agent: 'agent', task: 'agent',
+  memorize: 'remember', memorise: 'remember', save_memory: 'remember', add_memory: 'remember',
+  search_history: 'recall', recall_history: 'recall', search_conversation: 'recall',
+  delete_memory: 'forget', remove_memory: 'forget', unremember: 'forget',
+  todo: 'plan', todos: 'plan', todo_list: 'plan', todowrite: 'plan', todo_write: 'plan', update_plan: 'plan', task_list: 'plan',
+};
+
+const ALL_NAMES = [...Object.keys(TOOLS), ...Object.keys(ALIASES)];
+// Longest first so "web_search" wins over "search".
+const NAME_RE = ALL_NAMES.sort((a, b) => b.length - a.length).join('|');
+const OPEN_RE = new RegExp(`<(${NAME_RE})(\\s[^<>]*?)?\\s*(/?)>`, 'g');
+
+/**
+ * The same tools in the standard function-calling format. Declared to servers
+ * whose model supports native tool calls (LM Studio, "tool_use"): Gemma uses
+ * its native format anyway, and without the declaration LM Studio holds those
+ * calls back until they end, and drops them if cut (nothing visible for minutes).
+ * Not in LM Studio's raw mode (see streamChat).
+ */
+export function toolSchemas(config: Partial<Config> = {}, { subagentRole = false } = {}): ToolSchema[] {
+  const fn = (name: string, description: string, props: Record<string, string>, required: string[]): ToolSchema => ({
+    type: 'function',
+    function: {
+      name,
+      description,
+      parameters: { type: 'object', properties: Object.fromEntries(Object.entries(props).map(([k, d]) => [k, { type: 'string', description: d }])), required },
+    },
+  });
+  const all: ToolSchema[] = [
+    fn('list', 'List files in a folder', { path: 'folder, default "."' }, []),
+    fn('read', 'Read a file (with line numbers)', { path: 'file path', start: 'first line', end: 'last line' }, ['path']),
+    fn('search', 'Find where something is in the project: the most relevant files and lines for some keywords', { query: 'keywords (names of functions, classes, messages…)', path: 'folder, default "."', pattern: 'instead of keywords: a regular expression, to list every matching line' }, []),
+    fn('write', 'Create or overwrite a whole file', { path: 'file path', content: 'full file content' }, ['path', 'content']),
+    fn('edit', 'Replace exact existing lines in a file', { path: 'file path', old: 'exact existing lines', new: 'replacement lines' }, ['path', 'old', 'new']),
+    fn('run', 'Run a shell command (scripts, tests, installs)', { command: 'shell command' }, ['command']),
+    fn('web_search', 'Search the internet', { query: 'search query' }, ['query']),
+    fn('fetch', 'Read a web page', { url: 'full URL' }, ['url']),
+    fn('remember', 'Keep a short note in the memory of this conversation (goals, decisions, preferences, constraints)', { note: 'one short sentence' }, ['note']),
+    fn('forget', 'Remove a note from the memory', { id: 'number of the note' }, ['id']),
+    fn('recall', 'Search the earlier part of this conversation (no longer in view) for keywords', { query: 'keywords' }, ['query']),
+    {
+      type: 'function',
+      function: {
+        name: 'plan',
+        description: 'A plan: the tasks of the request, each carried out by a sub-agent, in order (consecutive parallel tasks at the same time). You get their reports.',
+        parameters: {
+          type: 'object',
+          properties: {
+            tasks: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: { task: { type: 'string', description: 'complete task: goal, files' }, parallel: { type: 'boolean', description: 'can run at the same time as the next parallel tasks' } },
+                required: ['task'],
+              },
+            },
+          },
+          required: ['tasks'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'agent',
+        description: 'Delegate independent tasks to sub-agents. Put ALL the tasks to run at the same time in one call (one item each).',
+        parameters: {
+          type: 'object',
+          properties: {
+            tasks: {
+              type: 'array',
+              description: 'one item per sub-agent; they all run at the same time',
+              items: {
+                type: 'object',
+                properties: { title: { type: 'string', description: 'short name' }, task: { type: 'string', description: 'complete task with all the context it needs' } },
+                required: ['title', 'task'],
+              },
+            },
+          },
+          required: ['tasks'],
+        },
+      },
+    },
+  ];
+  return all.filter((t) => isToolEnabled(t.function.name, config) && !(subagentRole && t.function.name === 'plan'));
+}
+
+/** Tools that can be switched off in the settings, and the config flag for each. */
+export const TOOL_FLAGS: Record<string, 'shellEnabled' | 'webEnabled' | 'subagentsEnabled' | undefined> = { run: 'shellEnabled', web_search: 'webEnabled', fetch: 'webEnabled', agent: 'subagentsEnabled' };
+
+export function isToolEnabled(tool: string, config: Partial<Config>): boolean {
+  const flag = TOOL_FLAGS[tool];
+  return !flag || config[flag] !== false;
+}
+
+export function buildSystemPrompt({ cwd, offProject = false, memory = true, parallel = true, platform, projectNotes, notesFile = null, testCommand, shell = true, web = true, subagents = false, subagentRole = false }: {
+  cwd: string;
+  offProject?: boolean;
+  memory?: boolean;
+  parallel?: boolean;
+  platform: string;
+  projectNotes?: string;
+  notesFile?: string | null;
+  testCommand?: string;
+  shell?: boolean;
+  web?: boolean;
+  subagents?: boolean;
+  subagentRole?: boolean;
+}): string {
+  const notes = projectNotes ? `\nPROJECT NOTES (from ${notesFile || 'the repo'}):\n${projectNotes}\n` : '';
+  const testLine = testCommand && shell
+    ? `\nThe project test command is: ${testCommand}\nIt is run automatically when you finish; make it pass.`
+    : '';
+
+  const tools = [
+    '<list path="." />                       list files',
+    '<read path="a.py" start="1" end="200" />  read a file (with line numbers)',
+    '<search>keywords</search>               find where something is in the project (best files and lines)',
+    '<write path="a.py">\nfull file content\n</write>                                create or overwrite a file',
+    '<edit path="a.py">\n<old>exact existing lines</old>\n<new>replacement lines</new>\n</edit>                                 change part of a file',
+  ];
+  if (shell) tools.push('<run>command</run>                      run a shell command (scripts, tests, installs)');
+  if (web) {
+    tools.push('<web_search>query</web_search>          search the internet');
+    tools.push('<fetch>https://url</fetch>              read a web page');
+  }
+  if (memory && !subagentRole) {
+    tools.push('<remember>one short fact to keep</remember>    note it in your memory of this conversation');
+    tools.push('<forget>2</forget>                       remove note 2 from your memory');
+  }
+  tools.push(subagentRole
+    ? '<recall>keywords</recall>               search the conversation between the user and the main agent'
+    : '<recall>keywords</recall>               search the earlier part of this conversation (no longer in view)');
+  if (!subagentRole) tools.push(subagents && parallel
+    ? '<plan>\n- first task (goal, files)\n- @parallel a task independent of the next one\n- @parallel the next one\n- last task\n</plan>                                 a plan: each task is done by a sub-agent'
+    : subagents
+      ? '<plan>\n- first task (goal, files)\n- next task\n</plan>                                 a plan: each task is done by a sub-agent, in order'
+    : '<plan>\n- first task\n- next task\n</plan>                                 your task list');
+  if (subagents) {
+    tools.push('<agent title="short name">\ncomplete task, with all the context it needs\n</agent>                                delegate an independent task to a sub-agent');
+  }
+
+  const rules = [
+    'Read the files you need before changing them. Never guess file contents.',
+    'To find code you have not seen, <search> for it first, then <read> only the lines you need (start, end). Do not read files one by one to explore.',
+  ];
+  if (shell) {
+    rules.push('ALWAYS TEST. After changing code, run it or its tests with <run>. If it fails, fix the code (not the test, unless the test is wrong) and run again.');
+  } else {
+    rules.push('You CANNOT run commands. After changing code, re-read it carefully to check it. Tell the user how to test it.');
+  }
+  rules.push('Work in small steps, then wait for the results. Never invent results.');
+  rules.push('Use <write> for new files, <edit> to change existing files. Never <write> over a file you have not read.');
+  if (shell) rules.push('Commands time out; do not start servers that never stop.');
+  if (web) {
+    rules.push('Your knowledge stops at your training. When the user mentions something you do not know or that may have changed (recent news, a new version, a product, a person, prices), search with <web_search> (then <fetch> a page) before answering. Do not guess, and do not just say you do not know.');
+    rules.push('Search results are only snippets: <fetch> a page before relying on a detail (a number, a date, a name, a quote). When your answer relies on the web, end it with its sources: under "Sources", only the pages you opened with <fetch>; pages you only saw in search results go under "Seen in search results (not opened)". Say plainly which details you could not check.');
+  } else {
+    rules.push('You have no internet access: say so when the user asks about something you do not know or that may be recent.');
+  }
+  if (memory && !subagentRole) {
+    rules.push('Long conversations get compacted and details are lost. As soon as the user states a preference (how to answer, tone, language), a constraint or a decision, keep it with <remember> before answering (not what is in files). One short sentence per note; <forget> notes that are no longer true.');
+  }
+  if (!subagentRole && !offProject) {
+    // (memory is for this conversation; the notes file, for all the next ones)
+    const file = notesFile || 'AGENTS.md';
+    rules.push(`${file} at the root of the project is given to you at the start of EVERY conversation in this project${notesFile ? ' (PROJECT NOTES below)' : ''}. When you learn something about how to work on this project that you will need again (how to run or test it, a convention, a pitfall you hit, a step the user wants each time), add it there with <edit>${notesFile ? '' : ' (create it with <write> if missing)'}: one short line, under a fitting heading. Only what lasts beyond this conversation${memory ? ' (for this conversation only, use <remember>)' : ''}.`);
+  }
+  if (!subagentRole) {
+    rules.push(`Older parts of a long conversation get compacted: they are no longer in view. When the user refers to something you do not see here (a decision, a name, a file, an earlier message), use <recall> before answering. Never make up what was said, decided or written: check it (<recall>, <search>, <read>${web ? ', <web_search>' : ''}) or say you do not remember.`);
+  }
+  if (!subagentRole) rules.push(subagents
+    ? `For a request with several steps, write a <plan>: each task is carried out by a sub-agent, in order${parallel ? ' (consecutive @parallel tasks, touching different files, at the same time)' : ', one at a time'}; you get their reports. Write each task so that it can be done alone (goal, files, its commands: never a task per command). Do not do the tasks yourself: answer from the reports, or write a new <plan> for what is missing.`
+    : 'Several steps: write a <plan> first, then do the tasks in order.');
+  if (subagents) {
+    rules.push(parallel
+      ? 'Sub-agents: put ALL the independent tasks in ONE message (one <agent> tag each, one after the other): they run at the same time, then you get all the reports. Do not launch them one by one. Use them only for tasks that touch different files. A sub-agent cannot see this conversation: write in the task everything it needs (files, goal, constraints).'
+      : 'Sub-agents run one at a time. A sub-agent cannot see this conversation: write in the task everything it needs (files, goal, constraints).');
+  }
+  rules.push(subagentRole
+    ? `When your task is finished${shell ? ' and tested' : ''}, answer WITHOUT any tool tag: a short report for the main agent (what you did, files changed, test results, problems left).`
+    : `When a task is finished${shell ? ' and tested' : ''}, answer WITHOUT any tool tag: in a few lines, what changed and how you checked it.`);
+
+  // Small models fine-tuned as assistants are verbose, restate the user, take
+  // irony literally and guess instead of asking: said plainly, with examples.
+  // The writing rules keep what the unslop skill says that fits in any language.
+  const talk = subagentRole ? '' : `
+TALKING WITH THE USER
+- Not every message is a task. A question gets an answer, a remark gets a reply.
+- Use the user's language. Lead with the answer, keep it short. No preamble, no restating what the user said, no filler, no closing offers.
+- Read the intent, not just the words: the user may be ironic or sarcastic. If you are not sure what they want, ask one short question instead of guessing.
+- Talk like a colleague. Say so when you do not know. No praise, hype or stacked hedges.
+- State facts: the file, the number, what it does. Cut sentences that would fit any project.
+- Short active sentences, common words, one name per thing. Keep articles and verbs: no telegraphic notes, no arrows.
+- No em dashes, decorative emojis or needless bold. No "not just X but Y", no forced groups of three.
+`;
+
+  const example = shell
+    ? `<write path="hello.py">
+print("hi")
+</write>
+<run>python3 hello.py</run>
+User: <result tool="run" exit="0">hi</result>
+Assistant: Created hello.py, it prints "hi" (tested).`
+    : `<write path="hello.py">
+print("hi")
+</write>
+User: <result tool="write" path="hello.py">Created hello.py (1 lines).</result>
+Assistant: Created hello.py, it prints "hi". Run it with: python3 hello.py`;
+
+  const who = subagentRole
+    ? 'You are a sub-agent: a main agent gave you one task. Do only that task.'
+    : offProject ? 'You are Poney, a coding assistant.' : 'You are Poney, a coding assistant working with the user on their project.';
+  const where = offProject
+    ? `There is no project: you work in a private folder of this conversation, ${cwd} (${platform}). Create the files you need there.`
+    : `You work inside the folder ${cwd} (${platform}).`;
+  return `${who} ${where} Each user message starts with the date and time it was sent.
+You act by writing tool tags. The results come back in the next message.
+
+TOOLS
+${tools.join('\n')}
+
+RULES
+${rules.map((r, i) => `${i + 1}. ${r}`).join('\n')}${testLine}
+${talk}${notes}
+EXAMPLES
+User: create hello.py that prints hi
+Assistant: ${example}${subagentRole ? '' : `
+
+User: list or set, to check if a name was already seen?
+Assistant: A set. A lookup is O(1) in a set and O(n) in a list. Keep the list only if you need the order.
+
+User: great, it crashes again. very helpful
+Assistant: Sorry. Which command crashes, and what does it print?
+
+User: which port did we choose for the API again?
+Assistant: <recall>API port</recall>${memory ? `
+
+User: the server runs Python 3.9, we can't upgrade it
+Assistant: <remember>The server runs Python 3.9 and cannot be upgraded.</remember>
+Noted: I will keep the code compatible with Python 3.9.` : ''}${web ? `
+
+User: what's new in the latest Django release?
+Assistant: <web_search>Django latest release notes</web_search>` : ''}`}`;
+}
+
+function parseAttrs(src: string | undefined): ToolArgs {
+  const attrs: ToolArgs = {};
+  if (!src) return attrs;
+  const re = /([a-zA-Z_]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/g;
+  let m;
+  while ((m = re.exec(src))) attrs[m[1].toLowerCase()] = m[2] ?? m[3] ?? m[4] ?? '';
+  return attrs;
+}
+
+export function stripFences(text: string): string {
+  let t = text.replace(/^\r?\n/, '').replace(/\r?\n[ \t]*$/, '');
+  const m = t.match(/^\s*```[\w.+-]*[ \t]*\r?\n([\s\S]*?)\r?\n?\s*```\s*$/);
+  if (m) t = m[1];
+  return t;
+}
+
+/** Parses <old>/<new> pairs (or aider-style SEARCH/REPLACE blocks) from an edit body. */
+export function parseEditBody(body: string): { old: string; new: string }[] {
+  const pairs: { old: string; new: string }[] = [];
+  const re = /<old>([\s\S]*?)<\/old>\s*<new>([\s\S]*?)<\/new>/g;
+  let m;
+  while ((m = re.exec(body))) pairs.push({ old: stripFences(m[1]), new: stripFences(m[2]) });
+  if (pairs.length) return pairs;
+  const sr = /<{5,}\s*SEARCH\s*\n([\s\S]*?)\n={5,}\s*\n([\s\S]*?)\n?>{5,}\s*REPLACE/g;
+  while ((m = sr.exec(body))) pairs.push({ old: m[1], new: m[2] });
+  return pairs;
+}
+
+const tryJson = (s: string): unknown => {
+  try { return parseJson(s); } catch { return null; }
+};
+
+/**
+ * Gemma's native argument syntax, nested: {tasks:[{title:<|"|>a<|"|>,task:<|"|>…<|"|>}]}.
+ * Keys are bare words, strings are <|"|>…<|"|> (or "…"). Returns null if it is not that.
+ */
+function parseGemmaValue(src: string): unknown {
+  let i = 0;
+  const ws = () => { while (i < src.length && /\s/.test(src[i])) i++; };
+  const fail = (): never => { throw new Error('not gemma args'); };
+  const value = (): unknown => {
+    ws();
+    if (src.startsWith('<|"|>', i)) {
+      const end = src.indexOf('<|"|>', i + 5);
+      if (end < 0) fail();
+      const v = src.slice(i + 5, end);
+      i = end + 5;
+      return v;
+    }
+    const c = src[i];
+    if (c === '"') {
+      let j = i + 1;
+      while (j < src.length && src[j] !== '"') j += src[j] === '\\' ? 2 : 1;
+      const v = parseJson(src.slice(i, j + 1));
+      i = j + 1;
+      return v;
+    }
+    if (c === '{') {
+      i++;
+      const obj: LooseArgs = {};
+      ws();
+      if (src[i] === '}') { i++; return obj; }
+      while (i < src.length) {
+        ws();
+        const key = /^[A-Za-z_][\w-]*/.exec(src.slice(i));
+        if (!key) return fail();
+        i += key[0].length;
+        ws();
+        if (src[i] !== ':') fail();
+        i++;
+        obj[key[0]] = value();
+        ws();
+        if (src[i] === ',') { i++; continue; }
+        if (src[i] === '}') { i++; return obj; }
+        fail();
+      }
+      return fail();
+    }
+    if (c === '[') {
+      i++;
+      const arr: unknown[] = [];
+      ws();
+      if (src[i] === ']') { i++; return arr; }
+      while (i < src.length) {
+        arr.push(value());
+        ws();
+        if (src[i] === ',') { i++; continue; }
+        if (src[i] === ']') { i++; return arr; }
+        fail();
+      }
+      return fail();
+    }
+    const lit = /^(-?\d+(?:\.\d+)?|true|false|null)/.exec(src.slice(i));
+    if (!lit) return fail();
+    i += lit[0].length;
+    return parseJson(lit[0]);
+  };
+  try {
+    const v = value();
+    ws();
+    return i === src.length ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Gemma's native arguments are not JSON: {command:"ls -la"} or with its own
+ * string delimiter, {command:<|"|>ls -la<|"|>}. Normalized, then parsed.
+ */
+function parseLooseArgs(s: string): LooseArgs | null {
+  const strict = tryJson(s);
+  if (strict && typeof strict === 'object') return rec(strict);
+  const loose = parseGemmaValue(s.trim());
+  if (loose && typeof loose === 'object') return rec(loose);
+  if (s.includes('<|"|>')) {
+    // Values between <|"|> delimiters may contain anything, quotes included.
+    const out: LooseArgs = {};
+    for (const m of s.matchAll(/([A-Za-z_][\w-]*)\s*:\s*(?:<\|"\|>([\s\S]*?)<\|"\|>|(-?\d+(?:\.\d+)?|true|false))/g)) out[m[1]] = m[2] ?? m[3];
+    if (Object.keys(out).length) return out;
+  }
+  const t = s.trim();
+  if (!t.startsWith('{')) return null;
+  const quoted = t.replace(/([{,]\s*)([A-Za-z_][\w-]*)\s*:/g, '$1"$2":');
+  const j = tryJson(quoted);
+  if (j && typeof j === 'object') return rec(j);
+  // Last resort: key:"value" pairs (values may contain anything but an unescaped quote).
+  const out: LooseArgs = {};
+  for (const m of t.matchAll(/([A-Za-z_][\w-]*)\s*:\s*"((?:[^"\\]|\\.)*)"/g)) out[m[1]] = m[2].replace(/\\n/g, '\n').replace(/\\"/g, '"');
+  return Object.keys(out).length ? out : null;
+}
+
+const quoteAttr = (k: string, v: unknown) => {
+  if (v === undefined || v === null || v === '') return '';
+  const s = String(v);
+  return s.includes('"') ? ` ${k}='${s}'` : ` ${k}="${s}"`;
+};
+
+/** A loose argument in a tag, as a template string writes it. */
+const show = (v: unknown): string => (v === undefined || v === null ? '' : String(v));
+
+/** Our tag for a tool call given as name + JSON arguments (native function calling formats). */
+function jsonToTag(name: string, a: LooseArgs = {}): string | null {
+  const tool = ALIASES[name] || name;
+  if (!TOOLS[tool]) return null;
+  switch (tool) {
+    case 'write': return `<write${quoteAttr('path', a.path ?? a.file)}>\n${show(a.content ?? a.text)}\n</write>`;
+    case 'edit': return `<edit${quoteAttr('path', a.path ?? a.file)}>\n<old>${show(a.old ?? a.old_text ?? a.search)}</old>\n<new>${show(a.new ?? a.new_text ?? a.replace)}</new>\n</edit>`;
+    case 'run': return `<run>${show(a.command ?? a.cmd)}</run>`;
+    case 'web_search': return `<web_search>${show(a.query ?? a.q)}</web_search>`;
+    case 'fetch': return `<fetch>${show(a.url)}</fetch>`;
+    case 'agent': {
+      // Several sub-agents in one call (models that make one call per turn): a list of tasks.
+      const tasks: unknown[] = Array.isArray(a.tasks) ? a.tasks : [a];
+      return tasks.map((t) => (typeof t === 'string' ? { task: t } : rec(t)))
+        .map((t: LooseArgs) => `<agent${quoteAttr('title', t.title ?? t.name)}>\n${show(t.task ?? t.prompt ?? t.description)}\n</agent>`).join('\n');
+    }
+    case 'recall': return `<recall>${show(a.query ?? a.keywords ?? a.q)}</recall>`;
+    case 'remember': return `<remember>${show(a.note ?? a.text ?? a.content ?? a.fact)}</remember>`;
+    case 'forget': return `<forget>${show(a.id ?? a.number ?? a.index ?? a.note)}</forget>`;
+    case 'plan': {
+      const tasks: unknown[] | null = Array.isArray(a.tasks) ? a.tasks : Array.isArray(a.todos) ? a.todos : null;
+      if (!tasks) return `<plan>\n${show(a.plan ?? a.body)}\n</plan>`;
+      return `<plan>\n${tasks.map((t) => (typeof t === 'string' ? { task: t } : rec(t)))
+        .map((t: LooseArgs) => `- ${t.done || t.status === 'completed' || t.status === 'done' ? '[x] ' : ''}${t.parallel || t.agent ? '@parallel ' : ''}${show(t.task ?? t.content ?? t.text ?? t.title)}`).join('\n')}\n</plan>`;
+    }
+    case 'search': return a.query || a.keywords ? `<search${quoteAttr('path', a.path)}>${show(a.query ?? a.keywords)}</search>` : `<search${quoteAttr('pattern', a.pattern)}${quoteAttr('path', a.path)} />`;
+    default: return `<${tool}${['path', 'start', 'end', 'pattern', 'depth'].map((k) => quoteAttr(k, a[k])).join('')} />`;
+  }
+}
+
+/**
+ * Models trained for function calling sometimes use their native format instead
+ * of our tags. Rewrite the common ones into our tags:
+ * - Gemma: <|tool_call>call:list path="." /<tool_call|>  (or call:name{json})
+ * - Hermes/Qwen: <tool_call>{"name": "...", "arguments": {...}}</tool_call>
+ *   (also what the client emits for API-level tool_calls).
+ */
+export function normalizeToolCalls(text: string, onCall: OnCall | null = null): string {
+  // onCall(tag, as, written): told of each rewrite (see callOrigins).
+  // 1. Complete native calls: <|tool_call>call:name{args}<tool_call|> (or attributes inside).
+  let t = text.replace(/<\|tool_call>\s*call:\s*([a-z_]+)([\s\S]*?)<tool_call\|>/gi, (m, name: string, rest: string) => {
+    let r = rest.trim();
+    const json = r.startsWith('{') ? parseLooseArgs(r) : null;
+    let tag: string | null = null;
+    if (json && typeof json === 'object') tag = jsonToTag(name, json);
+    else {
+      r = r.replace(/\/?>?\s*$/, '').trim();
+      const tool = ALIASES[name] || name;
+      if (TOOLS[tool]) tag = `<${tool}${r ? ` ${r}` : ''} />`;
+    }
+    if (tag) onCall?.(tag, `gemma:${name}`, m);
+    return tag ?? m;
+  });
+  // 2. Unclosed calls with braces: <|tool_call>call:name{args} (no <tool_call|>),
+  // once the braces are balanced (not while the arguments are still streaming).
+  t = t.replace(/<\|tool_call>\s*call:\s*([a-z_]+)\s*(?=\{)/gi, (m, name: string, offset: number, whole: string) =>
+    (matchingBrace(whole, offset + m.length) < 0 ? m : `\u0003${name}\u0004`));
+  t = replaceBraceCalls(t, onCall);
+  // 3. Unclosed calls written like our tags: <|tool_call>call:read path="a.py" />
+  t = t.replace(/<\|tool_call>\s*call:\s*([a-z_]+)(?=[\s/>])/gi, (m, name: string, offset: number, whole: string) => {
+    const tool = ALIASES[name] || name;
+    if (!TOOLS[tool]) return m;
+    onCall?.(`<${tool}${whole.slice(offset + m.length).match(/^[^>]*>/)?.[0] ?? ''}`, `gemma:${name}`, m); // (its opening tag)
+    return `<${tool}`;
+  });
+  t = t.replace(/<tool_call\|>/g, ''); // stray closers left by the forms above
+  // 4. Hermes/Qwen JSON calls.
+  t = t.replace(/<tool_call>\s*(\{[\s\S]*?\})\s*<\/tool_call>/g, (m, body: string) => {
+    const o = rec(tryJson(body));
+    if (!o.name) return m;
+    const args = typeof o.arguments === 'string' ? tryJson(o.arguments) ?? {} : o.arguments ?? o.parameters ?? {};
+    const name = String(o.name);
+    const tag = jsonToTag(name, rec(args));
+    if (tag) onCall?.(tag, `hermes:${name}`, m);
+    return tag ?? m;
+  });
+  return t;
+}
+
+/** The calls of a text that are not written as our tags: [{ tag, as }]. native: the calls the server gave as tool_calls. */
+export function callOrigins(text: string, native = new Set<string>()): CallOrigin[] {
+  const origins: CallOrigin[] = [];
+  normalizeToolCalls(text, (tag, as, written) => origins.push({ tag, as: native.has(written) ? as.replace('hermes', 'tool_calls') : as }));
+  return origins;
+}
+
+/** How a call was really written: its name for a tag (an alias stays one), else "gemma:name", "hermes:name", "tool_calls:name". */
+export function calledAs(raw: string, origins: CallOrigin[] = []): string | null {
+  return origins.find((o) => o.tag.includes(raw) || raw.startsWith(o.tag))?.as
+    ?? raw.match(/^<\|tool_call>\s*call:\s*[a-z_]+/i)?.[0].replace(/^<\|tool_call>\s*call:\s*/i, 'gemma:')
+    ?? raw.match(/^<([a-z_]+)/i)?.[1] ?? null;
+}
+
+/** Index of the "}" closing the "{" at `start`, skipping strings ("…" and Gemma's <|"|>…<|"|>); -1 if not closed yet. */
+function matchingBrace(s: string, start: number): number {
+  let depth = 0;
+  for (let i = start; i < s.length; i++) {
+    if (s.startsWith('<|"|>', i)) {
+      const close = s.indexOf('<|"|>', i + 5);
+      if (close < 0) return -1;
+      i = close + 4;
+      continue;
+    }
+    const c = s[i];
+    if (c === '"') {
+      let j = i + 1;
+      while (j < s.length && s[j] !== '"') j += s[j] === '\\' ? 2 : 1;
+      if (j >= s.length) return -1;
+      i = j;
+    } else if (c === '{') depth++;
+    else if (c === '}' && --depth === 0) return i;
+  }
+  return -1;
+}
+
+/** Rewrites marked unclosed brace calls (\u0003name\u0004{...}) into our tags. */
+function replaceBraceCalls(t: string, onCall: OnCall | null): string {
+  let out = '';
+  let i = 0;
+  while (true) {
+    const a = t.indexOf('\u0003', i);
+    if (a < 0) return out + t.slice(i);
+    const b = t.indexOf('\u0004', a);
+    const name = t.slice(a + 1, b);
+    const end = matchingBrace(t, b + 1);
+    const args = parseLooseArgs(t.slice(b + 1, end + 1));
+    const tag = args && jsonToTag(name, args);
+    if (tag) onCall?.(tag, `gemma:${name}`, `<|tool_call>call:${name}${t.slice(b + 1, end + 1)}`);
+    out += t.slice(i, a) + (tag ?? `<|tool_call>call:${name}${t.slice(b + 1, end + 1)}`);
+    i = end + 1;
+  }
+}
+
+/**
+ * Models often talk about the tools ("I will rewrite it with the `<write>` tag").
+ * Taking that for a call is harmful: a <write> without path fails, and having no
+ * closing tag it swallows the real call that follows. A tag is a mere mention when:
+ * - it touches a backtick (inline code), or
+ * - it has no attributes, sits in the middle of a sentence, and is not closed
+ *   before the next tag of the same tool (or not closed at all). A real call can
+ *   be glued to a sentence and span lines: "…the files.<run>curl -X POST \
+ *   -d '{…}'</run>".
+ */
+function isMention(text: string, m: RegExpExecArray): boolean {
+  const start = m.index;
+  const end = start + m[0].length;
+  if (text[start - 1] === '`' || text[end] === '`') return true;
+  const hasAttrs = Boolean(m[2] && m[2].trim());
+  if (hasAttrs) return false;
+  const lineBefore = text.slice(text.lastIndexOf('\n', start - 1) + 1, start);
+  if (!/\S/.test(lineBefore) || /```[\w-]*\s*$/.test(lineBefore)) return false; // starts the line
+  const close = new RegExp(`</${m[1]}\\s*>`).exec(text.slice(end));
+  if (!close) return true;
+  const between = text.slice(end, end + close.index);
+  return new RegExp(`<${m[1]}[\\s/>]`).test(between); // another call of the same tool starts first
+}
+
+/**
+ * Finds tool actions in a model response.
+ * Returns { actions: [{tool, args, raw, start, end, complete}], text } where text
+ * is the prose with actions removed. With `final=false` (while streaming), an
+ * action whose closing tag hasn't arrived yet is returned with complete=false.
+ */
+export function parseActions(text: string, { final = true } = {}): { actions: ParsedAction[]; text: string } {
+  text = normalizeToolCalls(text);
+  const actions: ParsedAction[] = [];
+  const prose: string[] = [];
+  let cursor = 0;
+  OPEN_RE.lastIndex = 0;
+  let m;
+  while ((m = OPEN_RE.exec(text))) {
+    if (m.index < cursor) continue;
+    if (isMention(text, m)) continue; // "I'll use the `<write>` tag": talk, not a call
+    const tool = ALIASES[m[1]] || m[1];
+    const spec = TOOLS[tool];
+    const attrs = parseAttrs(m[2]);
+    const selfClosing = m[3] === '/';
+    const openEnd = m.index + m[0].length;
+    let body = '';
+    let end = openEnd;
+    let complete = true;
+
+    if (!selfClosing) {
+      const closeRe = new RegExp(`</(?:${m[1]}|${tool})\\s*>`, 'g');
+      closeRe.lastIndex = openEnd;
+      const close = closeRe.exec(text);
+      if (close) {
+        body = text.slice(openEnd, close.index);
+        end = close.index + close[0].length;
+      } else if (spec.needsBody) {
+        // No closing tag: incomplete while streaming; at the end take the rest.
+        body = text.slice(openEnd);
+        end = text.length;
+        complete = final;
+      } else if (Object.keys(attrs).length === 0) {
+        // <read>a.py with no closing tag: take the rest of the line.
+        const nl = text.indexOf('\n', openEnd);
+        const lineEnd = nl < 0 ? text.length : nl;
+        if (nl < 0 && !final) complete = false;
+        body = text.slice(openEnd, lineEnd);
+        end = lineEnd;
+      }
+    }
+
+    const args = { ...attrs };
+    // Arguments given as child tags: <path>a.py</path>
+    for (const name of spec.args) {
+      if (args[name] !== undefined) continue;
+      const child = body.match(new RegExp(`<${name}>([\\s\\S]*?)</${name}>`));
+      if (child) {
+        args[name] = child[1].trim();
+        body = body.replace(child[0], '');
+      }
+    }
+    if (tool === 'write') {
+      const c = body.match(/<content>([\s\S]*?)(?:<\/content>|$)/);
+      if (c) body = c[1];
+      args.content = stripFences(body);
+    } else if (tool === 'edit') {
+      args.body = body;
+    } else if (args[spec.bodyArg] === undefined && body.trim()) {
+      args[spec.bodyArg] = stripFences(body).trim();
+    }
+
+    prose.push(text.slice(cursor, m.index));
+    actions.push({ tool, args, raw: text.slice(m.index, end), start: m.index, end, complete });
+    cursor = end;
+    OPEN_RE.lastIndex = end;
+  }
+  prose.push(text.slice(cursor));
+  return { actions, text: prose.join('').replace(/\n{3,}/g, '\n\n').trim() };
+}
+
+/**
+ * Removes reasoning blocks from a model answer: <think> (used by many reasoning
+ * models) and <reasoning> (the wrapper we use to give the model back its own
+ * earlier reasoning; a model may imitate it).
+ */
+export function splitThinking(text: string): { text: string; thinking: string } {
+  let thinking = '';
+  let out = text.replace(/<(think|reasoning)>([\s\S]*?)(<\/\1>|$)/g, (_, __, t: string) => {
+    thinking += t;
+    return '';
+  });
+  // A model may also imitate the notes we give it back.
+  out = out.replace(/^\s*\(My notes: ([^\n]*)\)\n?/, (_, t: string) => {
+    thinking += t;
+    return '';
+  });
+  return { text: out, thinking };
+}
+
+/**
+ * The reasoning kept in the history: the end of the model's reasoning (where its
+ * plan and conclusions are), in a <reasoning> block before its message, so it does
+ * not start over from scratch after each tool result. Short: with Gemma, the full
+ * reasoning in the history (or in the template's own thinking field) made the model
+ * emit only invisible tokens. A tag, not prose: a "(My notes: …)" line was copied
+ * by the model into its answers, and the loops started with it.
+ */
+export const NOTES_MAX_CHARS = 600;
+
+// The end of a reasoning as a model may write it, inside its real reasoning.
+const FAKE_CLOSE = /<\/(?:thought|thinking|think|reasoning)>/gi;
+
+/**
+ * Seen with Gemma: it "closes" its reasoning with a tag it makes up
+ * ("</thought>"), writes its calls, and only then really ends it. What follows
+ * that tag, when it holds complete calls, is its answer. Returns
+ * { thinking, text } (the reasoning before the tag, the answer), or null.
+ */
+export function answerInReasoning(thinking: string | null | undefined): { thinking: string; text: string } | null {
+  const reasoning = String(thinking || '');
+  for (const m of reasoning.matchAll(FAKE_CLOSE)) {
+    const after = reasoning.slice(m.index + m[0].length);
+    const normalized = normalizeToolCalls(after);
+    if (parseActions(normalized).actions.some((a) => a.complete)) {
+      return { thinking: reasoning.slice(0, m.index), text: normalized.replace(FAKE_CLOSE, '').trim() };
+    }
+  }
+  return null;
+}
+
+export function withReasoning(content: string, thinking: string | null | undefined, maxChars = NOTES_MAX_CHARS): string {
+  const t = reasoningNote(thinking, maxChars);
+  return t ? `<reasoning>\n${t}\n</reasoning>\n${content}` : content;
+}
+
+/**
+ * The end of a reasoning, in whole sentences, each sentence once. A note cut
+ * mid-word ("…n research findings") and repeated sentences were copied as is
+ * by the model at each step, until it looped on them.
+ */
+export function reasoningNote(thinking: string | null | undefined, maxChars = NOTES_MAX_CHARS): string {
+  // Without tool calls (never run from there: shown in the history, they looked
+  // done, and the model went on as if) nor closing tags it made up.
+  const t = parseActions(normalizeToolCalls(thinking || '')).text.replace(FAKE_CLOSE, ' ').replace(/\s+/g, ' ').trim();
+  const sentences = t.match(/[^.!?…]+(?:[.!?…]+|$)\s*/g) || [];
+  const seen = new Set();
+  let note = '';
+  for (let i = sentences.length - 1; i >= 0; i--) {
+    const key = sentences[i].trim().toLowerCase();
+    if (!key || seen.has(key)) continue;
+    if (note.length + sentences[i].length > maxChars) break;
+    seen.add(key);
+    note = sentences[i] + note;
+  }
+  // Last sentence longer than the note: its end, from a word boundary.
+  if (!note.trim()) note = t.slice(-maxChars).replace(/^\S*\s+/, '');
+  return note.trim();
+}
+
+/**
+ * Where a generation started looping: a passage repeated at least three times
+ * in a row at the end of `s` (the last copy may be partial), over at least
+ * minRun characters. Returns the index just after the first copy (-1 if no loop).
+ */
+export function findRepetition(s: string, { minRun = 300, maxPeriod = 2000 } = {}): number {
+  const n = s.length;
+  if (n < minRun) return -1;
+  const probe = s.slice(-20);
+  let at = s.lastIndexOf(probe, n - 21);
+  for (let tries = 0; at >= 0 && tries < 50; tries++) {
+    const d = n - 20 - at; // candidate period
+    if (d > maxPeriod) break;
+    if (d >= 20) {
+      // Back to where the repeating starts.
+      let k = n - d - 1;
+      while (k >= 0 && s[k] === s[k + d]) k--;
+      const first = k + 1;
+      const run = n - first;
+      if (run >= 3 * d - 20 && run >= minRun) {
+        // Keep one copy, cut at the end of a line or sentence if there is one.
+        // (the window overlaps the next copy by two characters, so that a
+        // boundary just at the end of the copy is found)
+        const window = s.slice(first, first + d + 2);
+        const nl = window.lastIndexOf('\n');
+        const end = nl > 1 ? nl : Math.max(...['. ', '! ', '? '].map((p) => window.lastIndexOf(p) + 1));
+        return end > 1 ? first + end + 1 : first + d;
+      }
+    }
+    at = s.lastIndexOf(probe, at - 1);
+  }
+  return -1;
+}
+
+/** Gemma's channel markers, when they leak into an answer or a reasoning (see makeChannelSplitter). */
+export function stripChannelMarkers(s: unknown): string {
+  return String(s ?? '').replace(/(?:<\|channel>)+(?:[a-z_]+\n)?|<channel\|>/g, '');
+}
+
+export function stripReasoning(content: string): string {
+  return content.replace(/<reasoning>[\s\S]*?<\/reasoning>\n?/g, '').replace(/^\(My notes: .*\)\n?/m, '');
+}
+
+/**
+ * Reasoning saved by older versions, in the current form: full <reasoning> blocks
+ * are shortened, "(My notes: …)" lines become <reasoning> blocks. Short blocks
+ * (already current) are left as they are.
+ */
+export function legacyReasoningToNotes(content: string): string {
+  return content
+    .replace(/<reasoning>\n?([\s\S]*?)\n?<\/reasoning>\n?/g, (block, r: string) => (r.length <= NOTES_MAX_CHARS + 20 ? block : withReasoning('', r)))
+    .replace(/^\(My notes: (.*)\)\n?/, (_, r: string) => withReasoning('', r));
+}
+
+export function formatResult(tool: string, attrs: Record<string, unknown>, output: string): string {
+  const a = Object.entries(attrs)
+    .filter(([, v]) => v !== undefined && v !== '')
+    .map(([k, v]) => ` ${k}="${String(v).replace(/"/g, "'").slice(0, 120)}"`)
+    .join('');
+  return `<result tool="${tool}"${a}>\n${output}\n</result>`;
+}
+
+// ---------- the action being written (while the answer streams) ----------
+
+/**
+ * The <old>/<new> pairs of an edit body still being written: each old with
+ * whether it is closed yet, and its new text so far.
+ */
+export function partialEditPairs(body: unknown) {
+  const pairs: { old: string; oldClosed: boolean; new: string; newOpen: boolean; newClosed: boolean }[] = [];
+  const re = /<old>([\s\S]*?)(<\/old>|$)(?:\s*<new>([\s\S]*?)(<\/new>|$))?/g;
+  for (const m of String(body ?? '').matchAll(re)) {
+    if (!m[0]) break;
+    pairs.push({ old: m[1], oldClosed: Boolean(m[2]), new: m[3] ?? '', newOpen: m[3] !== undefined, newClosed: Boolean(m[4]) });
+  }
+  return pairs;
+}
+
+const NATIVE_KEYS = { path: ['path', 'file', 'filename'], content: ['content', 'text', 'code'], old: ['old', 'old_text', 'search'], new: ['new', 'new_text', 'replace'] };
+
+/**
+ * The write or edit being written at the end of a streamed answer, ours or a
+ * Gemma native call still open: { tool, path, content | body, start, complete }
+ * (start: its position in the answer). Null when the answer ends otherwise.
+ */
+export function liveAction(text: unknown): { tool: string; path: string; content?: string; body?: string; start: number; complete: boolean } | null {
+  const t = String(text ?? '');
+  const open = t.lastIndexOf('<|tool_call>');
+  if (open >= 0 && !t.slice(open).includes('<tool_call|>')) {
+    const m = t.slice(open).match(/^<\|tool_call>\s*call:\s*([a-z_]+)\s*\{?([\s\S]*)$/i);
+    if (!m) return null;
+    const tool = ALIASES[m[1]] || m[1];
+    if (tool !== 'write' && tool !== 'edit') return null;
+    const get = (names: string[]) => {
+      for (const k of names) {
+        const v = m[2].match(new RegExp(`(?:^|[,{\\s])${k}\\s*:\\s*(?:<\\|"\\|>([\\s\\S]*?)(<\\|"\\|>|$)|"((?:[^"\\\\]|\\\\.)*)("|$))`));
+        if (v) return { value: (v[1] ?? v[3] ?? '').replace(/\\n/g, v[3] !== undefined ? '\n' : '\\n'), closed: Boolean(v[2] || v[4]) };
+      }
+      return null;
+    };
+    const path = get(NATIVE_KEYS.path)?.value ?? '';
+    if (tool === 'write') return { tool, path, content: get(NATIVE_KEYS.content)?.value ?? '', start: open, complete: false };
+    const o = get(NATIVE_KEYS.old);
+    const n = get(NATIVE_KEYS.new);
+    const body = o ? `<old>${o.value}${o.closed ? '</old>' : ''}${n ? `<new>${n.value}${n.closed ? '</new>' : ''}` : ''}` : '';
+    return { tool, path, body, start: open, complete: false };
+  }
+  const { actions } = parseActions(normalizeToolCalls(t), { final: false });
+  const last = actions[actions.length - 1];
+  if (!last || (last.tool !== 'write' && last.tool !== 'edit')) return null;
+  return { tool: last.tool, path: last.args.path || '', content: last.args.content, body: last.args.body, start: last.start, complete: last.complete };
+}

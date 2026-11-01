@@ -1,0 +1,211 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import http from 'node:http';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { Agent, generationStats } from '../src/agent/agent.ts';
+import { withReasoning, splitThinking, findRepetition, reasoningNote } from '../src/agent/protocol.ts';
+import { extractFacts, makeEstimator } from '../src/agent/context.ts';
+import { port } from './helpers.ts';
+import type { ModelRequest } from './helpers.ts';
+import { cfg } from './helpers.ts';
+import type { Fake } from './helpers.ts';
+import type { AgentEvent, EventOf } from '../src/types.ts';
+import type { ModelReply } from './helpers.ts';
+import type { Usage } from '../src/types.ts';
+
+// Fake Ollama: each reply is {thinking?, content, done?}; reports counts and durations.
+function fakeOllama(replies: ModelReply[]) {
+  const requests: ModelRequest[] = [];
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (d) => (body += d));
+    req.on('end', () => {
+      requests.push(JSON.parse(body) as ModelRequest);
+      const r = replies.shift() ?? { content: 'Done.' };
+      const lines: Record<string, unknown>[] = [];
+      if (r.thinking) lines.push({ message: { thinking: r.thinking }, done: false });
+      lines.push({ message: { content: r.content }, done: false });
+      lines.push({ message: { content: '' }, done: true, done_reason: 'stop', prompt_eval_count: 1000, eval_count: 50, prompt_eval_duration: 2e9, eval_duration: 5e8 });
+      res.end(lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+    });
+  });
+  return new Promise<Fake>((resolve) => server.listen(0, () => resolve({ server, requests, url: `http://localhost:${port(server)}` })));
+}
+
+const tmp = () => fs.mkdtemp(path.join(os.tmpdir(), 'lcx-think-'));
+const assistantMsgs = (req: ModelRequest) => req.messages.filter((m) => m.role === 'assistant').map((m) => m.content);
+
+test('reasoning is kept across tool calls and turns, so the prompt start never changes', async () => {
+  const cwd = await tmp();
+  await fs.writeFile(path.join(cwd, 'a.txt'), 'hello\n');
+  const fake = await fakeOllama([
+    { thinking: 'PLAN: first read a.txt, then answer.', content: '<read path="a.txt" />' },
+    { thinking: 'I read it, it says hello.', content: 'It says hello.' },
+    { content: 'Second answer.' },
+  ]);
+  const agent = new Agent({ cwd, config: cfg({ baseUrl: fake.url, model: 'fake' }) });
+  await agent.send('what is in a.txt?');
+  await agent.send('thanks');
+  fake.server.close();
+
+  // Step 2 sees the reasoning of step 1.
+  assert.equal(assistantMsgs(fake.requests[1])[0], '<reasoning>\nPLAN: first read a.txt, then answer.\n</reasoning>\n<read path="a.txt" />');
+  // Next request: the previous messages are unchanged (server cache reusable).
+  const prev = fake.requests[1].messages;
+  assert.deepEqual(fake.requests[2].messages.slice(0, prev.length), prev);
+  assert.match(assistantMsgs(fake.requests[2]).join('\n'), /PLAN/);
+});
+
+test('inline <think> blocks are kept the same way', async () => {
+  const cwd = await tmp();
+  await fs.writeFile(path.join(cwd, 'a.txt'), 'x\n');
+  const fake = await fakeOllama([{ content: '<think>need the file</think><read path="a.txt" />' }, { content: 'ok' }]);
+  const agent = new Agent({ cwd, config: cfg({ baseUrl: fake.url, model: 'fake' }) });
+  await agent.send('go');
+  fake.server.close();
+  assert.match(assistantMsgs(fake.requests[1])[0], /^<reasoning>\nneed the file\n<\/reasoning>\n/);
+});
+
+test('long reasoning becomes a short note keeping its end; imitations are treated as thinking', () => {
+  const r = withReasoning('<run>ls</run>', `${'Step one is done. '.repeat(1)}${'b'.repeat(5000)} end. I will now list the files. CONCLUSION`);
+  assert.equal(r, '<reasoning>\nI will now list the files. CONCLUSION\n</reasoning>\n<run>ls</run>');
+  assert.ok(r.length < 700);
+  assert.equal(splitThinking('<reasoning>x</reasoning>answer').text, 'answer');
+  assert.deepEqual(splitThinking('(My notes: plan)\nanswer'), { text: 'answer', thinking: 'plan' });
+});
+
+test('reasoning saved by older versions is put in the current form', async () => {
+  const { legacyReasoningToNotes, stripReasoning } = await import('../src/agent/protocol.ts');
+  const old = `<reasoning>\n${'think '.repeat(400)}DONE\n</reasoning>\n<run>ls</run>`;
+  const notes = legacyReasoningToNotes(old);
+  assert.match(notes, /^<reasoning>\nthink.*DONE\n<\/reasoning>\n<run>ls<\/run>$/);
+  assert.ok(notes.length < 700);
+  assert.equal(stripReasoning(notes), '<run>ls</run>');
+  // "(My notes: …)" lines become blocks; current blocks stay as they are.
+  assert.equal(legacyReasoningToNotes('(My notes: plan.)\n<run>ls</run>'), '<reasoning>\nplan.\n</reasoning>\n<run>ls</run>');
+  const current = withReasoning('<run>ls</run>', 'A short plan.');
+  assert.equal(legacyReasoningToNotes(current), current);
+  const agent = new Agent({ cwd: await tmp(), config: cfg({ model: 'm' }) });
+  agent.messages = [{ role: 'user', content: 'x' }, { role: 'assistant', content: old }, { role: 'assistant', content: '(My notes: n.)\nok' }];
+  agent.archives = [[{ role: 'assistant', content: old }], null];
+  agent.upgradeReasoning();
+  assert.match(agent.messages[1].content, /^<reasoning>\n/);
+  assert.equal(agent.messages[2].content, '<reasoning>\nn.\n</reasoning>\nok');
+  assert.match(agent.archives[0]![0].content, /^<reasoning>\n/);
+});
+
+test('a generation with tokens but nothing visible is retried once without the notes', async () => {
+  const cwd = await tmp();
+  await fs.writeFile(path.join(cwd, 'a.txt'), 'x\n');
+  let n = 0;
+  const requests: ModelRequest[] = [];
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (d) => (body += d));
+    req.on('end', () => {
+      requests.push(JSON.parse(body) as ModelRequest);
+      n++;
+      // 1: reads (with reasoning); 2: invisible tokens only; 3: answers.
+      const lines: object[] = n === 1
+        ? [{ message: { thinking: 'plan' }, done: false }, { message: { content: '<read path="a.txt" />' }, done: false }]
+        : n === 2 ? [] : [{ message: { content: 'Done.' }, done: false }];
+      lines.push({ message: { content: '' }, done: true, done_reason: n === 2 ? 'length' : 'stop', eval_count: n === 2 ? 400 : 10 });
+      res.end(lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, r));
+  const agent = new Agent({ cwd, config: { baseUrl: `http://localhost:${port(server)}`, model: 'm' } });
+  const events: AgentEvent[] = [];
+  agent.on('event', (e) => events.push(e));
+  await agent.send('read a.txt');
+  server.close();
+  assert.ok(events.some((e) => e.type === 'notice' && /rien produire de visible/.test(e.text)));
+  assert.equal(events.find((e) => e.type === 'final')?.text, 'Done.');
+  assert.doesNotMatch(JSON.stringify(requests[2].messages), /<reasoning>/);
+});
+
+test('actions only mentioned in the reasoning are not counted as done', () => {
+  const facts = extractFacts([{ role: 'assistant', content: withReasoning('<write path="real.py">\nx\n</write>', 'maybe <write path="imagined.py">', 1000) }]);
+  assert.match(facts, /real\.py/);
+  assert.doesNotMatch(facts, /imagined/);
+});
+
+test('generation stats: server counts when available, estimate otherwise', async () => {
+  const exact = generationStats({ t0: 0, tFirst: 100, tEnd: 2100, usage: { outputTokens: 50, evalMs: 500, promptMs: 2000 } as Usage, est: makeEstimator(), text: 'x' });
+  assert.deepEqual(exact, { totalMs: 2100, promptMs: 2000, genMs: 500, tokens: 50, tps: 100, exact: true });
+  const est = generationStats({ t0: 0, tFirst: 1000, tEnd: 3000, usage: null, est: makeEstimator(3.2), text: 'x'.repeat(320) });
+  assert.deepEqual(est, { totalMs: 3000, promptMs: 1000, genMs: 2000, tokens: 100, tps: 50, exact: false });
+
+  const cwd = await tmp();
+  const fake = await fakeOllama([{ content: 'Hi.' }]);
+  const agent = new Agent({ cwd, config: cfg({ baseUrl: fake.url, model: 'fake' }) });
+  const ends: EventOf<'assistant_end'>[] = [];
+  agent.on('event', (e) => e.type === 'assistant_end' && ends.push(e));
+  await agent.send('hi');
+  fake.server.close();
+  assert.equal(ends[0].stats!.tokens, 50);
+  assert.equal(ends[0].stats!.tps, 100);
+  assert.equal(ends[0].stats!.exact, true);
+});
+
+test('one stats total per turn, over all model calls', async () => {
+  const cwd = await tmp();
+  await fs.writeFile(path.join(cwd, 'a.txt'), 'x\n');
+  const fake = await fakeOllama([{ content: '<read path="a.txt" />' }, { content: 'Done.' }]);
+  const agent = new Agent({ cwd, config: cfg({ baseUrl: fake.url, model: 'fake' }) });
+  let end = null as EventOf<'turn_end'> | null;
+  agent.on('event', (e) => e.type === 'turn_end' && (end = e));
+  await agent.send('go');
+  fake.server.close();
+  assert.equal(end!.stats!.steps, 2);
+  assert.equal(end!.stats!.exact, false, 'first call was stopped early after the action');
+  assert.ok(end!.stats!.tokens > 50);
+  assert.ok(end!.stats!.tps! > 0);
+});
+
+// ---------- loops ----------
+const LOOP_UNIT = ". Let's start by creating the design/plan.md file.…n research findings on our strategy. Plan: 1. Create it.\n";
+
+test('notes keep whole sentences, each once, never a cut word', () => {
+  const note = reasoningNote(`Intro. ${'I will write the file now. '.repeat(40)}Then I test it.`);
+  assert.equal(note, 'Intro. I will write the file now. Then I test it.');
+  assert.doesNotMatch(reasoningNote('word '.repeat(300) + 'last sentence here.'), /^…|^\S{1,3} /);
+});
+
+test('a passage repeated in a row is found, one copy kept; normal text is not', () => {
+  const s = `Some intro. ${LOOP_UNIT.repeat(4)}${LOOP_UNIT.slice(0, 30)}`;
+  assert.equal(s.slice(0, findRepetition(s)), `Some intro. ${LOOP_UNIT}`);
+  assert.equal(findRepetition(Array.from({ length: 80 }, (_, i) => `step ${i} done.`).join(' ')), -1);
+  assert.equal(findRepetition('def f():\n    pass\n\n'.repeat(3)), -1);
+});
+
+test('a looping generation is stopped; without an action, the model is pushed to act', async () => {
+  const cwd = await tmp();
+  const fake = await fakeOllama([
+    { thinking: 'I plan things.', content: LOOP_UNIT.repeat(8) },
+    { content: '<write path="plan.md">\n# Plan\n</write>' },
+    { content: 'Created plan.md.' },
+  ]);
+  const agent = new Agent({ cwd, config: cfg({ baseUrl: fake.url, model: 'fake', approval: 'auto' }) });
+  const notices: string[] = [];
+  agent.on('event', (e) => e.type === 'notice' && notices.push(e.text));
+  await agent.send('write the plan');
+  fake.server.close();
+  assert.ok(notices.some((n) => /en boucle/.test(n)));
+  const second = fake.requests[1].messages;
+  assert.equal(second.at(-2)!.content.split("Let's start").length - 1, 1); // one copy left in the history
+  assert.match(second.at(-1)!.content, /repeating the same text/);
+  assert.equal(await fs.readFile(path.join(cwd, 'plan.md'), 'utf8'), '# Plan\n');
+});
+
+test('a reasoning that loops is cut too', async () => {
+  const fake = await fakeOllama([{ thinking: `Plan. ${LOOP_UNIT.repeat(10)}`, content: '' }, { content: 'Done.' }]);
+  const agent = new Agent({ cwd: await tmp(), config: cfg({ baseUrl: fake.url, model: 'fake' }) });
+  let thinking = '';
+  agent.on('event', (e) => { if (e.type === 'assistant_end' && !thinking) thinking = e.thinking; });
+  await agent.send('go');
+  fake.server.close();
+  assert.equal(thinking.split("Let's start").length - 1, 1);
+});

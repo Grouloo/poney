@@ -4,14 +4,25 @@
   "version": "0.1.0",
   "description": "Desktop coding agent built for small local models (Ollama, LM Studio, llama.cpp).",
   "type": "module",
-  "main": "src/main.js",
+  "main": "dist/main.js",
   "scripts": {
-    "start": "node scripts/brand-electron.mjs && electron .",
-    "cli": "node src/cli.js",
-    "test": "node --test test/*.test.js"
+    "start": "node scripts/brand-electron.ts && npm run build && electron .",
+    "build": "node scripts/build.ts",
+    "cli": "node src/cli.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "node --test test/*.test.ts"
+  },
+  "engines": {
+    "node": ">=24"
   },
   "devDependencies": {
-    "electron": "^33.2.1"
+    "@types/katex": "^0.16.8",
+    "@types/node": "^20.19.43",
+    "electron": "^33.2.1",
+    "eslint": "^10.14.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.72.1"
   },
   "allowScripts": {
     "electron@33.4.11": true

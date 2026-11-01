@@ -6,7 +6,7 @@ projects, her models on Bob's projects, or Bob's models on Bob's projects.
 
 So a model and a project are independent. What is ready for it, and nothing more:
 
-- A provider has a stable `id` and a `type` (`src/providers.js`): "Poney distant"
+- A provider has a stable `id` and a `type` (`src/providers.ts`): "Poney distant"
   would be one more type, and a conversation already names its provider.
 - The queue and the models live in a service (`src/engine/`), not in conversations:
   a call from another instance would enter by `ModelEngine.acquire` like a local one.
