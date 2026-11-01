@@ -851,7 +851,7 @@ function noteDraft() {
 function showDraftTitle(c: ConversationSummary) {
   c.title = input.value.replace(/\s+/g, ' ').trim().slice(0, 80) || c.title;
   const title = document.querySelector<HTMLElement>('.conv-card.active .title');
-  if (title) title.textContent = title.title = c.title;
+  if (title) title.textContent = c.title;
   renderConvHead();
 }
 function setInput(text: string) {
@@ -2127,11 +2127,14 @@ tip.setAttribute('role', 'tooltip');
 let tipFor: HTMLElement | null = null;
 function showTip(el: HTMLElement) {
   tip.textContent = el.dataset.tip ?? '';
+  const side = 'tipSide' in el.dataset;
+  tip.classList.toggle('side', side);
   tip.classList.add('show');
   const r = el.getBoundingClientRect();
   const t = tip.getBoundingClientRect();
-  const top = r.top - t.height - 8 >= 4 ? r.top - t.height - 8 : r.bottom + 8; // above, else below
-  const left = Math.max(6, Math.min(r.left + r.width / 2 - t.width / 2, innerWidth - t.width - 6));
+  const top = side ? Math.max(6, Math.min(r.top, innerHeight - t.height - 6))
+    : r.top - t.height - 8 >= 4 ? r.top - t.height - 8 : r.bottom + 8; // above, else below
+  const left = side ? r.right + 8 : Math.max(6, Math.min(r.left + r.width / 2 - t.width / 2, innerWidth - t.width - 6));
   tip.style.top = `${top}px`;
   tip.style.left = `${left}px`;
 }
@@ -2541,7 +2544,10 @@ function conversationItem(c: ConversationSummary, current: string | null) {
   li.classList.toggle('active', c.id === current);
   li.innerHTML = '<div class="card-top"><span class="title"></span><span class="state"></span><span class="pill"></span><span class="card-actions"><button class="ren">✎</button><button class="del" title="Supprimer">✕</button></span></div><div class="card-meta"><span class="project"></span><span class="when"></span><span class="card-engine"></span></div>';
   li.querySelector<HTMLElement>('.title')!.textContent = c.title;
-  li.querySelector<HTMLElement>('.title')!.title = c.title;
+  if (c.draft) { // (the card shows its prompt on hover, instead of the title in full)
+    li.dataset.tip = c.draftText;
+    li.dataset.tipSide = '';
+  } else li.querySelector<HTMLElement>('.title')!.title = c.title;
   // How many things wait for the user: approvals (orange), answers to read (blue, or red after an error).
   // Asleep, nothing does: a clock in the same place.
   const pill = li.querySelector<HTMLElement>('.pill')!;

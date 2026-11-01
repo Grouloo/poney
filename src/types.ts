@@ -291,6 +291,7 @@ export interface ConversationSummary {
   workspace: string;
   offProject: boolean;
   draft: boolean;
+  draftText: string; // (its start: enough for the tooltip of its card)
   engine?: EngineName;
   provider?: string;
   failed: boolean;

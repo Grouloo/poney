@@ -280,6 +280,7 @@ details.thinking div { white-space: pre-wrap; border-left: 2px solid var(--borde
   color: var(--text); font: 13px/1.4 var(--ui); opacity: 0; transition: opacity 0.08s;
 }
 .tip.show { opacity: 1; }
+.tip.side { max-width: 360px; max-height: 40vh; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* context menu (right click): actions and their shortcuts */
 .ctx-menu {

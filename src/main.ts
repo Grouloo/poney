@@ -709,6 +709,7 @@ handle('conversations:list', [], () => {
     c.finished = s.finished;
     c.failed = s.failed;
     c.draft = Boolean(s.draft.trim());
+    c.draftText = s.draft.slice(0, 600);
     c.engine = s.choice.engine ?? 'local';
     c.provider = s.choice.provider;
     c.workingSince = s.workingSince;
