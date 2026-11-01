@@ -840,9 +840,10 @@ function noteDraft() {
   draftChanged = true;
   clearTimeout(draftTimer);
   const c = lastConversations.find((x) => x.id === currentConversation);
-  if (c && !c.titleFromDraft) draftTimer = setTimeout(flushDraft, 250);
-  else { // (a new conversation: its card follows the keys, without waiting for the list)
-    if (c) showDraftTitle(c);
+  // (a card that changes follows the keys, without waiting for the list: a new conversation's title, a draft begun or erased)
+  if (c && !c.titleFromDraft && c.draft === Boolean(input.value.trim())) draftTimer = setTimeout(flushDraft, 250);
+  else {
+    if (c?.titleFromDraft) showDraftTitle(c);
     flushDraft();
   }
 }
