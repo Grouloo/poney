@@ -318,10 +318,21 @@ class Session {
     const sent = (this.agent?.messages ?? this.conv.messages).length;
     if (!sent && !this.draft.trim() && !this.running) { // (its text was erased: nothing left of it)
       store.delete(this.conv.id);
+      send('conversations:changed', this.conv.id);
       this.conv = null;
       return;
     }
     this.save({ touch: false });
+  }
+
+  /** What is typed in its input: a draft at the first character, and until sent, the title of a new conversation. */
+  noteDraft(text: string) {
+    const changed = Boolean(this.draft.trim()) !== Boolean(text.trim());
+    this.draft = text;
+    clearTimeout(this.draftTimer);
+    if (this.conv?.titleFromDraft) this.conv.title = ConversationStore.cleanTitle(text) || this.conv.title;
+    if (!this.conv || changed || this.conv.titleFromDraft) this.keepDraft();
+    else this.draftTimer = setTimeout(() => this.save({ touch: false }), 2000);
   }
 
   resolveApprovals(value: ApprovalAnswer) {
@@ -605,6 +616,7 @@ handle('agent:send', [isString, optional(isString)], async (text, turnId) => {
   }
   if (s.conv.titleFromDraft) {
     s.conv.title = ConversationStore.cleanTitle(text) || s.conv.title;
+    s.conv.systemPrompt = a.systemPrompt; // edited before the first message
     delete s.conv.titleFromDraft;
   }
   s.draft = '';
@@ -755,10 +767,7 @@ handle('session:setChoice', [isObject], (patch) => {
 handle('skills:list', [], () => loadSkills(skillDirs(activeCwd(), userSkills())).map(({ name, description, author, origin }) => ({ name, description, author, origin })));
 // What is typed in the input of the conversation shown (saved soon, and when the user leaves it).
 handle('session:setDraft', [isString], (text) => {
-  const s = current();
-  s.draft = String(text ?? '');
-  clearTimeout(s.draftTimer);
-  if (s.conv) s.draftTimer = setTimeout(() => s.save({ touch: false }), 2000);
+  current().noteDraft(String(text ?? ''));
 });
 handle('conversations:open', [isString], (id) => {
   // Already open (maybe still working): shown as it is now.

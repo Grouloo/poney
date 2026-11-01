@@ -1717,9 +1717,11 @@ const SHORTCUTS: Record<string, Shortcut> = {
   swapDeck: { keys: ['e'], shift: true },
   showFiles: { keys: ['f'], shift: true },
   showGit: { keys: ['g'], shift: true },
+  toggleSidebar: { keys: ['s'], shift: true },
 };
 const shortcutText = ({ keys: [k], shift }: Shortcut) => MAC ? `${shift ? '⇧' : ''}⌘${k.toUpperCase()}` : `Ctrl+${shift ? 'Maj+' : ''}${k.toUpperCase()}`;
 $<HTMLButtonElement>('projectSettingsBtn').dataset.tip = `Paramètres des projets (${shortcutText(SHORTCUTS.projectSettings)})`;
+$<HTMLButtonElement>('sidebarBtn').dataset.tip = `Afficher / masquer les barres latérales (${shortcutText(SHORTCUTS.toggleSidebar)})`;
 
 /** The conversations of a project (all of them for 'Tous') that have answers to read or just finished. */
 const toRead = (key: string) => lastConversations.filter((c) => (key === ALL || projectOf(c) === key) && (c.unread || c.finished));
@@ -1735,6 +1737,7 @@ const projectActions: Record<string, (key: string) => unknown> = {
   swapDeck: () => swapOrShowDeck(),
   showFiles: () => showSection('files'),
   showGit: () => showSection('git'),
+  toggleSidebar: () => document.body.classList.toggle('no-sidebar'),
 };
 
 window.addEventListener('keydown', (e) => {
@@ -2138,7 +2141,7 @@ window.addEventListener('blur', hideTip);
 let replaying = false;
 let currentConversation: string | null = null;
 
-$<HTMLButtonElement>('sidebarBtn').onclick = () => document.body.classList.toggle('no-sidebar');
+$<HTMLButtonElement>('sidebarBtn').onclick = () => projectActions.toggleSidebar(projectFilter);
 // The conversations and the files, as a deck of two cards (the one in front: remembered).
 let filesInFront = false;
 try { filesInFront = localStorage.getItem('deckFront') === 'files'; } catch {}
@@ -2212,7 +2215,7 @@ const CATEGORIES = [
   { key: 'archived', label: 'Archivées', foldable: true },
 ];
 // (the conversation shown stays where it is: its text is a draft once the user leaves it)
-const category = (c: ConversationSummary) => c.draft && c.id !== currentConversation ? 'drafts' : c.approvals ? 'waiting' : c.sleeping ? 'sleeping' : c.running ? 'busy' : c.failed ? 'failed' : c.unread || c.finished ? 'done' : 'archived';
+const category = (c: ConversationSummary) => c.draft ? 'drafts' : c.approvals ? 'waiting' : c.sleeping ? 'sleeping' : c.running ? 'busy' : c.failed ? 'failed' : c.unread || c.finished ? 'done' : 'archived';
 let collapsedCategories = new Set<string>();
 try { collapsedCategories = new Set(JSON.parse(localStorage.getItem('collapsedCategories') || '[]') as string[]); } catch {}
 const baseName = (p: string) => p.split(/[\\/]/).filter(Boolean).pop() || p;
