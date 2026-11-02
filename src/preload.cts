@@ -1,4 +1,4 @@
-import type { Args, Channel, ContextMenuParams, Reply, SessionApproval, SessionEvent } from './ipc.ts' with { 'resolution-mode': 'import' };
+import type { AppAlert, Args, Channel, ContextMenuParams, Reply, SessionApproval, SessionEvent } from './ipc.ts' with { 'resolution-mode': 'import' };
 
 const { contextBridge, ipcRenderer } = require('electron') as typeof Electron;
 
@@ -59,6 +59,8 @@ const api = {
   onOpenSettings: on('ui:openSettings'),
   onContextMenu: onValue<ContextMenuParams>('ui:contextMenu'),
   onSwipe: onValue<'left' | 'right'>('ui:swipe'),
+  onAlert: onValue<AppAlert>('ui:alert'),
+  onOpenConversation: onValue<string>('ui:openConversation'),
   edit: call('ui:edit'),
 
   getMemory: call('memory:get'),

@@ -12,6 +12,13 @@ import type { AgentEvent, ApprovalRequest, Choice, Config, ContextStats, Convers
 /** An event of the agent, with the conversation it comes from. */
 export type SessionEvent = AgentEvent & { session?: string };
 export type SessionApproval = ApprovalRequest & { session: string };
+/** A conversation in the background finished, failed or asks for an approval. */
+export interface AppAlert {
+  session: string;
+  kind: 'done' | 'error' | 'approval';
+  title: string;
+  body: string;
+}
 
 /** What the window needs to show a conversation. */
 export interface SessionView {

@@ -38,6 +38,7 @@ export interface Config {
   searxngUrl: string;
   memoryEnabled?: boolean;
   autoRecall?: boolean;
+  notifications?: boolean;
 }
 
 export type EngineName = 'local' | 'claude';

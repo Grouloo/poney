@@ -9,7 +9,7 @@ import { EMOJIS, ICONS, ICON_COLORS, iconSvg } from './project-icons.ts';
 import { fileIconSvg, folderIconSvg } from './file-icons.ts';
 import DOMPurify from '../../node_modules/dompurify/dist/purify.es.mjs';
 import type { Api } from '../preload.cts';
-import type { ClaudeStatus, FileStates, GithubStatus, ListedSkill, ModelGroup, SessionApproval, SessionEvent, SessionView, SystemPromptView } from '../ipc.ts';
+import type { AppAlert, ClaudeStatus, FileStates, GithubStatus, ListedSkill, ModelGroup, SessionApproval, SessionEvent, SessionView, SystemPromptView } from '../ipc.ts';
 import type { TorStatus } from '../agent/tor.ts';
 import type { GitFile, GitRepoStatus } from '../git.ts';
 import type { ViewedFile } from '../files.ts';
@@ -2153,6 +2153,38 @@ document.addEventListener('mousedown', hideTip);
 document.addEventListener('scroll', hideTip, true);
 window.addEventListener('blur', hideTip);
 
+// ---------- toasts ----------
+// A conversation in the background finished, failed or asks for an approval (the window is
+// in front: else the system notifies). A click opens it; the one shown has none.
+const toasts = document.body.appendChild(div('toasts'));
+const ALERT_LABELS: Record<AppAlert['kind'], string> = { done: 'Terminé', error: 'Erreur', approval: 'Autorisation demandée' };
+function showAlert(a: AppAlert) {
+  if (a.session === currentConversation) return;
+  for (const old of toasts.querySelectorAll<HTMLElement>(`[data-session="${CSS.escape(a.session)}"]`)) old.remove(); // (its latest news)
+  const t = div(`toast toast-${a.kind}`, `<span class="toast-kind"></span><b></b><span class="toast-body"></span><button class="toast-close" aria-label="Fermer">×</button>`);
+  t.dataset.session = a.session;
+  t.querySelector('.toast-kind')!.textContent = ALERT_LABELS[a.kind];
+  t.querySelector('b')!.textContent = a.title;
+  t.querySelector('.toast-body')!.textContent = a.body.replace(/^Autorisation demandée( \([^)]*\))? : /, '');
+  const close = () => {
+    t.classList.add('leaving');
+    setTimeout(() => t.remove(), 180);
+  };
+  t.onclick = (e) => {
+    close();
+    if (!(e.target as HTMLElement).closest('.toast-close')) openConversation(a.session);
+  };
+  // (an approval waits for an answer: it stays; the others go after a while, not while pointed at)
+  let timer = a.kind === 'approval' ? undefined : setTimeout(close, 8000);
+  t.onmouseenter = () => clearTimeout(timer);
+  t.onmouseleave = () => { if (a.kind !== 'approval') timer = setTimeout(close, 3000); };
+  toasts.prepend(t);
+  for (const extra of [...toasts.children].slice(4)) extra.remove();
+}
+const clearAlerts = (session: string) => { for (const t of toasts.querySelectorAll<HTMLElement>(`[data-session="${CSS.escape(session)}"]`)) t.remove(); };
+window.api.onAlert(showAlert);
+window.api.onOpenConversation((id) => openConversation(id)); // (a notification of the system, clicked)
+
 // ---------- sidebar ----------
 let replaying = false;
 let currentConversation: string | null = null;
@@ -2699,6 +2731,7 @@ async function openConversation(id: string) {
     closeViewer();
   }
   showSession(view);
+  clearAlerts(id);
   rememberProject();
   refreshConversations();
   refreshPromptBadge();

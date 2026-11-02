@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, ipcMain, dialog, safeStorage, shell, nativeImage, nativeTheme } from 'electron';
+import { app, BrowserWindow, Menu, Notification, ipcMain, dialog, safeStorage, shell, nativeImage, nativeTheme } from 'electron';
 import { execFile, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -19,7 +19,7 @@ import { gitFileStates, createGithubRepo, findGh, GITHUB_TOKEN_PAGE, gitChangeRe
 import { migrateLegacy, rebuildHistory, rebuildForAction } from './agent/rebuild.ts';
 import { checkTor, torStatus, newCircuits, findTorProxy, requireTor, proxyEnv } from './agent/tor.ts';
 import { errorMessage, isBoolean, isNumber, isRecord, isString, isStringArray, parseJson, rec } from './unknown.ts';
-import type { Args, Channel, ClaudeStatus, ClaudeUsage, Reply, SessionView } from './ipc.ts';
+import type { AppAlert, Args, Channel, ClaudeStatus, ClaudeUsage, Reply, SessionView } from './ipc.ts';
 import type { AgentEvent, ApprovalAnswer, ApprovalRequest, Choice, ConversationFile, ProjectIcon, Provider, PublicSettings, Settings } from './types.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -174,6 +174,8 @@ class Session {
   workingSince: number | null;
   sleeping: boolean;
   usedAt: number;
+  lastAnswer: string;
+  lastError: string;
 
   constructor({ id = ConversationStore.newId(), cwd, offProject = false, conv = null }: { id?: string; cwd: string; offProject?: boolean; conv?: ConversationFile | null }) {
     this.key = id;
@@ -192,6 +194,8 @@ class Session {
     this.workingSince = null; // when the turn under way started
     this.sleeping = false; // its turn under way waits for a background task
     this.usedAt = Date.now();
+    this.lastAnswer = ''; // of the turn under way: what the notification of its end says
+    this.lastError = '';
   }
 
   get running() { return Boolean(this.agent?.running); }
@@ -206,6 +210,8 @@ class Session {
         this.approvals.set(req.id, { req, resolve });
         if (this === active) send('agent:approval', { ...req, session: this.key });
         send('sessions:changed');
+        updateBadge();
+        alertUser(this, 'approval', `Autorisation demandée${req.agentTitle ? ` (${req.agentTitle})` : ''} : ${req.command ?? req.tool}`);
       });
       const onEvent = (ev: AgentEvent) => this.onEvent(ev);
       if (claude) this.agent = new ClaudeAgent({ cwd: this.cwd, executable: findClaude(), approve, skillsDir: userSkills() }).on('event', onEvent);
@@ -256,6 +262,10 @@ class Session {
       else if (ev.type === 'assistant_end') this.partial = null;
     }
     if (this === active) send('agent:event', { ...ev, session: this.key });
+    if (!ev.agentId && ev.type === 'final') this.lastAnswer = ev.text;
+    if (!ev.agentId && ev.type === 'error') this.lastError = ev.message;
+    if (ev.type === 'turn_start') this.lastAnswer = this.lastError = '';
+    if (ev.type === 'turn_end') this.alertEnd(ev.reason);
     if (ev.type === 'turn_start' || ev.type === 'turn_end') {
       this.finished = ev.type === 'turn_end';
       this.failed = ev.type === 'turn_end' && ev.reason === 'error';
@@ -339,6 +349,15 @@ class Session {
     for (const { resolve } of this.approvals.values()) resolve(value);
     if (this.approvals.size) send('sessions:changed');
     this.approvals.clear();
+    updateBadge();
+  }
+
+  /** Its turn ended: said to the user, unless they stopped it. */
+  alertEnd(reason: string) {
+    if (reason === 'stopped') return;
+    if (reason === 'error') return alertUser(this, 'error', this.lastError || 'Erreur.');
+    const stop = TURN_STOPS[reason];
+    alertUser(this, stop ? 'error' : 'done', stop ?? (this.lastAnswer.replace(/\s+/g, ' ').trim().slice(0, 200) || 'Terminé.'));
   }
 
   /** Gone from memory: idle, saved. Its folder goes too if it is outside projects and was never used. */
@@ -352,6 +371,58 @@ class Session {
 }
 
 const SAVED_DURING_TURN = new Set<string>(['assistant_end', 'action_end', 'compaction', 'error', 'notice']);
+const TURN_STOPS: Record<string, string> = {
+  max_steps: 'Arrêté : limite d’étapes atteinte.',
+  loop: 'Arrêté : le modèle tournait en boucle.',
+  empty: 'Arrêté : le modèle ne répond plus.',
+};
+
+// ---------- notifications ----------
+// A conversation finished, failed or asks for an approval: the user hears of it where they
+// are not looking. Window in front: a toast, for a conversation in the background. Window
+// behind: the system's notification, whose click shows the conversation. The dock's badge
+// counts the approvals waiting.
+const notifications = new Map<Notification, string>(); // shown -> its session (kept: a collected one loses its click)
+
+function alertUser(s: Session, kind: AppAlert['kind'], body: string) {
+  if (settings.config.notifications === false) return;
+  const focused = Boolean(win && !win.isDestroyed() && win.isFocused());
+  if (focused && s === active) return; // (in view)
+  const title = s.conv?.title || 'Nouvelle conversation';
+  if (focused) return void send('ui:alert', { session: s.key, kind, title, body } satisfies AppAlert);
+  if (!Notification.isSupported()) return;
+  const n = new Notification({ title, body, silent: kind === 'done' });
+  n.on('click', () => {
+    notifications.delete(n);
+    showConversation(s.key);
+  });
+  n.on('close', () => notifications.delete(n));
+  notifications.set(n, s.key);
+  n.show();
+  if (kind !== 'done') app.dock?.bounce('informational');
+}
+
+/** The notifications of a conversation the user now sees. */
+function clearNotifications(key: string) {
+  for (const [n, k] of notifications) if (k === key) { n.close(); notifications.delete(n); }
+}
+
+/** The window in front, on this conversation. */
+function showConversation(key: string) {
+  if (!win || win.isDestroyed()) {
+    win = createWindow();
+    win.webContents.once('did-finish-load', () => send('ui:openConversation', key));
+  } else send('ui:openConversation', key);
+  if (win.isMinimized()) win.restore();
+  win.show();
+  app.focus({ steal: true });
+}
+
+function updateBadge() {
+  let n = 0;
+  for (const s of sessions.values()) n += s.approvals.size;
+  app.setBadgeCount(n);
+}
 
 function removeIfEmpty(dir: string) {
   try { if (!fs.readdirSync(dir).length) fs.rmdirSync(dir); } catch {}
@@ -381,6 +452,7 @@ function activate(s: Session) {
   }
   s.unread = 0;
   s.usedAt = Date.now();
+  clearNotifications(s.key);
   if (prev && prev !== s && !prev.conv && !prev.running) prev.close();
   // Idle sessions beyond the limit: saved and dropped (reloaded from disk when opened).
   const idle = [...sessions.values()].filter((x) => x !== active && !x.running && !x.approvals.size).sort((a, b) => b.usedAt - a.usedAt);
@@ -1055,6 +1127,7 @@ handle('agent:approve', [isObject], ({ id, ok, always, reason }) => {
     s.approvals.delete(id);
     send('sessions:changed');
   }
+  updateBadge();
   return publicSettings();
 });
 
@@ -1082,6 +1155,8 @@ function createWindow() {
     saveAll();
     if (details.reason !== 'clean-exit' && win && !win.isDestroyed()) win.reload();
   });
+  // Back to the window: what it shows is seen.
+  window.on('focus', () => { if (active) clearNotifications(active.key); });
   window.on('unresponsive', () => {
     logError('unresponsive', 'window not responding');
     saveAll();

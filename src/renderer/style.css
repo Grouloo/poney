@@ -282,6 +282,25 @@ details.thinking div { white-space: pre-wrap; border-left: 2px solid var(--borde
 .tip.show { opacity: 1; }
 .tip.side { max-width: 360px; max-height: 40vh; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; }
 
+/* toasts: news of a conversation in the background, under the bar (it moves the window) */
+.toasts { position: fixed; top: 56px; right: 14px; z-index: 95; display: flex; flex-direction: column; gap: 8px; width: 320px; pointer-events: none; }
+.toast {
+  position: relative; display: grid; gap: 2px; padding: 9px 30px 10px 12px; border-radius: 10px; cursor: pointer; pointer-events: auto;
+  -webkit-app-region: no-drag; background: var(--sheet-solid); border: 1px solid var(--glass-edge); box-shadow: var(--float);
+  border-left: 3px solid var(--ok); font: 13px/1.4 var(--ui); color: var(--text);
+  animation: toast-in 0.2s ease-out;
+}
+.toast-error { border-left-color: var(--err); }
+.toast-approval { border-left-color: var(--warn); }
+.toast.leaving { opacity: 0; transform: translateX(16px); transition: opacity 0.18s, transform 0.18s; }
+.toast-kind { font-size: 12px; color: var(--muted); }
+.toast b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.toast-body { color: var(--muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.toast-approval .toast-body { font-family: var(--mono); font-size: 12px; }
+.toast-close { position: absolute; top: 5px; right: 6px; border: none; background: none; color: var(--muted); font-size: 16px; line-height: 1; padding: 2px 5px; border-radius: 5px; }
+.toast-close:hover { color: var(--text); background: var(--panel-2); }
+@keyframes toast-in { from { opacity: 0; transform: translateX(16px); } }
+
 /* context menu (right click): actions and their shortcuts */
 .ctx-menu {
   position: fixed; inset: auto; margin: 0; z-index: 90; min-width: 240px; padding: 4px; border-radius: 10px; color: var(--text);
