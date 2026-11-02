@@ -1892,34 +1892,76 @@ function onApproval(req: SessionApproval) {
 // The agent's questions (<ask>): proposed answers to pick (one, or several), and a field
 // for the user's own words under each. The turn waits for them like an approval. They
 // take the place of the message field (its draft is kept); the card says it waits.
+// One question at a time, with a stepper: going back keeps the answers, and so does
+// drawing the conversation again (another one shown, then this one).
+const askDrafts = new Map<number, { answers: QuestionAnswer[]; step: number }>();
+
 function showQuestionnaire(card: HTMLElement, id: number, questions: Question[]) {
   closeQuestionnaire();
   if (!card.querySelector('.ask-wait')) card.appendChild(div('ask-wait', 'En attente de vos réponses, dans la zone de saisie'));
   const form = document.createElement('form');
   form.className = 'questionnaire';
   form.dataset.id = String(id);
-  form.innerHTML = questions.map((q, i) => `<fieldset class="q"><legend>${esc(q.question)}${q.multiple ? ' <span class="muted">(plusieurs choix possibles)</span>' : ''}</legend>${
-    q.options.map((o) => `<label class="q-opt"><input type="${q.multiple ? 'checkbox' : 'radio'}" name="q${i}" value="${esc(o)}"><span>${esc(o)}</span></label>`).join('')
-  }<input type="text" class="q-other" name="other${i}" placeholder="${q.options.length ? 'Autre réponse ou précision…' : 'Votre réponse…'}"></fieldset>`).join('') +
-    '<div class="q-actions"><button type="button" class="ghost q-skip">Ignorer</button><button type="submit" class="primary">Envoyer les réponses</button></div>';
+  const n = questions.length;
+  form.innerHTML = `<div class="q-steps">${questions.map((q, i) => `<button type="button" class="q-step" data-step="${i}" title="${esc(q.question)}">${i + 1}</button>`).join('<span class="q-link"></span>')}<span class="q-count muted"></span></div>` +
+    questions.map((q, i) => `<fieldset class="q" data-step="${i}"><legend>${esc(q.question)}${q.multiple ? ' <span class="muted">(plusieurs choix possibles)</span>' : ''}</legend>${
+      q.options.map((o) => `<label class="q-opt"><input type="${q.multiple ? 'checkbox' : 'radio'}" name="q${i}" value="${esc(o)}"><span>${esc(o)}</span></label>`).join('')
+    }<input type="text" class="q-other" name="other${i}" placeholder="${q.options.length ? 'Autre réponse ou précision…' : 'Votre réponse…'}"></fieldset>`).join('') +
+    '<div class="q-actions"><button type="button" class="ghost q-skip">Ignorer</button><span class="spacer-row"></span><button type="button" class="ghost q-prev">Précédent</button><button type="submit" class="primary q-next"></button></div>';
+  const field = (i: number) => form.querySelector<HTMLInputElement>(`input[name="other${i}"]`)!;
+  const answers = (): QuestionAnswer[] => questions.map((_, i) => ({
+    choices: [...form.querySelectorAll<HTMLInputElement>(`input[name="q${i}"]:checked`)].map((x) => x.value),
+    other: field(i).value.trim(),
+  }));
+  // (what was answered before this questionnaire was drawn again)
+  const kept = askDrafts.get(id);
+  kept?.answers.forEach((a, i) => {
+    form.querySelectorAll<HTMLInputElement>(`input[name="q${i}"]`).forEach((x) => { x.checked = a.choices.includes(x.value); });
+    if (field(i)) field(i).value = a.other;
+  });
+  let step = Math.min(kept?.step ?? 0, n - 1);
+  const keep = () => askDrafts.set(id, { answers: answers(), step });
+  const go = (to: number) => {
+    step = Math.max(0, Math.min(n - 1, to));
+    const given = answers();
+    form.querySelectorAll<HTMLElement>('.q').forEach((f, i) => f.classList.toggle('hidden', i !== step));
+    form.querySelectorAll<HTMLElement>('.q-step').forEach((b, i) => {
+      b.classList.toggle('current', i === step);
+      b.classList.toggle('done', i !== step && Boolean(given[i].choices.length || given[i].other));
+    });
+    form.querySelector<HTMLElement>('.q-count')!.textContent = `Question ${step + 1} sur ${n}`;
+    form.querySelector<HTMLButtonElement>('.q-prev')!.disabled = step === 0;
+    form.querySelector<HTMLElement>('.q-next')!.textContent = step === n - 1 ? 'Envoyer les réponses' : 'Suivant';
+    form.querySelector<HTMLElement>('.q-steps')!.classList.toggle('hidden', n < 2);
+    form.querySelector<HTMLElement>('.q-prev')!.classList.toggle('hidden', n < 2);
+    keep();
+    (form.querySelector<HTMLElement>(`.q[data-step="${step}"] input:checked`) ?? form.querySelector<HTMLElement>(`.q[data-step="${step}"] input`))?.focus();
+    fitComposer();
+  };
   // (a radio picked again is unpicked: a single choice can be left empty)
   form.querySelectorAll<HTMLInputElement>('input[type=radio]').forEach((r) => {
     r.onpointerdown = () => { r.dataset.was = String(r.checked); };
-    r.onclick = () => { if (r.dataset.was === 'true') r.checked = false; };
+    r.onclick = () => { if (r.dataset.was === 'true') { r.checked = false; keep(); } };
   });
-  const send = (answers: QuestionAnswer[] | null) => { closeQuestionnaire(); window.api.answer(id, answers); };
+  form.oninput = keep;
+  form.onchange = keep;
+  const send = (given: QuestionAnswer[] | null) => { askDrafts.delete(id); closeQuestionnaire(); window.api.answer(id, given); };
+  // (Enter, or the button: the next question, then sending on the last one)
   form.onsubmit = (e) => {
     e.preventDefault();
-    send(questions.map((_, i) => ({
-      choices: [...form.querySelectorAll<HTMLInputElement>(`input[name="q${i}"]:checked`)].map((x) => x.value),
-      other: form.querySelector<HTMLInputElement>(`input[name="other${i}"]`)!.value.trim(),
-    })));
+    if (step < n - 1) go(step + 1);
+    else send(answers());
   };
+  form.querySelector<HTMLElement>('.q-prev')!.onclick = () => go(step - 1);
+  form.querySelectorAll<HTMLElement>('.q-step').forEach((b) => { b.onclick = () => go(Number(b.dataset.step)); });
   form.querySelector<HTMLElement>('.q-skip')!.onclick = () => send(null);
+  form.onkeydown = (e) => {
+    // (Escape in a field: back to the previous question)
+    if (e.key === 'Escape' && step > 0) { e.preventDefault(); go(step - 1); }
+  };
   input.before(form);
   document.querySelector<HTMLElement>('.composer-box')!.classList.add('asking');
-  form.querySelector<HTMLElement>('input')?.focus();
-  fitComposer();
+  go(step);
   scrollDown(true);
 }
 
