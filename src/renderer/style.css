@@ -452,6 +452,25 @@ body.no-sidebar .deck { width: 0; margin-right: -12px; opacity: 0; transform: tr
   100% { transform: translateX(22px) scale(0.965); z-index: 1; filter: brightness(0.9); }
 }
 .pane { flex: 1; overflow-y: auto; padding: 8px; min-height: 0; }
+/* (in the sidebar cards, the list runs on under the head and the foot, which blur it as it passes:
+   --head-h and --foot-h are their heights, see app.js) */
+#sidebar > .pane, #filesBar > .pane {
+  margin: calc(-1 * var(--head-h, 0px)) 0 calc(-1 * var(--foot-h, 0px));
+  padding-top: calc(8px + var(--head-h, 0px)); padding-bottom: calc(8px + var(--foot-h, 0px));
+}
+#sidebar > .pane::-webkit-scrollbar-track, #filesBar > .pane::-webkit-scrollbar-track { margin: var(--head-h, 0px) 0 var(--foot-h, 0px); }
+#sidebar > :not(.pane), #filesBar > :not(.pane) { position: relative; z-index: 2; }
+#sidebar::before, #sidebar::after, #filesBar::before, #filesBar::after {
+  content: ''; position: absolute; left: 0; right: 0; z-index: 1; pointer-events: none; backdrop-filter: blur(12px);
+}
+#sidebar::before, #filesBar::before {
+  top: 0; height: var(--head-h, 0px);
+  -webkit-mask-image: linear-gradient(to top, transparent, #000 12px); mask-image: linear-gradient(to top, transparent, #000 12px);
+}
+#sidebar::after, #filesBar::after {
+  bottom: 0; height: var(--foot-h, 0px);
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 12px); mask-image: linear-gradient(to bottom, transparent, #000 12px);
+}
 #convPane { position: relative; overflow-x: hidden; }
 .retry-row { margin: 6px 0 12px; }
 #usageGauge { cursor: default; }

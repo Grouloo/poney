@@ -86,6 +86,19 @@ new ResizeObserver(() => {
 // (and under the top bar, which blurs it as it passes: --topbar-h is the bar's height)
 const topbar = document.querySelector<HTMLElement>('.topbar')!;
 new ResizeObserver(() => document.body.style.setProperty('--topbar-h', `${topbar.offsetHeight}px`)).observe(topbar);
+// The sidebar cards' lists likewise scroll under their head and foot: --head-h and --foot-h are
+// the heights of what lies above and below the pane shown.
+for (const card of document.querySelectorAll<HTMLElement>('#sidebar, #filesBar')) {
+  const kids = [...card.children].filter((el): el is HTMLElement => el instanceof HTMLElement);
+  const fit = () => {
+    const at = kids.findIndex((el) => el.classList.contains('pane') && !el.classList.contains('hidden'));
+    const height = (els: HTMLElement[]) => els.reduce((sum, el) => sum + el.offsetHeight, 0);
+    card.style.setProperty('--head-h', `${height(kids.slice(0, at))}px`);
+    card.style.setProperty('--foot-h', `${height(kids.slice(at + 1).filter((el) => !el.classList.contains('pane')))}px`);
+  };
+  const watch = new ResizeObserver(fit);
+  for (const el of kids) watch.observe(el);
+}
 
 // ---------- helpers ----------
 function scrollDown(force?: boolean) {
