@@ -141,15 +141,15 @@ function shortPath(p: string) {
 // Outside any project, the agent works in a folder of the conversation's own.
 const offMode = () => Boolean(settings.active?.offProject);
 const activeDir = () => settings.active?.cwd || '';
-// The files card may look at another project than the conversation's: its files and Git
-// then, the chat greyed until the user comes back to it.
+// The files card shows the project listed in the other card (the conversation's when all
+// are listed). Another than the conversation's: its files and Git, the chat greyed until
+// the user comes back to it. ('Hors projet' there: no folder to show.)
 let observed: string | null = null;
-let observedFor: string | null = null; // (the conversation it was chosen from)
-const viewDir = () => observed ?? activeDir();
-const viewOff = () => !observed && offMode();
+const viewDir = () => (observed === OFF_KEY ? '' : observed ?? activeDir());
+const viewOff = () => (observed ? observed === OFF_KEY : offMode());
 
 function renderSettings() {
-  if (observed && settings.active?.session !== observedFor) endObserving(); // (main forgot it too)
+  syncView();
   const shellOn = settings.config.shellEnabled !== false;
   $<HTMLInputElement>('webEnabled').checked = settings.config.webEnabled !== false;
   $<HTMLInputElement>('shellEnabled').checked = shellOn;
@@ -2327,6 +2327,7 @@ function setProjectFilter(key: string, dir = 0) {
   // A new conversation not started yet follows the project listed.
   if ($('empty') && key !== ALL && key !== activeProject()) newConversationIn(key === OFF_KEY ? null : key, { keepText: true });
   refreshConversations({ slide: dir });
+  syncView();
 }
 
 /** From anywhere: the card of the conversations in front, at this place among the dots. */
@@ -2344,8 +2345,8 @@ function stepProject(dir: number) {
   setProjectFilter(keys[(keys.indexOf(projectFilter) + dir + keys.length) % keys.length], dir);
 }
 
-/** The project of the files card: the one observed, else the conversation's. */
-const viewProject = () => observed ?? activeProject();
+/** The project of the files card: the one listed, or the conversation's when all are. */
+const viewProject = () => (projectFilter === ALL ? activeProject() : projectFilter);
 function renderPicker() {
   const key = viewProject();
   const picker = $<HTMLButtonElement>('viewPicker');
@@ -2357,7 +2358,7 @@ function renderPicker() {
 function renderProjectBar(keys: string[]) {
   $<HTMLButtonElement>('projectPicker').querySelector<HTMLElement>('.picker-icon')!.innerHTML = projectIcon(projectFilter);
   $<HTMLButtonElement>('projectPicker').querySelector<HTMLElement>('.picker-name')!.textContent = projectLabel(projectFilter);
-  renderPicker();
+  syncView();
   const dots = $('projectDots');
   dots.innerHTML = '';
   for (const key of keys) {
@@ -2406,15 +2407,15 @@ function closeProjectMenu() {
 function openViewMenu() {
   const menu = $('viewMenu');
   menu.innerHTML = '';
-  // (outside any project, each conversation has its own folder: only the one shown is there)
   const own = activeProject();
-  for (const key of projectKeys().filter((k) => k !== ALL && (k !== OFF_KEY || own === OFF_KEY))) {
+  const keys = projectKeys().filter((k) => k !== ALL);
+  for (const key of keys) {
     const row = document.createElement('div');
     row.className = `pm-row${key === viewProject() ? ' selected' : ''}`;
     row.innerHTML = `<span class="pm-icon">${projectGlyph(key)}</span><span class="pm-name"></span>${key === own ? '<span class="pm-note">conversation</span>' : ''}<button class="pm-edit" type="button" title="Paramètres du projet (icône, suppression)">⋯</button>`;
     row.querySelector<HTMLElement>('.pm-name')!.textContent = projectLabel(key);
     row.title = key === OFF_KEY ? '' : key;
-    row.onclick = () => { closeViewMenu(); observe(key === own ? null : key); };
+    row.onclick = () => { closeViewMenu(); setProjectFilter(key, Math.sign(keys.indexOf(key) - keys.indexOf(viewProject() ?? ''))); };
     const edit = row.querySelector<HTMLElement>('.pm-edit');
     if (edit) edit.onclick = (e) => { e.stopPropagation(); closeViewMenu(); openProjectSettings(key); };
     menu.appendChild(row);
@@ -2440,27 +2441,33 @@ $('viewMenu').onclick = (e) => e.stopPropagation();
 document.addEventListener('click', closeViewMenu);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeViewMenu(); });
 
-/** Looks at another project in the files card (null: the conversation's). */
-async function observe(dir: string | null) {
-  if (dir === observed) return;
-  observed = dir;
-  observedFor = settings.active?.session ?? null;
-  await window.api.observeProject(dir);
-  greyChat(Boolean(dir));
+let shownSession: string | null | undefined; // (undefined: before the first conversation)
+/** The files card on the project it should show; the chat greyed when it is not the conversation's. */
+async function syncView() {
+  const session = settings.active?.session ?? null;
+  const own = activeProject();
+  if (session !== shownSession) {
+    // Another conversation shown: the user is back to it, the list on its project (unless all are listed).
+    const opened = shownSession !== undefined;
+    shownSession = session;
+    if (opened && own && projectFilter !== ALL && projectFilter !== own) return setProjectFilter(own);
+  }
   renderPicker();
+  // (on the page of a new conversation, the project chosen is where it goes: nothing to grey)
+  const key = viewProject();
+  const next = key && key !== own && !$('empty') ? key : null;
+  if (next === observed) return;
+  observed = next;
+  greyChat(Boolean(next));
+  await window.api.observeProject(next === OFF_KEY ? null : next);
   closeViewer(); // (what was open belongs to the other project)
   closeDiffPanel();
   expanded.clear();
   refreshTree();
 }
-/** Back to the conversation: the files card follows it again. */
+/** Back to the conversation: both cards on its project. */
 function endObserving() {
-  if (!observed) return;
-  if (settings.active?.session === observedFor) return void observe(null);
-  // (another conversation is shown: main already looks at it)
-  observed = null;
-  greyChat(false);
-  renderPicker();
+  if (observed) setProjectFilter(activeProject() ?? ALL);
 }
 const chat = document.querySelector<HTMLElement>('.chat')!;
 /** Greyed, out of reach of the keyboard: a click on it only brings it back (its controls wait for the next one). */
