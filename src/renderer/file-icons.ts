@@ -71,6 +71,11 @@ export function fileIconSvg(name: string): string {
   return svg(color, paths);
 }
 
+/** The conversation's private folder (.poney/): a folder with a lock. */
+export function privateFolderIconSvg(): string {
+  return svg('#7aa2f7', '<path d="M2 4a1 1 0 0 1 1-1h3l1.5 1.5H13a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/><rect x="6" y="8.2" width="4" height="3" rx=".5"/><path d="M6.8 8.2V7.3a1.2 1.2 0 0 1 2.4 0v.9"/>');
+}
+
 /** The icon of a folder, open or closed, as SVG. */
 export function folderIconSvg(open: boolean): string {
   return svg('#e6b450', open

@@ -37,6 +37,8 @@ interface AgentOptions {
   shared?: SharedFiles;
   role?: 'main' | 'sub';
   offProject?: boolean;
+  /** The conversation's private folder, .poney/ for the model (see tools.ts). */
+  scratch?: string | null;
   triage?: boolean;
   skillsDir?: string | null;
 }
@@ -155,6 +157,7 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
   triageByDefault: boolean;
   cwd: string;
   offProject: boolean;
+  scratch: string | null;
   role: 'main' | 'sub';
   config: Config;
   approve: Approve;
@@ -192,11 +195,12 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
   now?: () => Date;
   stallMs?: number;
 
-  constructor({ cwd, config, approve, shared, role = 'main', offProject = false, triage = false, skillsDir = null }: AgentOptions) {
+  constructor({ cwd, config, approve, shared, role = 'main', offProject = false, scratch = null, triage = false, skillsDir = null }: AgentOptions) {
     super();
     this.triageByDefault = triage; // the assessment before acting when the steps do not say (the app: on)
     this.cwd = cwd;
     this.offProject = offProject; // a conversation outside any project: cwd is its own folder
+    this.scratch = scratch;
     this.role = role; // 'main' or 'sub' (a sub-agent cannot start sub-agents)
     this.config = { ...DEFAULT_CONFIG, ...config, ...(role === 'sub' ? { subagentsEnabled: false } : {}) };
     this.approve = approve || (async () => true);
@@ -276,6 +280,7 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
     return buildSystemPrompt({
       cwd: this.cwd,
       offProject: this.offProject,
+      scratch: Boolean(this.scratch),
       memory: this.config.memoryEnabled !== false,
       platform: os.platform() === 'win32' ? `Windows ${os.arch()}, commands run in cmd.exe` : `${os.platform()} ${os.arch()}`,
       ...(await this.loadProjectNotes()),
@@ -623,6 +628,7 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
     const child = new Agent({
       cwd: this.cwd,
       offProject: this.offProject,
+      scratch: this.scratch, // the same private folder: notes go both ways
       config: this.config,
       role: 'sub',
       shared: this.shared,
@@ -941,7 +947,7 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
               const key = `${live.start}:${k}`;
               if (!pair.oldClosed || oldChecks.has(key)) continue;
               oldChecks.add(key);
-              const r = await checkOldBlock(this.cwd, live.path, pair.old);
+              const r = await checkOldBlock(this.cwd, live.path, pair.old, this.scratch);
               if (r.ok) this.emit('event', { type: 'edit_located', id, pair: k, path: r.rel, startLine: r.startLine, endLine: r.endLine });
               else { earlyEdit = { path: live.path, old: pair.old, message: r.message, calledAs: calledAs(visible.slice(live.start)) }; break; }
             }
@@ -1528,6 +1534,7 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
             shared: this.shared,
             readVersions: this.readVersions,
             virtualFiles: this.virtualFiles,
+            scratch: this.scratch,
             onOutput: (t) => this.emit('event', { type: 'action_output', id: actId, text: t }),
           });
           this.emit('event', { type: 'action_end', id: actId, ok: r.ok, output: r.output, diff: r.diff, meta: r.meta });

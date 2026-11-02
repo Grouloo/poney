@@ -154,9 +154,10 @@ export function isToolEnabled(tool: string, config: Partial<Config>): boolean {
   return !flag || config[flag] !== false;
 }
 
-export function buildSystemPrompt({ cwd, offProject = false, memory = true, parallel = true, platform, projectNotes, notesFile = null, testCommand, shell = true, web = true, subagents = false, subagentRole = false }: {
+export function buildSystemPrompt({ cwd, offProject = false, scratch = false, memory = true, parallel = true, platform, projectNotes, notesFile = null, testCommand, shell = true, web = true, subagents = false, subagentRole = false }: {
   cwd: string;
   offProject?: boolean;
+  scratch?: boolean;
   memory?: boolean;
   parallel?: boolean;
   platform: string;
@@ -274,7 +275,7 @@ Assistant: Created hello.py, it prints "hi". Run it with: python3 hello.py`;
     : offProject ? 'You are Poney, a coding assistant.' : 'You are Poney, a coding assistant working with the user on their project.';
   const where = offProject
     ? `There is no project: you work in a private folder of this conversation, ${cwd} (${platform}). Create the files you need there.`
-    : `You work inside the folder ${cwd} (${platform}).`;
+    : `You work inside the folder ${cwd} (${platform}).${scratch ? ' .poney/ is your private folder for this conversation, outside the project and Git: put your notes and scratch files there.' : ''}`;
   return `${who} ${where} Each user message starts with the date and time it was sent.
 You act by writing tool tags. The results come back in the next message.
 

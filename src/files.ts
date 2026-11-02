@@ -1,7 +1,7 @@
 // Read-only file access for the file browser and viewer.
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { IGNORED_DIRS, resolveInside } from './agent/tools.ts';
+import { IGNORED_DIRS, SCRATCH, resolveInside } from './agent/tools.ts';
 
 const IMAGE_TYPES: Record<string, string | undefined> = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
@@ -10,19 +10,27 @@ const IMAGE_TYPES: Record<string, string | undefined> = {
 const MAX_TEXT = 2 * 1024 * 1024;
 const MAX_IMAGE = 10 * 1024 * 1024;
 
-export async function listDir(cwd: string | null | undefined, rel = '.') {
+/**
+ * A folder's entries. At the root, the conversation's private folder (.poney/, see
+ * tools.ts) comes first once the model has put something there.
+ */
+export async function listDir(cwd: string | null | undefined, rel = '.', scratch: string | null = null) {
   if (!cwd) return [];
-  const { abs } = resolveInside(cwd, rel || '.');
+  const { abs, rel: clean } = resolveInside(cwd, rel || '.', scratch);
   const entries = await fs.readdir(abs, { withFileTypes: true });
-  return entries
-    .filter((e) => e.name !== '.DS_Store')
+  const list = entries
+    .filter((e) => e.name !== '.DS_Store' && !(clean === '.' && scratch && e.name === SCRATCH))
     .map((e) => ({
       name: e.name,
-      path: path.relative(cwd, path.join(abs, e.name)).split(path.sep).join('/'),
+      path: clean === '.' ? e.name : `${clean}/${e.name}`,
       dir: e.isDirectory(),
       ignored: e.isDirectory() && IGNORED_DIRS.has(e.name),
+      scratch: false,
     }))
     .sort((a, b) => (Number(b.dir) - Number(a.dir)) || a.name.localeCompare(b.name, undefined, { numeric: true }));
+  if (clean !== '.' || !scratch) return list;
+  const used = await fs.readdir(scratch).then((names) => names.some((n) => n !== '.DS_Store'), () => false);
+  return used ? [{ name: SCRATCH, path: SCRATCH, dir: true, ignored: false, scratch: true }, ...list] : list;
 }
 
 export type ViewedFile = {
@@ -31,8 +39,8 @@ export type ViewedFile = {
   mtime: number;
 } & ({ kind: 'large' | 'binary' } | { kind: 'image'; src: string } | { kind: 'text'; content: string; truncated: boolean });
 
-export async function readFileForViewer(cwd: string, rel: string): Promise<ViewedFile> {
-  const { abs, rel: clean } = resolveInside(cwd, rel);
+export async function readFileForViewer(cwd: string, rel: string, scratch: string | null = null): Promise<ViewedFile> {
+  const { abs, rel: clean } = resolveInside(cwd, rel, scratch);
   const st = await fs.stat(abs);
   const ext = path.extname(abs).toLowerCase();
   const base = { path: clean, size: st.size, mtime: st.mtimeMs };

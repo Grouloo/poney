@@ -112,7 +112,7 @@ const lineHas = (line: string, term: string) => (term.includes(' ') ? fold(line)
  * weigh more), by the words in their path, and by definitions (def/class/
  * function… or a heading) that contain a word. Returns the result text.
  */
-export async function rankedSearch(cwd: string, dir: string, query: string, { ignoredDirs, maxChars = 3000, maxFiles = 8, linesPerFile = 3 }: { ignoredDirs?: Set<string>; maxChars?: number; maxFiles?: number; linesPerFile?: number } = {}) {
+export async function rankedSearch(cwd: string, dir: string, query: string, { ignoredDirs, maxChars = 3000, maxFiles = 8, linesPerFile = 3, prefix = '' }: { ignoredDirs?: Set<string>; maxChars?: number; maxFiles?: number; linesPerFile?: number; prefix?: string } = {}) {
   const terms = codeTerms(query);
   if (!terms.length) return { output: 'Give a few keywords, like <search>load config</search>.', count: 0 };
   const files = await projectFiles(cwd, dir, ignoredDirs);
@@ -150,7 +150,7 @@ export async function rankedSearch(cwd: string, dir: string, query: string, { ig
   const ranked = found.sort((a, b) => b.score - a.score).slice(0, maxFiles);
   let out = `${found.length} file(s) of ${files.length} match ${terms.map((t) => `"${t}"`).join(' ')}; the most relevant:`;
   for (const f of ranked) {
-    let piece = `\n${f.rel} (${f.total} match${f.total > 1 ? 'es' : ''})`;
+    let piece = `\n${prefix}${f.rel} (${f.total} match${f.total > 1 ? 'es' : ''})`;
     for (const b of f.best) piece += `\n  ${b.n}: ${b.line}`;
     if (out.length + piece.length > maxChars) break;
     out += piece;

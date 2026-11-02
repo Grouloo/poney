@@ -15,6 +15,7 @@ import type { LocalModel } from './types.ts';
 import { addClaudeAccount, addServer, CLAUDE, claudeAccountOf, loadProviders, modelConfig, providerOf, removeProvider, savedConfig, unavailable, updateProvider } from './providers.ts';
 import { ConversationStore, moveAppData } from './conversations.ts';
 import { listDir, readFileForViewer } from './files.ts';
+import { resolveInside } from './agent/tools.ts';
 import { gitFileStates, createGithubRepo, findGh, GITHUB_TOKEN_PAGE, gitChangeRemote, githubAccount, gitStatus, gitConnect, gitDiff, gitFetch, gitRemote, gitRemoveRemote, gitSync, readyGh } from './git.ts';
 import { migrateLegacy, rebuildHistory, rebuildForAction } from './agent/rebuild.ts';
 import { checkTor, torStatus, newCircuits, findTorProxy, requireTor, proxyEnv } from './agent/tor.ts';
@@ -153,6 +154,9 @@ const send = (channel: string, payload?: unknown) => win && !win.isDestroyed() &
 
 const userSkills = () => path.join(app.getPath('userData'), 'skills');
 const offProjectRoot = () => path.join(app.getPath('userData'), 'off-project');
+/** A conversation's private folder, .poney/ for the local models (created on first use). */
+const scratchRoot = () => path.join(app.getPath('userData'), 'scratch');
+const scratchOf = (id: string) => path.join(scratchRoot(), id);
 
 const LOCAL_ONLY = 'Cette action n’existe pas pour les modèles Claude.';
 
@@ -222,6 +226,7 @@ class Session {
         this.agent = new Agent({
           cwd: this.cwd,
           offProject: this.offProject,
+          scratch: scratchOf(this.key),
           triage: true, // the assessment before acting, on unless the conversation's steps turn it off
           skillsDir: userSkills(),
           config: settings.config,
@@ -441,6 +446,12 @@ function pruneOffProject() {
       if (!fs.existsSync(path.join(store.dir, `${id}.json`))) removeIfEmpty(path.join(offProjectRoot(), id));
     }
   } catch {}
+  // Private folders whose conversation is gone (never saved, or deleted).
+  try {
+    for (const id of fs.readdirSync(scratchRoot())) {
+      if (!fs.existsSync(path.join(store.dir, `${id}.json`))) fs.rmSync(scratchOf(id), { recursive: true, force: true });
+    }
+  } catch {}
 }
 
 /** Makes a session the one shown. The previous one goes on; if it was empty and idle, it goes away. */
@@ -472,6 +483,8 @@ const activeCwd = () => active?.cwd ?? settings.workspace;
 // Another project looked at in the files card (its files and Git), while the conversation stays.
 let observed: string | null = null;
 const viewCwd = () => observed ?? activeCwd();
+/** The private folder shown with the files: the conversation's, local models only. */
+const viewScratch = () => (!observed && active && active.choice.engine !== 'claude' ? scratchOf(active.key) : null);
 /** The active session, a new one in the current project if there is none. */
 const current = () => active ?? activate(new Session({ cwd: settings.workspace }));
 const saveAll = () => { for (const s of sessions.values()) s.keepDraft(); };
@@ -965,6 +978,7 @@ handle('conversations:delete', [isString], (id) => {
     }
   }
   store.delete(id);
+  fs.rmSync(scratchOf(id), { recursive: true, force: true });
   // Outside any project, the conversation's folder goes with it (only that folder).
   if (removed?.offProject && path.dirname(removed.workspace) === offProjectRoot()) {
     fs.rmSync(removed.workspace, { recursive: true, force: true });
@@ -1009,7 +1023,10 @@ handle('project:delete', [isString], (dir) => {
     sessions.delete(s.key);
     if (s === active) shown = true;
   }
-  for (const id of ids) store.delete(id);
+  for (const id of ids) {
+    store.delete(id);
+    fs.rmSync(scratchOf(id), { recursive: true, force: true });
+  }
   settings.recent = (settings.recent || []).filter((d) => d !== dir);
   settings.projectIcons = { ...settings.projectIcons };
   delete settings.projectIcons[dir];
@@ -1110,10 +1127,10 @@ handle('files:observe', [(v: unknown): v is string | null => v === null || isStr
   const known = dir && (settings.recent.includes(dir) || dir === settings.workspace || store.listAll().some((c) => c.workspace === dir && !c.offProject));
   observed = known && dir !== activeCwd() ? dir : null;
 });
-handle('files:list', [optional(isString)], (rel) => listDir(viewCwd(), rel));
-handle('files:read', [isString], (rel) => readFileForViewer(viewCwd(), rel));
-handle('files:openExternal', [isString], (rel) => shell.openPath(path.join(viewCwd(), rel)));
-handle('files:reveal', [isString], (rel) => shell.showItemInFolder(path.join(viewCwd(), rel)));
+handle('files:list', [optional(isString)], (rel) => listDir(viewCwd(), rel, viewScratch()));
+handle('files:read', [isString], (rel) => readFileForViewer(viewCwd(), rel, viewScratch()));
+handle('files:openExternal', [isString], (rel) => shell.openPath(resolveInside(viewCwd(), rel, viewScratch()).abs));
+handle('files:reveal', [isString], (rel) => shell.showItemInFolder(resolveInside(viewCwd(), rel, viewScratch()).abs));
 // (git goes through the network like a terminal command: the same Tor setting)
 const gitEnv = async () => settings.config.torEnabled && settings.config.torShell ? proxyEnv(await requireTor(settings.config.torProxy)) : {};
 handle('git:status', [], () => gitStatus(viewCwd()));

@@ -147,6 +147,10 @@ node src/cli.ts --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
 - **Conversations outside any project** ("Hors projet"): same tools, but the agent works in a folder of
   the conversation's own (`~/Library/Application Support/poney/off-project/<id>/`), shown in the file browser.
   Deleting one deletes its folder; a new one abandoned before its first message leaves nothing behind.
+- **A private folder per conversation** (local models): the model names it `.poney/`, for its notes and
+  scratch files. It lives in `~/Library/Application Support/poney/scratch/<id>/`, outside the project and Git;
+  commands reach it as `.poney/` or `$PONEY_TMP`. It shows first in the file browser once used, and goes
+  with its conversation.
 - **Markdown answers**: full GitHub Markdown (the same engine as the document viewer): italics, bold, quotes (`>`),
   numbered and nested lists, headings, links (opened in the browser), tables (GitHub style, with alignment), code;
   a single line break is kept. LaTeX formulas rendered by KaTeX (`$…$`, `\(…\)` inline; `$$…$$`, `\[…\]` as

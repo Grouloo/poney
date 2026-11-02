@@ -6,7 +6,7 @@ import { markdown, esc } from './markdown.ts';
 import { documentHtml } from './document.ts';
 import { SwipeDetector } from './swipe.ts';
 import { EMOJIS, ICONS, ICON_COLORS, iconSvg } from './project-icons.ts';
-import { fileIconSvg, folderIconSvg } from './file-icons.ts';
+import { fileIconSvg, folderIconSvg, privateFolderIconSvg } from './file-icons.ts';
 import DOMPurify from '../../node_modules/dompurify/dist/purify.es.mjs';
 import type { Api } from '../preload.cts';
 import type { AppAlert, ClaudeAccount, ClaudeStatus, FileStates, GithubStatus, ListedSkill, ModelGroup, SessionApproval, SessionEvent, SessionView, SystemPromptView } from '../ipc.ts';
@@ -2904,9 +2904,9 @@ async function openConversation(id: string) {
   renderSettings();
   if (moved) {
     expanded.clear();
-    refreshTree();
     closeViewer();
-  }
+  } else if (openPath?.startsWith('.poney/')) closeViewer(); // (the other conversation's private folder)
+  refreshTree(); // (each conversation has its own private folder)
   showSession(view);
   clearAlerts(id);
   rememberProject();
@@ -2933,9 +2933,10 @@ async function renderDir(rel: string, ul: HTMLElement) {
     const li = document.createElement('li');
     const node = div(`node${e.ignored ? ' ignored' : ''}${e.path === openPath ? ' active' : ''}${treeStates[e.path] ? ` gs-${treeStates[e.path]}` : ''}`);
     node.dataset.path = e.path;
-    node.innerHTML = `<span class="caret">${e.dir ? (expanded.has(e.path) ? '▾' : '▸') : ''}</span>${e.dir ? folderIconSvg(expanded.has(e.path)) : fileIconSvg(e.name)}<span class="name"></span>`;
+    node.innerHTML = `<span class="caret">${e.dir ? (expanded.has(e.path) ? '▾' : '▸') : ''}</span>${e.scratch ? privateFolderIconSvg() : e.dir ? folderIconSvg(expanded.has(e.path)) : fileIconSvg(e.name)}<span class="name"></span>`;
     node.querySelector<HTMLElement>('.name')!.textContent = e.name;
-    node.title = e.path;
+    node.title = e.scratch ? 'Dossier privé de la conversation, hors du projet et de Git' : e.path;
+    if (e.scratch) node.classList.add('scratch');
     li.appendChild(node);
     if (e.dir) {
       const sub = document.createElement('ul');
@@ -3342,7 +3343,7 @@ async function openFile(rel: string, { keepScroll = false } = {}) {
   if (liveBubble) closeLivePanel();
   closeDiffPanel();
   $('viewer').classList.remove('hidden');
-  $('viewerPath').textContent = f.path;
+  $('viewerPath').textContent = `\u200e${f.path}`; // (the mark keeps a leading dot first in the right-to-left line)
   $('viewerPath').title = f.path;
   document.querySelectorAll<HTMLElement>('.tree .node').forEach((n) => n.classList.toggle('active', n.dataset.path === f.path));
 

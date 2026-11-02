@@ -25,6 +25,8 @@ export interface ToolContext {
   shared?: SharedFiles;
   readVersions?: Map<string, number>;
   virtualFiles?: Map<string, string> | null;
+  /** The conversation's private folder, seen by the model as .poney/ (see resolveInside). */
+  scratch?: string | null;
   onOutput?: (text: string) => void;
 }
 
@@ -61,9 +63,19 @@ export function truncateMiddle(text: string, maxChars: number): string {
   return `${text.slice(0, head)}\n\n[... ${cut} characters cut ...]\n\n${text.slice(-tail)}`;
 }
 
-export function resolveInside(cwd: string, p: unknown): { abs: string; rel: string } {
+/** How the model names the conversation's private folder: kept by Poney, outside the project. */
+export const SCRATCH = '.poney';
+const isScratchPath = (clean: string) => clean === SCRATCH || clean.startsWith(`${SCRATCH}/`) || clean === `./${SCRATCH}` || clean.startsWith(`./${SCRATCH}/`);
+
+export function resolveInside(cwd: string, p: unknown, scratch?: string | null): { abs: string; rel: string } {
   if (!p || !String(p).trim()) throw new ToolError('Missing "path".');
   const clean = String(p).trim().replace(/^["'`]|["'`]$/g, '');
+  if (scratch && isScratchPath(clean)) {
+    const abs = path.resolve(scratch, clean.replace(/^(\.\/)?\.poney\/?/, '') || '.');
+    const rel = path.relative(scratch, abs);
+    if (rel.startsWith('..') || path.isAbsolute(rel)) throw new ToolError(`Path "${clean}" is outside ${SCRATCH}/.`);
+    return { abs, rel: rel ? `${SCRATCH}/${rel.split(path.sep).join('/')}` : SCRATCH };
+  }
   const abs = path.resolve(cwd, clean);
   const rel = path.relative(cwd, abs);
   if (rel.startsWith('..') || path.isAbsolute(rel)) {
@@ -73,13 +85,50 @@ export function resolveInside(cwd: string, p: unknown): { abs: string; rel: stri
   return { abs, rel: rel.split(path.sep).join('/') || '.' };
 }
 
+/** A path on disk as the model names it: relative to the project, or under .poney/. */
+function shownPath(cwd: string, abs: string, scratch?: string | null): string {
+  const inScratch = scratch ? path.relative(scratch, abs) : '..';
+  if (!inScratch.startsWith('..') && !path.isAbsolute(inScratch)) return inScratch ? `${SCRATCH}/${inScratch.split(path.sep).join('/')}` : SCRATCH;
+  return path.relative(cwd, abs).split(path.sep).join('/');
+}
+
+/**
+ * The command with each .poney path replaced by the private folder's real path,
+ * quoted for where it stands (the folder's path may have spaces).
+ */
+export function scratchCommand(command: string, scratch: string, win = process.platform === 'win32'): string {
+  const BEFORE = /[\s"'=(:<>|;&`]/;
+  let out = '';
+  let quote: '' | '"' | "'" = '';
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i];
+    if (!win && c === '\\' && quote !== "'") { out += c + (command[i + 1] ?? ''); i++; continue; }
+    if (c === '"' || (c === "'" && !win)) {
+      if (!quote) quote = c; else if (quote === c) quote = '';
+      out += c;
+      continue;
+    }
+    const m = /^(\.\/)?\.poney(?=$|[\/\s"';&|)<>])/.exec(command.slice(i));
+    if (m && (i === 0 || BEFORE.test(command[i - 1]))) {
+      if (quote === "'") out += scratch.replace(/'/g, `'\\''`);
+      else if (quote === '"') out += win ? scratch : scratch.replace(/[\\"$`]/g, '\\$&');
+      else out += win ? `"${scratch}"` : `'${scratch.replace(/'/g, `'\\''`)}'`;
+      i += m[0].length - 1;
+      continue;
+    }
+    out += c;
+  }
+  return out;
+}
+
 async function exists(p: string) {
   try { await fs.access(p); return true; } catch { return false; }
 }
 
 // ---------- list ----------
-async function listTool(cwd: string, args: ToolArgs): Promise<ToolResult> {
-  const { abs, rel } = resolveInside(cwd, args.path || '.');
+async function listTool(cwd: string, args: ToolArgs, ctx: ToolContext = {}): Promise<ToolResult> {
+  const { abs, rel } = resolveInside(cwd, args.path || '.', ctx.scratch);
+  if (rel === SCRATCH && !(await exists(abs))) return { output: '(empty folder)', meta: { path: rel } };
   const maxDepth = Math.min(toInt(args.depth) || 3, 6);
   const lines: string[] = [];
   let count = 0;
@@ -110,7 +159,7 @@ async function listTool(cwd: string, args: ToolArgs): Promise<ToolResult> {
 async function readTool(cwd: string, args: ToolArgs, ctx: ToolContext = {}): Promise<ToolResult> {
   // Texts given to a sub-agent to read like files (the main agent's steps, see turnDigest).
   const virtual = ctx.virtualFiles?.get(String(args.path ?? '').trim());
-  const { abs, rel } = virtual !== undefined ? { abs: '', rel: String(args.path).trim() } : resolveInside(cwd, args.path);
+  const { abs, rel } = virtual !== undefined ? { abs: '', rel: String(args.path).trim() } : resolveInside(cwd, args.path, ctx.scratch);
   let content: string;
   if (virtual !== undefined) content = virtual;
   else try { content = await fs.readFile(abs, 'utf8'); } catch (e) {
@@ -138,13 +187,17 @@ const REGEX_CHARS = /[\\^$|()[\]{}*+?]/;
 async function searchTool(cwd: string, args: ToolArgs, ctx: ToolContext = {}): Promise<ToolResult> {
   const words = args.query || (args.pattern && !REGEX_CHARS.test(args.pattern) && /\s/.test(args.pattern.trim()) ? args.pattern : '');
   if (words) {
-    const { rel } = resolveInside(cwd, args.path || '.');
-    const r = await rankedSearch(cwd, rel, words, { ignoredDirs: IGNORED_DIRS, maxChars: Math.min(4000, ctx.maxResultChars || 4000) });
+    const { abs, rel } = resolveInside(cwd, args.path || '.', ctx.scratch);
+    const inScratch = ctx.scratch && (rel === SCRATCH || rel.startsWith(`${SCRATCH}/`));
+    const options = { ignoredDirs: IGNORED_DIRS, maxChars: Math.min(4000, ctx.maxResultChars || 4000) };
+    const r = inScratch && ctx.scratch
+      ? await rankedSearch(ctx.scratch, path.relative(ctx.scratch, abs) || '.', words, { ...options, prefix: `${SCRATCH}/` })
+      : await rankedSearch(cwd, rel, words, options);
     return { output: r.output, meta: { query: words, path: rel, files: r.count } };
   }
   const pattern = args.pattern;
   if (!pattern) throw new ToolError('Missing keywords: <search>what you look for</search>.');
-  const { abs, rel } = resolveInside(cwd, args.path || '.');
+  const { abs, rel } = resolveInside(cwd, args.path || '.', ctx.scratch);
   let re: RegExp;
   try { re = new RegExp(pattern, 'i'); } catch { re = new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'); }
   const hits: string[] = [];
@@ -163,7 +216,7 @@ async function searchTool(cwd: string, args: ToolArgs, ctx: ToolContext = {}): P
     if (text.includes('\u0000')) return;
     const lines = text.split('\n');
     for (let i = 0; i < lines.length && hits.length < 80; i++) {
-      if (re.test(lines[i])) hits.push(`${path.relative(cwd, p).split(path.sep).join('/')}:${i + 1}: ${lines[i].trim().slice(0, 200)}`);
+      if (re.test(lines[i])) hits.push(`${shownPath(cwd, p, ctx.scratch)}:${i + 1}: ${lines[i].trim().slice(0, 200)}`);
     }
   }
   await walk(abs);
@@ -224,7 +277,7 @@ function requirePath(tool: keyof typeof FORMAT_HELP, args: ToolArgs): void {
 
 async function writeTool(cwd: string, args: ToolArgs, ctx: ToolContext = {}): Promise<ToolResult> {
   requirePath('write', args);
-  const { abs, rel } = resolveInside(cwd, args.path);
+  const { abs, rel } = resolveInside(cwd, args.path, ctx.scratch);
   const content = args.content ?? '';
   const before = (await exists(abs)) ? await fs.readFile(abs, 'utf8').catch(() => '') : null;
   const beforeLines = countLines(before);
@@ -299,10 +352,10 @@ function locate(content: string, oldText: string): Located {
  * (exactly, or with another indentation), it gives the lines it covers; otherwise
  * the same error the edit would give, so the generation can stop right there.
  */
-export async function checkOldBlock(cwd: string, filePath: string, oldText: string): Promise<{ ok: false; message: string } | { ok: true; rel: string; startLine: number; endLine: number }> {
+export async function checkOldBlock(cwd: string, filePath: string, oldText: string, scratch?: string | null): Promise<{ ok: false; message: string } | { ok: true; rel: string; startLine: number; endLine: number }> {
   let abs: string;
   let rel: string;
-  try { ({ abs, rel } = resolveInside(cwd, filePath)); } catch (e) { return { ok: false, message: errorMessage(e) }; }
+  try { ({ abs, rel } = resolveInside(cwd, filePath, scratch)); } catch (e) { return { ok: false, message: errorMessage(e) }; }
   let content: string;
   try { content = await fs.readFile(abs, 'utf8'); } catch {
     return { ok: false, message: `File "${rel}" does not exist. Use <write> to create it.` };
@@ -353,9 +406,9 @@ function reindent(text: string, fromIndent: string, toIndent: string): string {
   }).join('\n');
 }
 
-async function editTool(cwd: string, args: ToolArgs): Promise<ToolResult> {
+async function editTool(cwd: string, args: ToolArgs, ctx: ToolContext = {}): Promise<ToolResult> {
   requirePath('edit', args);
-  const { abs, rel } = resolveInside(cwd, args.path);
+  const { abs, rel } = resolveInside(cwd, args.path, ctx.scratch);
   let content: string;
   try { content = await fs.readFile(abs, 'utf8'); } catch {
     throw new ToolError(`File "${rel}" does not exist. Use <write> to create it.`);
@@ -446,9 +499,18 @@ async function runTool(cwd: string, args: ToolArgs, ctx: ToolContext = {}): Prom
   const timeoutSec = Math.min(toInt(args.timeout) || config.commandTimeout, 1800);
   // Tor for commands: proxy variables (honored by curl, git, wget…). Refused if Tor is down.
   const viaTor = config.torEnabled && config.torShell;
-  const env = viaTor ? proxyEnv(await torProxyOrRefuse(config) ?? '') : {};
-  const r = await runShell(command, { cwd, timeoutSec, signal: ctx.signal, onOutput: ctx.onOutput, env });
-  let output = r.out.trim() || '(no output)';
+  const env: Record<string, string> = viaTor ? proxyEnv(await torProxyOrRefuse(config) ?? '') : {};
+  // The private folder: named .poney in the command, PONEY_TMP for scripts, and its
+  // real path shown back as .poney.
+  const scratch = ctx.scratch;
+  if (scratch) {
+    env.PONEY_TMP = scratch;
+    if (/\.poney|PONEY_TMP/.test(command)) await fs.mkdir(scratch, { recursive: true });
+  }
+  const shown = (t: string) => (scratch ? t.split(scratch).join(SCRATCH) : t);
+  const onOutput = ctx.onOutput;
+  const r = await runShell(scratch ? scratchCommand(command, scratch) : command, { cwd, timeoutSec, signal: ctx.signal, onOutput: onOutput && ((t) => onOutput(shown(t))), env });
+  let output = shown(r.out.trim()) || '(no output)';
   output = truncateMiddle(output, ctx.maxResultChars ?? Infinity);
   if (r.timedOut) output += `\n[command killed after ${timeoutSec}s timeout]`;
   return { output, ok: r.code === 0, exitCode: r.code, meta: { exit: r.code, ...(viaTor ? { tor: true } : {}) } };
@@ -517,7 +579,7 @@ function recordWrite(ctx: ToolContext, rel: string): void {
 
 const guarded = (impl: Tool): Tool => (cwd, args, ctx = {}) => {
   let rel: string;
-  try { ({ rel } = resolveInside(cwd, args.path)); } catch { return impl(cwd, args, ctx); }
+  try { ({ rel } = resolveInside(cwd, args.path, ctx.scratch)); } catch { return impl(cwd, args, ctx); }
   return withFileLock(ctx, rel, async () => {
     checkNotChangedByOther(ctx, rel);
     const r = await impl(cwd, args, ctx);

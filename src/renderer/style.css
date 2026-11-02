@@ -571,6 +571,7 @@ img.proj-icon { width: 1.15em; height: 1.15em; object-fit: contain; vertical-ali
 .tree .node:hover { background: var(--panel-2); }
 .tree .node.active { background: color-mix(in srgb, var(--accent-2) 22%, var(--panel)); }
 .tree .node.ignored { color: var(--muted); }
+.tree .node.scratch .name { color: #7aa2f7; }
 .tree .node.gs-M .name { color: var(--warn); }
 .tree .node.gs-A .name { color: var(--ok); }
 .tree .node.gs-U .name { color: var(--err); }
