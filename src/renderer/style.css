@@ -34,7 +34,8 @@
   --glass-glint: rgba(255, 255, 255, 0.2); /* (the light a pointer brings to a glass button) */
   /* (a glass button: the glare across it, its thin edge) */
   --glass-glare: rgba(255, 255, 255, 0.13); --glass-border: rgba(255, 255, 255, 0.14);
-  --hue-thin: 22%; --hue-deep: 48%; /* (how much color a colored glass button holds, at its top and its base) */
+  --hue-thin: 30%; --hue-deep: 56%; /* (how much color a colored glass button holds, at its top and its base) */
+  --hue-lift: 0.14; /* (how much lighter that color is made, for the dark seen through it) */
   --ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif;
   /* Conversations: a humanist face, softer to read at length than the system UI one. */
   --chat: Seravek, 'Gill Sans Nova', Ubuntu, Calibri, 'Segoe UI', -apple-system, sans-serif;
@@ -58,7 +59,7 @@
     --glass-drop: 0 3px 12px rgba(60, 50, 40, 0.1);
     --glass-glint: rgba(255, 255, 255, 0.75);
     --glass-glare: rgba(255, 255, 255, 0.6); --glass-border: rgba(51, 51, 51, 0.13);
-    --hue-thin: 50%; --hue-deep: 74%;
+    --hue-thin: 50%; --hue-deep: 74%; --hue-lift: 0.03;
   }
 }
 
@@ -981,8 +982,8 @@ body.running .resume-btn { display: none; }
 :is(.primary, .approval button, .new-conv, .git-sync, .glass-btn, .msg-editor button, .ghost):active:not(:disabled) { transform: scale(0.96); transition-duration: 0.08s; }
 /* Colored glass: the color thin at the top and deeper below, lit from within at its base, where
    the light comes through the drop (--hue: its color). */
-.primary, .approval button.yes { --hue: var(--accent-2); }
-.primary.stop, .approval.refuse button.no { --hue: var(--err); }
+.primary, .approval button.yes { --hue: oklch(from var(--accent-2) calc(l + var(--hue-lift)) c h); }
+.primary.stop, .approval.refuse button.no { --hue: oklch(from var(--err) calc(l + var(--hue-lift)) c h); }
 .primary, .approval button.yes, .approval.refuse button.no {
   --depth: 0%;
   --tint:
