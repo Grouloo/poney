@@ -32,9 +32,8 @@
   --glass-light: inset 0 1px 0 rgba(255, 255, 255, 0.16), inset 0 -1px 0 rgba(0, 0, 0, 0.22);
   --glass-drop: 0 4px 14px rgba(0, 0, 0, 0.22);
   --glass-glint: rgba(255, 255, 255, 0.2); /* (the light a pointer brings to a glass button) */
-  /* (a glass button's light: its two lit corners, the glare across it, its dark rim) */
-  --glass-hi: rgba(255, 255, 255, 0.4); --glass-hi-2: rgba(255, 255, 255, 0.2); --glass-glare: rgba(255, 255, 255, 0.13);
-  --glass-rim: rgba(0, 0, 0, 0.75); --glass-border: rgba(255, 255, 255, 0.06);
+  /* (a glass button: the glare across it, its thin edge) */
+  --glass-glare: rgba(255, 255, 255, 0.13); --glass-border: rgba(255, 255, 255, 0.14);
   --ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif;
   /* Conversations: a humanist face, softer to read at length than the system UI one. */
   --chat: Seravek, 'Gill Sans Nova', Ubuntu, Calibri, 'Segoe UI', -apple-system, sans-serif;
@@ -57,8 +56,7 @@
     --glass-light: inset 0 1px 0 rgba(255, 255, 255, 0.9), inset 0 -1px 0 rgba(0, 0, 0, 0.05);
     --glass-drop: 0 3px 12px rgba(60, 50, 40, 0.1);
     --glass-glint: rgba(255, 255, 255, 0.75);
-    --glass-hi: rgba(255, 255, 255, 0.9); --glass-hi-2: rgba(255, 255, 255, 0.55); --glass-glare: rgba(255, 255, 255, 0.6);
-    --glass-rim: rgba(0, 0, 0, 0.35); --glass-border: rgba(51, 51, 51, 0.08);
+    --glass-glare: rgba(255, 255, 255, 0.6); --glass-border: rgba(51, 51, 51, 0.13);
   }
 }
 
@@ -217,8 +215,8 @@ details.thinking div { white-space: pre-wrap; border-left: 2px solid var(--borde
 .approval span { flex: 1; color: var(--warn); font-size: 14px; }
 .approval button { border-radius: 7px; padding: 4px 12px; border: 1px solid var(--border); background: var(--panel-2); }
 .approval.refuse input { flex: 1; min-width: 0; padding: 5px 9px; border-radius: 7px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font: inherit; font-size: 14px; }
-.approval.refuse button.no { color: #fff; border: none; }
-.approval button.yes { color: #fff; border: none; }
+.approval.refuse button.no { color: #fff; }
+.approval button.yes { color: #fff; }
 
 .notice { color: var(--warn); font-size: 13.5px; margin: 6px auto; }
 .notice::before { content: '• '; }
@@ -928,15 +926,9 @@ body.running .resume-btn { display: none; }
 .empty h1 { font-family: var(--chat); font-weight: 500; letter-spacing: 0.2px; }
 
 /* ---------- liquid glass ---------- */
-/* A drop of glass: lit on two opposite corners, a glare across it, a dark rim. On hover, a glint follows the pointer (--mx, --my: see app.js) and its content grows;
-   pressed, it gives. */
+/* A drop of glass: a glare across it, a thin even edge. On hover, a glint follows the pointer
+   (--mx, --my: see app.js) and its content grows; pressed, it gives. */
 @property --glint { syntax: '<number>'; inherits: false; initial-value: 0; }
-:root {
-  --glass-shape:
-    inset 2px -2px 1px -1px var(--glass-hi), inset -2px 2px 1px -1px var(--glass-hi),
-    inset 6px -6px 1px -6px var(--glass-hi-2), inset -6px 6px 1px -6px var(--glass-hi-2),
-    inset 0 0 2px var(--glass-rim);
-}
 .primary, .approval button, .new-conv, .git-sync, .msg-editor button, .ghost {
   --tint: var(--glass);
   transition: --glint 0.25s, transform 0.25s, box-shadow 0.25s, border-color 0.25s, color 0.15s;
@@ -947,14 +939,14 @@ body.running .resume-btn { display: none; }
     linear-gradient(45deg, var(--glass-glare), transparent 22%, transparent 78%, var(--glass-glare)),
     var(--tint);
   border: 1px solid var(--glass-border);
-  box-shadow: var(--glass-shape), var(--glass-drop);
+  box-shadow: var(--glass-drop);
   backdrop-filter: blur(10px) saturate(170%);
 }
 .primary:hover, .approval button:hover, .new-conv:hover, .git-sync:hover:not(:disabled), .msg-editor button:hover {
   --glint: 1;
 }
 /* (a ghost button is glass only under the pointer: lit, without a shadow) */
-.ghost:hover { --glint: 0.8; box-shadow: var(--glass-shape); }
+.ghost:hover { --glint: 0.8; box-shadow: none; }
 /* What a glass button holds grows under the pointer, and back as it is pressed (its bare
    text is put in a .glass-text span for that: see app.js). */
 :is(.primary, .approval button, .new-conv, .git-sync, .msg-editor button, .ghost) > * { transition: transform 0.25s; }
