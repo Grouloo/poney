@@ -769,6 +769,7 @@ $<HTMLFormElement>('memoryForm').onsubmit = (e) => {
 };
 
 function clearTranscript() {
+  closeQuestionnaire();
   closeLivePanel();
   closeAgentPanel();
   agentViews.clear();
@@ -972,6 +973,7 @@ async function resumeFromAction(id: number) {
 }
 
 function replayTranscript(events: AgentEvent[]) {
+  closeQuestionnaire(); // (drawn again with the approvals, if it still waits)
   closeLivePanel(); // (the answers are drawn again)
   const shownAgent = panelAgent;
   agentViews.clear();
@@ -1647,7 +1649,8 @@ function onEvent(ev: SessionEvent) {
       card.classList.remove('running');
       card.classList.add(ev.ok ? 'ok' : 'fail');
       card.querySelector<HTMLElement>('.status')!.textContent = ev.ok ? '✓' : '✗';
-      card.querySelector<HTMLElement>('.approval, .questionnaire')?.remove();
+      card.querySelector<HTMLElement>('.approval, .ask-wait')?.remove();
+      closeQuestionnaire(ev.id);
       if (card.dataset.tool === 'agent') {
         // The report in its view; its first line on the card; the figures.
         const view = agentViews.get(ev.id);
@@ -1887,11 +1890,14 @@ function onApproval(req: SessionApproval) {
 }
 
 // The agent's questions (<ask>): proposed answers to pick (one, or several), and a field
-// for the user's own words under each. The turn waits for them like an approval.
+// for the user's own words under each. The turn waits for them like an approval. They
+// take the place of the message field (its draft is kept); the card says it waits.
 function showQuestionnaire(card: HTMLElement, id: number, questions: Question[]) {
-  if (card.querySelector('.questionnaire')) return;
+  closeQuestionnaire();
+  if (!card.querySelector('.ask-wait')) card.appendChild(div('ask-wait', 'En attente de vos réponses, dans la zone de saisie'));
   const form = document.createElement('form');
   form.className = 'questionnaire';
+  form.dataset.id = String(id);
   form.innerHTML = questions.map((q, i) => `<fieldset class="q"><legend>${esc(q.question)}${q.multiple ? ' <span class="muted">(plusieurs choix possibles)</span>' : ''}</legend>${
     q.options.map((o) => `<label class="q-opt"><input type="${q.multiple ? 'checkbox' : 'radio'}" name="q${i}" value="${esc(o)}"><span>${esc(o)}</span></label>`).join('')
   }<input type="text" class="q-other" name="other${i}" placeholder="${q.options.length ? 'Autre réponse ou précision…' : 'Votre réponse…'}"></fieldset>`).join('') +
@@ -1901,7 +1907,7 @@ function showQuestionnaire(card: HTMLElement, id: number, questions: Question[])
     r.onpointerdown = () => { r.dataset.was = String(r.checked); };
     r.onclick = () => { if (r.dataset.was === 'true') r.checked = false; };
   });
-  const send = (answers: QuestionAnswer[] | null) => { form.remove(); window.api.answer(id, answers); };
+  const send = (answers: QuestionAnswer[] | null) => { closeQuestionnaire(); window.api.answer(id, answers); };
   form.onsubmit = (e) => {
     e.preventDefault();
     send(questions.map((_, i) => ({
@@ -1910,9 +1916,21 @@ function showQuestionnaire(card: HTMLElement, id: number, questions: Question[])
     })));
   };
   form.querySelector<HTMLElement>('.q-skip')!.onclick = () => send(null);
-  card.appendChild(form);
+  input.before(form);
+  document.querySelector<HTMLElement>('.composer-box')!.classList.add('asking');
   form.querySelector<HTMLElement>('input')?.focus();
+  fitComposer();
   scrollDown(true);
+}
+
+/** The message field back (answered, or another conversation shown). */
+function closeQuestionnaire(id?: number) {
+  const form = document.querySelector<HTMLElement>('.composer .questionnaire');
+  if (!form || (id !== undefined && form.dataset.id !== String(id))) return;
+  form.remove();
+  document.querySelector<HTMLElement>('.composer-box')!.classList.remove('asking');
+  autosize(); // (its height, measured while hidden, was none)
+  fitComposer();
 }
 
 // Only the events of the conversation shown are drawn (the others are replayed when opened).

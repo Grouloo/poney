@@ -221,21 +221,24 @@ details.thinking div { white-space: pre-wrap; border-left: 2px solid var(--borde
 .approval.refuse button.no { color: #fff; }
 .approval button.yes { color: #fff; }
 
-/* The agent's questionnaire (<ask>), in its card: the turn waits for it. */
-.questionnaire { display: flex; flex-direction: column; gap: 12px; padding: 12px 14px; border-top: 1px solid var(--border); background: color-mix(in srgb, var(--accent) 7%, var(--panel)); }
+/* The agent's questionnaire (<ask>): in place of the message field; its card says it waits. */
+.ask-wait { padding: 8px 12px; border-top: 1px solid var(--border); color: var(--accent); font-size: 13.5px; }
+.composer-box.asking > #input { display: none; }
+.questionnaire { display: flex; flex-direction: column; gap: 12px; padding: 6px 6px 10px; max-height: min(52vh, 460px); overflow-y: auto; }
 .questionnaire .q { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .questionnaire legend { padding: 0; margin-bottom: 4px; font-size: 14px; font-weight: 600; }
 .questionnaire legend .muted { font-weight: 400; font-size: 12.5px; }
-.q-opt { display: flex; align-items: center; gap: 8px; padding: 5px 9px; border-radius: 7px; border: 1px solid var(--border); background: var(--panel-2); font-size: 14px; cursor: pointer; }
+.q-opt { display: flex; align-items: center; gap: 8px; padding: 5px 9px; border-radius: 7px; border: 1px solid var(--border); background: color-mix(in srgb, var(--panel-2) 70%, transparent); font-size: 14px; cursor: pointer; }
 .q-opt:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
 .q-opt:has(input:checked) { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--panel-2)); }
 .questionnaire .q-opt { flex-direction: row; justify-content: flex-start; text-align: left; margin-top: 0; }
-.card[data-tool=ask] .card-body:has(> pre:empty) { display: none; }
 .questionnaire .q-opt input { flex: none; width: auto; margin: 0; accent-color: var(--accent); }
 .questionnaire .q-opt span { flex: 1; min-width: 0; }
-.q-other { margin-top: 2px; padding: 5px 9px; border-radius: 7px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font: inherit; font-size: 14px; }
+.q-other { margin-top: 2px; padding: 5px 9px; border-radius: 7px; border: 1px solid var(--border); background: color-mix(in srgb, var(--bg) 70%, transparent); color: var(--text); font: inherit; font-size: 14px; outline: none; }
+.q-other:focus { border-color: var(--accent-2); }
 .q-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .q-actions button { border-radius: 7px; padding: 4px 12px; }
+.card[data-tool=ask] .card-body:has(> pre:empty), .card[data-tool=ask]:has(.ask-wait) .card-body { display: none; }
 
 .notice { color: var(--warn); font-size: 13.5px; margin: 6px auto; }
 .notice::before { content: '• '; }
