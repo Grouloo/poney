@@ -9,7 +9,7 @@
 
 import { list, rec } from '../unknown.ts';
 import { ASK_FORMAT } from './ask.ts';
-import type { Message, Triage, TriageItem, TriageRoute } from '../types.ts';
+import type { AgentEvent, Message, Triage, TriageItem, TriageRoute } from '../types.ts';
 
 // The model lists the facts its answer will rely on, then grades each one. Asked
 // directly "what do you know", a small model restates the request ("the user wants
@@ -100,10 +100,19 @@ export const MAX_UPDATES = 3; // per answer
 export const MAX_REFUSALS = 3; // per answer, all assessments together
 const UPDATE_MIN_CHARS = 300; // a short result (an echo, "ok") brings nothing to reassess
 
-/** Whether results just received call for an update of the assessment. */
+/**
+ * Whether results just received call for an update of the assessment. The user's
+ * answers to a questionnaire always do: they settle what the assessment said to ask.
+ */
 export function needsUpdate(results: { tool: string; ok: boolean; output: unknown }[], updatesSoFar: number): boolean {
   if (updatesSoFar >= MAX_UPDATES) return false;
-  return results.some((r) => r.ok && UPDATE_TOOLS.has(r.tool) && String(r.output ?? '').length >= UPDATE_MIN_CHARS);
+  return results.some((r) => r.ok && (r.tool === 'ask' || (UPDATE_TOOLS.has(r.tool) && String(r.output ?? '').length >= UPDATE_MIN_CHARS)));
+}
+
+/** The assessment a transcript event recorded (none if it failed or is not one). */
+export function triageOfEvent(ev: AgentEvent): Triage | null {
+  if (ev.type !== 'triage' || ev.failed || !ev.route) return null;
+  return { known: ev.known ?? [], doubts: ev.doubts ?? [], unknowns: ev.unknowns ?? [], questions: ev.questions ?? [], route: ev.route };
 }
 
 export function triageUpdateInstruction(task: string | null | undefined): string {

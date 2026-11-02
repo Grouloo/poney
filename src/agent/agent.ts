@@ -1228,6 +1228,12 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
     let triageBase = 0; // sources already read when the current assessment was made
     let asked = false; // a questionnaire was shown this turn
     let askNudged = false;
+    if (resume?.triage) {
+      // Resumed: the assessment it went by, and what was read since.
+      triage = resume.triage.triage;
+      sourcesRead = resume.triage.sourcesSince;
+      triageUpdates = resume.triage.updates;
+    }
     const recent: string[] = [];
     let reason = 'done';
 
@@ -1439,6 +1445,7 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
           priorResults: [...results],
           turnStartIndex: this.turnStartIndex,
           currentTask: this.currentTask,
+          triage: triage ? { triage, sourcesSince: sourcesRead - triageBase, updates: triageUpdates } : null, // (resuming keeps its route)
           ...over,
         });
         // Files the model can see the content of (the current message has no results yet).
@@ -1508,6 +1515,7 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
             // (the answers in the card: resuming from it starts from them)
             this.emit('event', { type: 'action_end', id: actId, ok: Boolean(answers), output: answers ? answersText(questions, answers) : 'Questionnaire fermé sans réponse.', meta: answers ? { answers } : {} });
             results.push(formatResult('ask', {}, askResult(questions, answers)));
+            received.push({ tool: 'ask', ok: Boolean(answers), output: answers ? answersText(questions, answers) : '' }); // (answered: the assessment is updated)
             stopBatch = true; // (what came after the questions was written without the answers)
             continue;
           }

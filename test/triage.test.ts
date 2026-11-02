@@ -396,3 +396,78 @@ test('what the sub-agents of a plan read counts for the route: their answer is n
   assert.equal(events.filter((e): e is EventOf<'notice'> => e.type === 'notice' && /refusée/.test(e.text)).length, 0);
   assert.equal((events.filter((e): e is EventOf<'final'> => e.type === 'final' && !e.agentId).pop())!.text, 'They hold alpha and beta.');
 });
+
+test('the user\'s answers to a questionnaire update the assessment', async () => {
+  const f = await fake((r) => {
+    const last = lastUser(r);
+    if (isTriage(r)) return JSON.stringify({ claims: [], questions: ['Which database to use'] });
+    if (/update your assessment/.test(last)) return JSON.stringify({ claims: [{ point: 'SQLite is the database', why: 'the user answered', status: 'known' }], questions: [] });
+    if (/tool="ask"/.test(last)) return 'Done.';
+    return '<ask>\n? Which database?\n- PostgreSQL\n- SQLite\n</ask>';
+  });
+  const agent = new Agent({
+    cwd: await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-triage-')), triage: true,
+    config: cfg({ baseUrl: f.url, model: 'm', shellEnabled: false }),
+    approve: async () => ({ ok: true, answers: [{ choices: ['SQLite'], other: '' }] }),
+  });
+  const events: AgentEvent[] = [];
+  agent.on('event', (e) => events.push(e));
+  try {
+    await agent.send('set up a database');
+  } finally {
+    f.server.close();
+  }
+  const update = events.find((e): e is EventOf<'triage'> => e.type === 'triage' && Boolean(e.update));
+  assert.deepEqual(update?.known, [{ point: 'SQLite is the database', why: 'the user answered' }]);
+  const after = f.requests.find((r) => !/update your assessment/.test(lastUser(r)) && /tool="ask"/.test(lastUser(r)))!;
+  assert.match(lastUser(after), /→ SQLite[\s\S]*updated from these results[\s\S]*You know:\n- SQLite is the database/);
+  assert.deepEqual(events.filter((e) => e.type === 'final').map((e) => e.text), ['Done.']);
+});
+
+test('resuming from an action keeps the assessment of its turn, and its route', async () => {
+  let resumed = false;
+  const f = await fake((r) => {
+    if (isTriage(r)) return JSON.stringify({ claims: [{ point: 'the config format', why: 'not read', status: 'doubt' }], questions: [] });
+    if (/tool="remember"/.test(lastUser(r)) || /Not yet/.test(lastUser(r))) return 'Done.';
+    return '<remember>The config is YAML.</remember>';
+  });
+  const agent = new Agent({ cwd: await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-triage-')), triage: true, config: cfg({ baseUrl: f.url, model: 'm', shellEnabled: false }) });
+  const events: AgentEvent[] = [];
+  agent.on('event', (e) => events.push(e));
+  try {
+    await agent.send('change the config');
+    const cp = agent.checkpoints.find((c) => c.kind === 'action')!;
+    assert.equal(cp.triage?.triage.route, 'check');
+    assert.equal(cp.triage?.sourcesSince, 0);
+    const actId = events.find((e): e is EventOf<'action_start'> => e.type === 'action_start' && e.tool === 'remember')!.id;
+    const triagesBefore = f.requests.filter(isTriage).length;
+    events.length = 0;
+    resumed = true;
+    await agent.resumeFrom(actId);
+    assert.equal(f.requests.filter(isTriage).length, triagesBefore); // (no new assessment: the turn's own)
+  } finally {
+    f.server.close();
+  }
+  assert.ok(resumed);
+  // Still no source read: its final answer is refused once, as before the resume.
+  assert.equal(events.filter((e) => e.type === 'notice' && /refusée/.test(e.text)).length, 1);
+});
+
+test('a history rebuilt from the transcript has its assessments, and resuming there keeps its route', async () => {
+  const { rebuildHistory, rebuildForAction } = await import('../src/agent/rebuild.ts');
+  const events: AgentEvent[] = [
+    { type: 'user_message', text: 'change the config', turnId: 't1' },
+    { type: 'triage', turnId: 't1', known: [], doubts: [{ point: 'the config format', why: 'not read' }], unknowns: [], questions: [], route: 'check' },
+    { type: 'assistant_end', id: 1, text: '', thinking: '', hasActions: true },
+    { type: 'action_start', id: 2, tool: 'read', args: { path: 'config.yml' } },
+    { type: 'action_end', id: 2, ok: true, output: 'a: 1' },
+    { type: 'assistant_end', id: 3, text: '', thinking: '', hasActions: true },
+    { type: 'action_start', id: 4, tool: 'remember', args: { note: 'YAML' } },
+    { type: 'action_end', id: 4, ok: true, output: 'Noted.' },
+  ];
+  const h = rebuildHistory(events);
+  assert.match(h[0].content, /^change the config\n\n\(Your assessment before acting[\s\S]*You doubt:\n- the config format/);
+  const r = rebuildForAction(events, 4)!;
+  assert.equal(r.triage?.triage.route, 'check');
+  assert.equal(r.triage?.sourcesSince, 1); // (the file read after it)
+});

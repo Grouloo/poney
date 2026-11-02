@@ -1,6 +1,7 @@
 // Gives old conversations (saved before rewind points existed) the ability to be
 // edited and relaunched from any user message.
 import { formatResult, withReasoning } from './protocol.ts';
+import { SOURCE_TOOLS, triageBlock, triageOfEvent } from './triage.ts';
 import type { Action, AgentEvent, Checkpoint, ConversationFile, EventOf, Message, RebuiltAction, ToolArgs } from '../types.ts';
 
 const attr = (k: string, v: unknown) => (v === undefined || v === null || v === '' ? '' : ` ${k}="${String(v).replace(/"/g, "'")}"`);
@@ -76,6 +77,15 @@ export function rebuildHistory(events: AgentEvent[], { maxReasoningChars }: { ma
       case 'action_end': {
         const a = byId.get(ev.id);
         if (a) a.end = ev;
+        break;
+      }
+      case 'triage': {
+        // The assessment, where the agent saw it: under the user message, or (updated) under the results.
+        const t = ev.agentId ? null : triageOfEvent(ev);
+        if (!t) break;
+        flush();
+        const last = messages[messages.length - 1];
+        if (last?.role === 'user') last.content += `\n\n${triageBlock(t, { update: Boolean(ev.update) })}`;
         break;
       }
     }
@@ -169,6 +179,15 @@ export function rebuildForAction(events: AgentEvent[], actId: number): RebuiltAc
   const request = [...events.slice(0, stepAt)].reverse().find((e): e is EventOf<'user_message'> => e.type === 'user_message');
   let turnStartIndex = messages.findLastIndex((m) => m.role === 'user' && request && m.content.includes(request.text));
   if (turnStartIndex < 0) turnStartIndex = 0;
+  // The turn's latest assessment, and what was read since (its route still applies).
+  const turn = events.slice(request ? events.lastIndexOf(request) : 0, at).filter(top);
+  const tAt = turn.findLastIndex((e) => triageOfEvent(e));
+  const starts = new Map(turn.filter((e): e is EventOf<'action_start'> => e.type === 'action_start').map((e) => [e.id, e.tool]));
+  const triage = tAt < 0 ? null : {
+    triage: triageOfEvent(turn[tAt])!,
+    sourcesSince: turn.slice(tAt).filter((e) => e.type === 'action_end' && e.ok && SOURCE_TOOLS.has(starts.get(e.id) ?? '')).length,
+    updates: turn.filter((e) => e.type === 'triage' && e.update).length,
+  };
   return {
     messages,
     remaining,
@@ -176,6 +195,7 @@ export function rebuildForAction(events: AgentEvent[], actId: number): RebuiltAc
     turnStartIndex,
     currentTask: request?.text ?? null,
     turnId: request?.turnId ?? null,
+    triage,
     cutAt: events.indexOf(step[j]), // the transcript is cut at the first action run again
   };
 }

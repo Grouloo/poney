@@ -135,6 +135,13 @@ export interface Steps {
   triage?: boolean;
 }
 
+/** The assessment a turn goes by, kept with its resume points (so that resuming keeps its route). */
+export interface TurnTriage {
+  triage: Triage;
+  sourcesSince: number; // sources read since it was made
+  updates: number; // updates already made this turn
+}
+
 export interface Checkpoint {
   turnId?: string;
   kind?: 'action';
@@ -150,6 +157,7 @@ export interface Checkpoint {
   priorResults?: string[];
   turnStartIndex?: number;
   currentTask?: string | null;
+  triage?: TurnTriage | null;
   rebuild?: boolean;
 }
 
@@ -159,6 +167,7 @@ export interface ResumeState {
   priorResults?: string[];
   turnStartIndex?: number;
   currentTask?: string | null;
+  triage?: TurnTriage | null;
 }
 
 export interface RebuiltAction extends ResumeState {
