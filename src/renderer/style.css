@@ -469,6 +469,7 @@ body.no-sidebar .deck { width: 0; margin-right: -12px; opacity: 0; transform: tr
 /* (in the sidebar cards, the list runs on under the head and the foot, which blur it as it passes:
    --head-h and --foot-h are their heights, see app.js) */
 #sidebar > .pane, #filesBar > .pane {
+  position: relative; /* (above the card's glass layer, positioned too: see .card-glass) */
   margin: calc(-1 * var(--head-h, 0px)) 0 calc(-1 * var(--foot-h, 0px));
   padding-top: calc(8px + var(--head-h, 0px)); padding-bottom: calc(8px + var(--foot-h, 0px));
 }
