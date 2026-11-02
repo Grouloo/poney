@@ -222,34 +222,59 @@ details.thinking div { white-space: pre-wrap; border-left: 2px solid var(--borde
 .approval button.yes { color: #fff; }
 
 /* The agent's questionnaire (<ask>): in place of the message field; its card says it waits. */
-.ask-wait { padding: 8px 12px; border-top: 1px solid var(--border); color: var(--accent); font-size: 13.5px; }
+.ask-wait { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-top: 1px solid var(--border); color: var(--accent); font-size: 13.5px; }
+.ask-wait::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; animation: ask-pulse 1.6s ease-in-out infinite; }
+@keyframes ask-pulse { 50% { opacity: 0.3; } }
 .composer-box.asking > #input { display: none; }
-.questionnaire { display: flex; flex-direction: column; gap: 10px; padding: 6px 6px 10px; max-height: min(52vh, 460px); overflow-y: auto; }
-.questionnaire .q { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.questionnaire legend { padding: 0; margin-bottom: 4px; font-size: 14px; font-weight: 600; }
-.questionnaire legend .muted { font-weight: 400; font-size: 12.5px; }
-.q-opt { display: flex; align-items: center; gap: 8px; padding: 5px 9px; border-radius: 7px; border: 1px solid var(--border); background: color-mix(in srgb, var(--panel-2) 70%, transparent); font-size: 14px; cursor: pointer; }
-.q-opt:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
-.q-opt:has(input:checked) { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--panel-2)); }
-.questionnaire .q-opt { flex-direction: row; justify-content: flex-start; text-align: left; margin-top: 0; }
-.questionnaire .q-opt input { flex: none; width: auto; margin: 0; accent-color: var(--accent); }
-.questionnaire .q-opt span { flex: 1; min-width: 0; }
-.q-other { margin-top: 2px; padding: 5px 9px; border-radius: 7px; border: 1px solid var(--border); background: color-mix(in srgb, var(--bg) 70%, transparent); color: var(--text); font: inherit; font-size: 14px; outline: none; }
-.q-other:focus { border-color: var(--accent-2); }
-.q-actions { display: flex; align-items: center; gap: 8px; }
-.q-actions .spacer-row { flex: 1; }
-.q-actions button:disabled { opacity: 0.4; cursor: default; }
-.questionnaire .q.hidden { display: none; }
+.questionnaire { display: flex; flex-direction: column; gap: 14px; padding: 8px 8px 12px; max-height: min(56vh, 480px); overflow-y: auto; }
+
 /* The stepper: one dot per question, joined; answered ones filled, the current one ringed. */
-.q-steps { display: flex; align-items: center; gap: 0; padding: 2px 0 4px; }
+.q-steps { display: flex; align-items: center; padding: 2px 2px 0; }
 .q-steps.hidden { display: none; }
-.q-step { flex: none; width: 24px; height: 24px; padding: 0; border-radius: 50%; border: 1px solid var(--border); background: var(--panel-2); color: var(--muted); font-size: 12px; font-weight: 600; cursor: pointer; transition: background-color .15s, border-color .15s, color .15s; }
-.q-step:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); color: var(--text); }
-.q-step.done { background: color-mix(in srgb, var(--accent) 22%, var(--panel-2)); border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); color: var(--text); }
-.q-step.current { border-color: var(--accent); color: var(--text); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
-.q-link { flex: 0 1 28px; min-width: 8px; height: 1px; background: var(--border); }
-.q-count { margin-left: auto; font-size: 12.5px; }
-.q-actions button { border-radius: 7px; padding: 4px 12px; }
+.q-step { flex: none; width: 22px; height: 22px; padding: 0; border-radius: 50%; border: 1.5px solid var(--border); background: transparent; color: var(--muted); font-size: 11.5px; font-weight: 600; line-height: 1; cursor: pointer; transition: background-color .2s, border-color .2s, color .2s, box-shadow .2s; }
+.q-step:hover { border-color: color-mix(in srgb, var(--accent) 60%, var(--border)); color: var(--text); }
+.q-step.done { background: color-mix(in srgb, var(--accent-2) 80%, transparent); border-color: transparent; color: #fff; }
+.q-step.current { border-color: var(--accent); color: var(--text); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 18%, transparent); }
+.q-step.current.done { background: color-mix(in srgb, var(--accent-2) 80%, transparent); color: #fff; }
+.q-link { flex: 0 1 32px; min-width: 10px; height: 1.5px; margin: 0 4px; border-radius: 1px; background: var(--border); transition: background-color .2s; }
+.q-link.done { background: color-mix(in srgb, var(--accent) 60%, var(--border)); }
+.q-count { margin-left: auto; font-size: 12px; letter-spacing: 0.02em; }
+
+/* A question: its title, its proposed answers as rows with their own marks, then a field for the user's own words. */
+.questionnaire .q { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; min-width: 0; animation: q-in .22s ease-out; }
+.questionnaire .q.back { animation-name: q-back; }
+@keyframes q-in { from { opacity: 0; transform: translateX(14px); } }
+@keyframes q-back { from { opacity: 0; transform: translateX(-14px); } }
+.questionnaire .q.hidden { display: none; }
+.questionnaire legend { padding: 0 2px; margin-bottom: 6px; font-size: 15px; font-weight: 600; line-height: 1.35; }
+.questionnaire legend .muted { display: block; margin-top: 2px; font-weight: 400; font-size: 12.5px; }
+.questionnaire .q-opt { display: flex; flex-direction: row; align-items: center; justify-content: flex-start; gap: 11px; margin: 0; padding: 9px 12px; border-radius: 10px; border: 1px solid color-mix(in srgb, var(--border) 80%, transparent); background: color-mix(in srgb, var(--panel-2) 55%, transparent); font-size: 14.5px; text-align: left; cursor: pointer; transition: background-color .15s, border-color .15s; }
+.questionnaire .q-opt:hover { background: color-mix(in srgb, var(--panel-2) 90%, transparent); border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); }
+.questionnaire .q-opt:has(input:checked) { border-color: color-mix(in srgb, var(--accent) 70%, transparent); background: color-mix(in srgb, var(--accent) 13%, transparent); }
+.questionnaire .q-opt:has(input:focus-visible) { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 1px; }
+.questionnaire .q-opt span { flex: 1; min-width: 0; }
+/* (the marks are drawn: the native ones do not take the theme) */
+.questionnaire .q-opt input { appearance: none; flex: none; display: grid; place-content: center; width: 18px; height: 18px; margin: 0; padding: 0; border: 1.5px solid var(--muted); border-radius: 50%; background: transparent; cursor: pointer; transition: background-color .15s, border-color .15s; }
+.questionnaire .q-opt input[type=checkbox] { border-radius: 5px; }
+.questionnaire .q-opt input::before { content: ''; transform: scale(0); transition: transform .15s ease-out; }
+.questionnaire .q-opt input[type=radio]::before { width: 8px; height: 8px; border-radius: 50%; background: #fff; }
+.questionnaire .q-opt input[type=checkbox]::before { width: 11px; height: 11px; background: #fff; clip-path: polygon(14% 52%, 0 66%, 38% 100%, 100% 26%, 86% 12%, 38% 72%); }
+.questionnaire .q-opt input:checked { background: var(--accent-2); border-color: var(--accent-2); }
+.questionnaire .q-opt input:checked::before { transform: scale(1); }
+.questionnaire .q-other { margin: 2px 0 0; width: 100%; padding: 9px 12px; border-radius: 10px; border: 1px dashed color-mix(in srgb, var(--border) 90%, var(--muted)); background: transparent; color: var(--text); font: inherit; font-size: 14px; outline: none; transition: border-color .15s, background-color .15s; }
+.questionnaire .q-other:not(:placeholder-shown) { border-style: solid; background: color-mix(in srgb, var(--panel-2) 55%, transparent); }
+.questionnaire .q-other:focus { border-style: solid; border-color: var(--accent-2); background: color-mix(in srgb, var(--panel-2) 55%, transparent); }
+.questionnaire .q-opt + .q-other, .questionnaire legend + .q-other { margin-top: 2px; }
+
+/* The buttons: give up on the left; back, then next (or send) on the right, with their icons. */
+.q-actions { display: flex; align-items: center; gap: 6px; padding-top: 2px; }
+.q-actions .spacer-row { flex: 1; }
+.q-actions button { display: inline-flex; align-items: center; gap: 6px; border-radius: 9px; padding: 6px 12px; font-size: 14px; }
+.q-actions button svg { width: 14px; height: 14px; flex: none; }
+.q-actions .q-prev { padding-left: 8px; }
+.q-actions .q-next { padding-right: 10px; }
+.q-actions .q-skip { color: var(--muted); }
+.q-actions button:disabled { opacity: 0.35; cursor: default; pointer-events: none; }
 .card[data-tool=ask] .card-body:has(> pre:empty), .card[data-tool=ask]:has(.ask-wait) .card-body { display: none; }
 
 .notice { color: var(--warn); font-size: 13.5px; margin: 6px auto; }

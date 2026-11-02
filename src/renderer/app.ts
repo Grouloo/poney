@@ -163,6 +163,8 @@ function div(cls: string, html?: string) {
 }
 
 const SEND_ICON = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 13V3.5M3.8 7.5 8 3.3l4.2 4.2"/></svg>';
+const CHEV_LEFT = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5"/></svg>';
+const CHEV_RIGHT = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5"/></svg>';
 const STOP_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="4" y="4" width="8" height="8" rx="1.6" fill="currentColor"/></svg>';
 sendBtn.innerHTML = SEND_ICON;
 function setRunning(v: boolean) {
@@ -1907,7 +1909,7 @@ function showQuestionnaire(card: HTMLElement, id: number, questions: Question[])
     questions.map((q, i) => `<fieldset class="q" data-step="${i}"><legend>${esc(q.question)}${q.multiple ? ' <span class="muted">(plusieurs choix possibles)</span>' : ''}</legend>${
       q.options.map((o) => `<label class="q-opt"><input type="${q.multiple ? 'checkbox' : 'radio'}" name="q${i}" value="${esc(o)}"><span>${esc(o)}</span></label>`).join('')
     }<input type="text" class="q-other" name="other${i}" placeholder="${q.options.length ? 'Autre réponse ou précision…' : 'Votre réponse…'}"></fieldset>`).join('') +
-    '<div class="q-actions"><button type="button" class="ghost q-skip">Ignorer</button><span class="spacer-row"></span><button type="button" class="ghost q-prev">Précédent</button><button type="submit" class="primary q-next"></button></div>';
+    `<div class="q-actions"><button type="button" class="ghost q-skip">Ignorer</button><span class="spacer-row"></span><button type="button" class="ghost q-prev">${CHEV_LEFT}<span>Précédent</span></button><button type="submit" class="primary q-next"></button></div>`;
   const field = (i: number) => form.querySelector<HTMLInputElement>(`input[name="other${i}"]`)!;
   const answers = (): QuestionAnswer[] => questions.map((_, i) => ({
     choices: [...form.querySelectorAll<HTMLInputElement>(`input[name="q${i}"]:checked`)].map((x) => x.value),
@@ -1920,18 +1922,24 @@ function showQuestionnaire(card: HTMLElement, id: number, questions: Question[])
     if (field(i)) field(i).value = a.other;
   });
   let step = Math.min(kept?.step ?? 0, n - 1);
+  let shownStep = step; // (the question shown before: going back, the next one slides the other way)
   const keep = () => askDrafts.set(id, { answers: answers(), step });
   const go = (to: number) => {
     step = Math.max(0, Math.min(n - 1, to));
     const given = answers();
-    form.querySelectorAll<HTMLElement>('.q').forEach((f, i) => f.classList.toggle('hidden', i !== step));
+    form.querySelectorAll<HTMLElement>('.q').forEach((f, i) => {
+      f.classList.toggle('hidden', i !== step);
+      f.classList.toggle('back', i === step && i < shownStep);
+    });
+    shownStep = step;
     form.querySelectorAll<HTMLElement>('.q-step').forEach((b, i) => {
       b.classList.toggle('current', i === step);
       b.classList.toggle('done', i !== step && Boolean(given[i].choices.length || given[i].other));
     });
     form.querySelector<HTMLElement>('.q-count')!.textContent = `Question ${step + 1} sur ${n}`;
     form.querySelector<HTMLButtonElement>('.q-prev')!.disabled = step === 0;
-    form.querySelector<HTMLElement>('.q-next')!.textContent = step === n - 1 ? 'Envoyer les réponses' : 'Suivant';
+    form.querySelector<HTMLElement>('.q-next')!.innerHTML = step === n - 1 ? `<span>Envoyer</span>${SEND_ICON}` : `<span>Suivant</span>${CHEV_RIGHT}`;
+    form.querySelectorAll<HTMLElement>('.q-link').forEach((l, i) => l.classList.toggle('done', i < step));
     form.querySelector<HTMLElement>('.q-steps')!.classList.toggle('hidden', n < 2);
     form.querySelector<HTMLElement>('.q-prev')!.classList.toggle('hidden', n < 2);
     keep();
