@@ -34,6 +34,7 @@
   --glass-glint: rgba(255, 255, 255, 0.2); /* (the light a pointer brings to a glass button) */
   /* (a glass button: the glare across it, its thin edge) */
   --glass-glare: rgba(255, 255, 255, 0.13); --glass-border: rgba(255, 255, 255, 0.14);
+  --hue-thin: 22%; --hue-deep: 48%; /* (how much color a colored glass button holds, at its top and its base) */
   --ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif;
   /* Conversations: a humanist face, softer to read at length than the system UI one. */
   --chat: Seravek, 'Gill Sans Nova', Ubuntu, Calibri, 'Segoe UI', -apple-system, sans-serif;
@@ -57,6 +58,7 @@
     --glass-drop: 0 3px 12px rgba(60, 50, 40, 0.1);
     --glass-glint: rgba(255, 255, 255, 0.75);
     --glass-glare: rgba(255, 255, 255, 0.6); --glass-border: rgba(51, 51, 51, 0.13);
+    --hue-thin: 50%; --hue-deep: 74%;
   }
 }
 
@@ -927,11 +929,12 @@ body.running .resume-btn { display: none; }
 
 /* ---------- liquid glass ---------- */
 /* A drop of glass: a glare across it, a thin even edge. On hover, a glint follows the pointer
-   (--mx, --my: see app.js) and its content grows; pressed, it gives. */
+   (--mx, --my: see app.js) and its content grows, the focus coming forward with it: what lies
+   behind the glass blurs further; pressed, it gives. */
 @property --glint { syntax: '<number>'; inherits: false; initial-value: 0; }
 .primary, .approval button, .new-conv, .git-sync, .msg-editor button, .ghost {
   --tint: var(--glass);
-  transition: --glint 0.25s, transform 0.25s, box-shadow 0.25s, border-color 0.25s, color 0.15s;
+  transition: --glint 0.25s, transform 0.25s, box-shadow 0.25s, border-color 0.25s, color 0.15s, backdrop-filter 0.25s;
 }
 .primary, .approval button, .new-conv, .git-sync, .msg-editor button, .ghost:hover {
   background:
@@ -940,13 +943,13 @@ body.running .resume-btn { display: none; }
     var(--tint);
   border: 1px solid var(--glass-border);
   box-shadow: var(--glass-drop);
-  backdrop-filter: blur(10px) saturate(170%);
+  backdrop-filter: blur(5px) saturate(170%);
 }
 .primary:hover, .approval button:hover, .new-conv:hover, .git-sync:hover:not(:disabled), .msg-editor button:hover {
-  --glint: 1;
+  --glint: 1; backdrop-filter: blur(14px) saturate(170%);
 }
 /* (a ghost button is glass only under the pointer: lit, without a shadow) */
-.ghost:hover { --glint: 0.8; box-shadow: none; }
+.ghost:hover { --glint: 0.8; box-shadow: none; backdrop-filter: blur(14px) saturate(170%); }
 /* What a glass button holds grows under the pointer, and back as it is pressed (its bare
    text is put in a .glass-text span for that: see app.js). */
 :is(.primary, .approval button, .new-conv, .git-sync, .msg-editor button, .ghost) > * { transition: transform 0.25s; }
@@ -963,8 +966,9 @@ body.running .resume-btn { display: none; }
 .primary, .approval button.yes, .approval.refuse button.no {
   --depth: 0%;
   --tint:
-    radial-gradient(120% 90% at 50% 120%, color-mix(in srgb, var(--hue) 50%, rgba(255, 255, 255, 0.6)), transparent 65%),
-    linear-gradient(180deg, color-mix(in srgb, var(--hue) calc(46% + var(--depth)), transparent), color-mix(in srgb, var(--hue) calc(76% + var(--depth)), transparent));
+    radial-gradient(120% 90% at 50% 120%, color-mix(in srgb, var(--hue) 45%, rgba(255, 255, 255, 0.35)), transparent 65%),
+    linear-gradient(180deg, color-mix(in srgb, var(--hue) calc(var(--hue-thin) + var(--depth)), transparent), color-mix(in srgb, var(--hue) calc(var(--hue-deep) + var(--depth)), transparent));
+  border-color: color-mix(in srgb, var(--hue) 45%, var(--glass-border));
   color: #fff; text-shadow: 0 1px 2px color-mix(in srgb, var(--hue) 60%, #000);
 }
 .primary:hover, .approval button.yes:hover, .approval.refuse button.no:hover { --depth: 10%; }
