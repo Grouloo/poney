@@ -13,7 +13,7 @@
 //   </ask>
 
 import { list, rec } from '../unknown.ts';
-import type { Question, QuestionAnswer } from '../types.ts';
+import type { AskDraft, Question, QuestionAnswer } from '../types.ts';
 
 export const MAX_QUESTIONS = 6;
 const MAX_OPTIONS = 8;
@@ -70,5 +70,11 @@ export function askResult(questions: Question[], answers: QuestionAnswer[] | nul
   if (!answers) return 'The user closed the questionnaire without answering. Go on with sensible choices and say which ones you made, or ask in your answer.';
   return `The user answered (their own words in quotes):\n${answersText(questions, answers)}\nGo on with these answers.`;
 }
+
+/** Whether a questionnaire has been started: some answer given (the conversation is then a draft). */
+export const askStarted = (d: AskDraft | null | undefined) => Boolean(d?.answers.some((a) => a.choices.length || a.other));
+
+/** What a draft conversation's card says when hovered: its text, or the questionnaire under way. */
+export const draftTip = (text: string, ask: AskDraft | null | undefined) => (text.trim() ? text.slice(0, 600) : askStarted(ask) ? 'Questionnaire en cours' : '');
 
 export const ASK_FORMAT = 'Write each question on a line starting with "?" (add @multiple when several answers can be picked), and its proposed answers below it, one per line starting with "-".';

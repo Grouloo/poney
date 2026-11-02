@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Agent, DEFAULT_CONFIG } from './agent/agent.ts';
 import { loadSkills, skillDirs } from './agent/skills.ts';
+import { askStarted, draftTip } from './agent/ask.ts';
 import { ClaudeAgent, findClaude, claudeAuth, claudeEnv, machineClaudeDir, claudeLogin, claudeModels, claudeUsage, linkUserSettings } from './agent/claude.ts';
 import { listModels, lmStudioModels, setInferenceService } from './agent/llm.ts';
 import { ModelEngine } from './engine/engine.ts';
@@ -817,8 +818,9 @@ handle('conversations:list', [], () => {
     c.sleeping = s.sleeping;
     c.finished = s.finished;
     c.failed = s.failed;
-    c.draft = Boolean(s.draft.trim());
-    c.draftText = s.draft.slice(0, 600);
+    // (a questionnaire started is a draft too: answers not sent yet)
+    c.draft = Boolean(s.draft.trim()) || askStarted(s.askDraft);
+    c.draftText = draftTip(s.draft, s.askDraft);
     c.engine = s.choice.engine ?? 'local';
     c.provider = s.choice.provider;
     c.workingSince = s.workingSince;

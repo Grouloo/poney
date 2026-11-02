@@ -5,7 +5,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { Agent } from '../src/agent/agent.ts';
-import { parseQuestions, cleanAnswers } from '../src/agent/ask.ts';
+import { parseQuestions, cleanAnswers, askStarted, draftTip } from '../src/agent/ask.ts';
 import { parseActions } from '../src/agent/protocol.ts';
 import { parseTriage, triageBlock } from '../src/agent/triage.ts';
 import { cfg, port } from './helpers.ts';
@@ -133,4 +133,15 @@ test('the assessment lists what to ask the user, and the app recalls the questio
   assert.equal(events.filter((e) => e.type === 'notice' && /questionnaire/.test(e.text)).length, 1);
   assert.equal(asked.length, 1);
   assert.deepEqual(events.filter((e) => e.type === 'final').map((e) => e.text), ['Done.']);
+});
+
+test('a questionnaire with an answer under way makes the conversation a draft', () => {
+  const draft = (other: string, choices: string[] = []) => ({ key: 'k', step: 0, answers: [{ choices: [], other: '' }, { choices, other }] });
+  assert.equal(askStarted(null), false);
+  assert.equal(askStarted(draft('')), false); // (shown, nothing answered yet)
+  assert.equal(askStarted(draft('', ['SQLite'])), true);
+  assert.equal(askStarted(draft('CSV only')), true);
+  assert.equal(draftTip('', draft('CSV only')), 'Questionnaire en cours');
+  assert.equal(draftTip('my text', draft('CSV only')), 'my text');
+  assert.equal(draftTip('', draft('')), '');
 });
