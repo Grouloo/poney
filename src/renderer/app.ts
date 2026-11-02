@@ -2403,6 +2403,8 @@ function closeProjectMenu() {
   $<HTMLButtonElement>('projectPicker').classList.remove('open');
 }
 
+// The project of the conversation shown, in the menu of the files card: a small speech bubble.
+const HERE_ICON = '<svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><path d="M2.5 1.8h7A1.4 1.4 0 0 1 10.9 3.2v3.9a1.4 1.4 0 0 1-1.4 1.4H5.6L3.2 10.4V8.5h-.7A1.4 1.4 0 0 1 1.1 7.1V3.2a1.4 1.4 0 0 1 1.4-1.4z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>';
 /** The menu of the files card: the project to look at. */
 function openViewMenu() {
   const menu = $('viewMenu');
@@ -2412,7 +2414,7 @@ function openViewMenu() {
   for (const key of keys) {
     const row = document.createElement('div');
     row.className = `pm-row${key === viewProject() ? ' selected' : ''}`;
-    row.innerHTML = `<span class="pm-icon">${projectGlyph(key)}</span><span class="pm-name"></span>${key === own ? '<span class="pm-note">conversation</span>' : ''}<button class="pm-edit" type="button" title="Paramètres du projet (icône, suppression)">⋯</button>`;
+    row.innerHTML = `<span class="pm-icon">${projectGlyph(key)}</span><span class="pm-name"></span>${key === own ? `<span class="pm-here" data-tip="Projet de la conversation affichée">${HERE_ICON}</span>` : ''}<button class="pm-edit" type="button" title="Paramètres du projet (icône, suppression)">⋯</button>`;
     row.querySelector<HTMLElement>('.pm-name')!.textContent = projectLabel(key);
     row.title = key === OFF_KEY ? '' : key;
     row.onclick = () => { closeViewMenu(); setProjectFilter(key, Math.sign(keys.indexOf(key) - keys.indexOf(viewProject() ?? ''))); };
@@ -2898,6 +2900,7 @@ function renderFilesHead() {
   root.title = git ? root.textContent : viewDir();
 }
 function renderSection() {
+  $<HTMLButtonElement>('sectionPicker').querySelector<HTMLElement>('.picker-icon')!.innerHTML = SECTIONS.find((s) => s.key === filesSection)!.icon;
   $<HTMLButtonElement>('sectionPicker').querySelector<HTMLElement>('.picker-name')!.textContent = sectionLabel();
   $('filesPane').classList.toggle('hidden', filesSection !== 'files');
   $('gitPane').classList.toggle('hidden', filesSection !== 'git');
