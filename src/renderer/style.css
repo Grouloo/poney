@@ -32,9 +32,9 @@
   --glass-light: inset 0 1px 0 rgba(255, 255, 255, 0.16), inset 0 -1px 0 rgba(0, 0, 0, 0.22);
   --glass-drop: 0 4px 14px rgba(0, 0, 0, 0.22);
   --glass-glint: rgba(255, 255, 255, 0.2); /* (the light a pointer brings to a glass button) */
-  /* (a glass button's light: its two lit corners, the glare across it, its dark rim and inner ring) */
+  /* (a glass button's light: its two lit corners, the glare across it, its dark rim) */
   --glass-hi: rgba(255, 255, 255, 0.4); --glass-hi-2: rgba(255, 255, 255, 0.2); --glass-glare: rgba(255, 255, 255, 0.13);
-  --glass-rim: rgba(0, 0, 0, 0.75); --glass-ring: rgba(255, 255, 255, 0.1); --glass-border: rgba(255, 255, 255, 0.06);
+  --glass-rim: rgba(0, 0, 0, 0.75); --glass-border: rgba(255, 255, 255, 0.06);
   --ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif;
   /* Conversations: a humanist face, softer to read at length than the system UI one. */
   --chat: Seravek, 'Gill Sans Nova', Ubuntu, Calibri, 'Segoe UI', -apple-system, sans-serif;
@@ -58,7 +58,7 @@
     --glass-drop: 0 3px 12px rgba(60, 50, 40, 0.1);
     --glass-glint: rgba(255, 255, 255, 0.75);
     --glass-hi: rgba(255, 255, 255, 0.9); --glass-hi-2: rgba(255, 255, 255, 0.55); --glass-glare: rgba(255, 255, 255, 0.6);
-    --glass-rim: rgba(0, 0, 0, 0.35); --glass-ring: rgba(255, 255, 255, 0.45); --glass-border: rgba(51, 51, 51, 0.08);
+    --glass-rim: rgba(0, 0, 0, 0.35); --glass-border: rgba(51, 51, 51, 0.08);
   }
 }
 
@@ -540,7 +540,6 @@ img.proj-icon { width: 1.15em; height: 1.15em; object-fit: contain; vertical-ali
   display: flex; align-items: center; width: 100%; text-align: left; background: var(--panel-2); border: 1px solid var(--border);
   border-radius: 8px; padding: 7px 10px; margin-bottom: 10px;
 }
-.new-conv:hover { border-color: var(--accent-2); }
 .new-conv .kbd { margin-left: auto; color: var(--muted); font-size: 12px; }
 .groups { list-style: none; margin: 0; padding: 0; }
 .group { margin-bottom: 10px; }
@@ -929,8 +928,7 @@ body.running .resume-btn { display: none; }
 .empty h1 { font-family: var(--chat); font-weight: 500; letter-spacing: 0.2px; }
 
 /* ---------- liquid glass ---------- */
-/* A drop of glass: lit on two opposite corners, a glare across it, a dark rim and a faint ring
-   inside. On hover, a glint follows the pointer (--mx, --my: see app.js) and the drop rises;
+/* A drop of glass: lit on two opposite corners, a glare across it, a dark rim. On hover, a glint follows the pointer (--mx, --my: see app.js) and the drop rises;
    pressed, it gives. */
 @property --glint { syntax: '<number>'; inherits: false; initial-value: 0; }
 :root {
@@ -941,7 +939,7 @@ body.running .resume-btn { display: none; }
 }
 .primary, .approval button, .new-conv, .git-sync, .msg-editor button, .ghost {
   --tint: var(--glass);
-  transition: --glint 0.25s, transform 0.25s, box-shadow 0.25s, border-color 0.25s, color 0.15s, outline-color 0.25s;
+  transition: --glint 0.25s, transform 0.25s, box-shadow 0.25s, border-color 0.25s, color 0.15s;
 }
 .primary, .approval button, .new-conv, .git-sync, .msg-editor button, .ghost:hover {
   background:
@@ -952,23 +950,27 @@ body.running .resume-btn { display: none; }
   box-shadow: var(--glass-shape), var(--glass-drop);
   backdrop-filter: blur(10px) saturate(170%);
 }
-.primary:not(:focus-visible), .approval button:not(:focus-visible), .new-conv:not(:focus-visible), .git-sync:not(:focus-visible), .msg-editor button:not(:focus-visible), .ghost:hover:not(:focus-visible) {
-  outline: 1px solid var(--glass-ring); outline-offset: -5px;
-}
 .primary:hover, .approval button:hover, .new-conv:hover, .git-sync:hover:not(:disabled), .msg-editor button:hover {
   --glint: 1; transform: translateY(-2px);
   box-shadow: var(--glass-shape), 0 8px 18px rgba(0, 0, 0, 0.28);
 }
-/* (a ghost button is glass only under the pointer: lit, without rising or a shadow, its ring closer to the edge) */
+/* (a ghost button is glass only under the pointer: lit, without rising or a shadow) */
 .ghost:hover { --glint: 0.8; box-shadow: var(--glass-shape); }
-.ghost:hover:not(:focus-visible) { outline-offset: -3px; }
 .primary:active, .approval button:active, .new-conv:active, .git-sync:active:not(:disabled), .msg-editor button:active, .ghost:active {
   transform: scale(0.94); transition-duration: 0.08s;
 }
-.primary, .approval button.yes { --tint: color-mix(in srgb, var(--accent-2) 80%, transparent); color: #fff; }
-.primary:hover, .approval button.yes:hover { --tint: color-mix(in srgb, var(--accent-2) 70%, var(--accent)); }
-.primary.stop { --tint: color-mix(in srgb, var(--err) 80%, transparent); }
-.approval.refuse button.no { --tint: color-mix(in srgb, var(--err) 75%, transparent); }
+/* Colored glass: the color thin at the top and deeper below, lit from within at its base, where
+   the light comes through the drop (--hue: its color). */
+.primary, .approval button.yes { --hue: var(--accent-2); }
+.primary.stop, .approval.refuse button.no { --hue: var(--err); }
+.primary, .approval button.yes, .approval.refuse button.no {
+  --depth: 0%;
+  --tint:
+    radial-gradient(120% 90% at 50% 120%, color-mix(in srgb, var(--hue) 50%, rgba(255, 255, 255, 0.6)), transparent 65%),
+    linear-gradient(180deg, color-mix(in srgb, var(--hue) calc(46% + var(--depth)), transparent), color-mix(in srgb, var(--hue) calc(76% + var(--depth)), transparent));
+  color: #fff; text-shadow: 0 1px 2px color-mix(in srgb, var(--hue) 60%, #000);
+}
+.primary:hover, .approval button.yes:hover, .approval.refuse button.no:hover { --depth: 10%; }
 .primary, .ghost, .approval button { border-radius: 10px; }
 .primary { padding: 8px 18px; }
 /* The send button: a round glass drop with an icon (its name in its tooltip), which swells on hover. */
