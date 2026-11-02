@@ -86,6 +86,12 @@ button { cursor: pointer; }
   display: grid; grid-template-columns: minmax(max-content, 1fr) minmax(0, auto) minmax(max-content, 1fr); align-items: center; gap: 8px;
   padding: 10px 14px;
   -webkit-app-region: drag;
+  position: relative; z-index: 10;
+}
+/* (the conversation scrolls on under the bar, blurred, the blur fading out at its bottom; no tint: it would show as a band) */
+.topbar::before {
+  content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none; backdrop-filter: blur(12px);
+  -webkit-mask-image: linear-gradient(to top, transparent, #000 12px); mask-image: linear-gradient(to top, transparent, #000 12px);
 }
 /* (the window moves by the bar: nothing that moves it may lie over what is clicked, as the
    system takes those clicks before the page does; with a dialog open, the bar moves nothing) */
@@ -120,12 +126,13 @@ body:has(dialog[open]) .topbar { -webkit-app-region: no-drag; }
 /* ---------- transcript ---------- */
 /* (it runs under the input, which floats over it: --composer-h is its height, see app.js) */
 /* (its scrollbar's place is always kept, and kept beside the input too: the two have the same edges) */
-#transcript { flex: 1; overflow-y: scroll; padding: 20px 0 calc(var(--composer-h, 130px) + 14px); }
+#transcript { flex: 1; overflow-y: scroll; padding: calc(var(--under-bar) + 20px) 0 calc(var(--composer-h, 130px) + 14px); }
+#transcript::-webkit-scrollbar-track { margin-top: var(--under-bar); }
 #transcript > * { max-width: 860px; margin-left: auto; margin-right: auto; padding: 0 20px; }
 .empty { text-align: center; color: var(--muted); }
 .empty h1 { color: var(--text); font-weight: 600; font-size: 26px; }
 /* Before the conversation starts: the page and the input just below it, in the upper part of the window. */
-.chat.fresh #transcript { flex: 0 0 auto; overflow: visible; padding-top: 16vh; padding-bottom: 12px; }
+.chat.fresh #transcript { flex: 0 0 auto; overflow: visible; padding-top: calc(var(--under-bar) + 16vh); padding-bottom: 12px; }
 .chat.fresh .composer { margin-bottom: auto; }
 .welcome-project { display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 18px; }
 .welcome-picker-wrap { position: relative; }
@@ -215,7 +222,7 @@ details.thinking div { white-space: pre-wrap; border-left: 2px solid var(--borde
 /* ---------- composer ---------- */
 .composer { padding: 10px 20px 4px; }
 /* Over the conversation, which shows blurred through its panes as it scrolls under them. */
-.chat:not(.fresh) .composer { position: absolute; left: 0; right: 10px; bottom: 0; z-index: 5; pointer-events: none; }
+.chat:not(.fresh) .composer { position: absolute; left: 0; right: 10px; bottom: 0; z-index: 5; pointer-events: none; padding-bottom: calc(4px + var(--under-layout)); }
 .chat:not(.fresh) .composer > * { pointer-events: auto; }
 /* (the whole area is blurred, gaps and status line included, the blur fading in at its top; no tint: it would show as a band) */
 .chat:not(.fresh) .composer::before {
@@ -394,11 +401,17 @@ fieldset small { color: var(--muted); font-size: 12.5px; }
 
 /* ---------- layout: sidebar | chat | viewer ---------- */
 .layout { flex: 1; display: flex; min-height: 0; padding: 2px 12px 12px; gap: 12px; }
-.chat { position: relative; flex: 1 0 500px; display: flex; flex-direction: column; min-width: 500px; }
+/* (the chat reaches up under the top bar and down to the window's edge, the conversation passing under both: --under-bar and
+   --under-layout are what it reaches past the layout) */
+.chat {
+  --under-bar: calc(var(--topbar-h, 55px) + 2px); --under-layout: 12px;
+  margin: calc(-1 * var(--under-bar)) 0 calc(-1 * var(--under-layout));
+  position: relative; flex: 1 0 500px; display: flex; flex-direction: column; min-width: 500px;
+}
 /* another project in the files card: the chat greyed, a click on it brings it back */
 .chat > * { transition: opacity 0.2s, filter 0.2s; }
 .observing .chat > * { opacity: 0.35; filter: grayscale(1); }
-.observing .chat::after { content: ''; position: absolute; inset: 0; z-index: 30; cursor: pointer; }
+.observing .chat::after { content: ''; position: absolute; inset: var(--under-bar) 0 0; z-index: 30; cursor: pointer; }
 .muted { color: var(--muted); }
 .hidden { display: none !important; }
 

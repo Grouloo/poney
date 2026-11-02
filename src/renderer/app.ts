@@ -83,6 +83,9 @@ new ResizeObserver(() => {
   fitComposer();
   if (atEnd) transcript.scrollTop = transcript.scrollHeight;
 }).observe(composer);
+// (and under the top bar, which blurs it as it passes: --topbar-h is the bar's height)
+const topbar = document.querySelector<HTMLElement>('.topbar')!;
+new ResizeObserver(() => document.body.style.setProperty('--topbar-h', `${topbar.offsetHeight}px`)).observe(topbar);
 
 // ---------- helpers ----------
 function scrollDown(force?: boolean) {
