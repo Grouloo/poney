@@ -91,6 +91,38 @@ export function claudeEnv(env: NodeJS.ProcessEnv = process.env, configDir: strin
 // settings, instructions, skills, agents, commands, plugins. (Not the login, sessions or history.)
 const SHARED = ['settings.json', 'CLAUDE.md', 'skills', 'agents', 'commands', 'output-styles', 'plugins', 'hooks'];
 
+/** The machine's Claude folder. */
+export const machineClaudeDir = (env: NodeJS.ProcessEnv = process.env) => env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+
+/** A session's transcript in an account's folder (projects/<the project's folder>/<id>.jsonl), or null. */
+function sessionFile(dir: string, id: string) {
+  let names: string[];
+  try { names = fs.readdirSync(path.join(dir, 'projects')); } catch { return null; }
+  for (const name of names) {
+    const file = path.join(dir, 'projects', name, `${id}.jsonl`);
+    if (fs.existsSync(file)) return file;
+  }
+  return null;
+}
+
+/**
+ * A conversation goes on with another account: its session, as last written in any account's
+ * folder, is copied into this one's (with what it keeps beside it), so that it resumes there.
+ */
+export function bringSession(id: string, toDir: string, dirs: string[]) {
+  const copies = [...new Set([toDir, ...dirs])].flatMap((dir) => {
+    const file = sessionFile(dir, id);
+    return file ? [{ dir, file, at: fs.statSync(file).mtimeMs }] : [];
+  });
+  const newest = copies.reduce<(typeof copies)[number] | null>((a, b) => (a && a.at >= b.at ? a : b), null);
+  if (!newest || newest.dir === toDir) return;
+  const target = path.join(toDir, path.relative(newest.dir, newest.file));
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.copyFileSync(newest.file, target);
+  const beside = newest.file.slice(0, -'.jsonl'.length);
+  if (fs.existsSync(beside)) fs.cpSync(beside, target.slice(0, -'.jsonl'.length), { recursive: true });
+}
+
 /** Links what the user's folder has (and the account's does not) into an added account's folder. */
 export function linkUserSettings(configDir: string, userDir = path.join(os.homedir(), '.claude')) {
   fs.mkdirSync(configDir, { recursive: true });
@@ -242,6 +274,7 @@ export class ClaudeAgent extends EventEmitter<{ event: [AgentEvent] }> {
   cwd: string;
   executable: string | null;
   configDir: string | null;
+  accountDirs: string[];
   approve: Approve;
   skillsDir: string | null;
   runQuery: ClaudeRun | null;
@@ -270,6 +303,7 @@ export class ClaudeAgent extends EventEmitter<{ event: [AgentEvent] }> {
     this.cwd = cwd;
     this.executable = executable;
     this.configDir = configDir; // the account's folder (null: the machine's)
+    this.accountDirs = []; // every account's folder: where its session may have been written last
     this.approve = approve;
     this.skillsDir = skillsDir;
     this.runQuery = query;
@@ -330,6 +364,10 @@ export class ClaudeAgent extends EventEmitter<{ event: [AgentEvent] }> {
       const content = this.prompt(text, turnId);
       this.messages.push({ role: 'user', content });
       const run: ClaudeRun = this.runQuery ?? (await sdk()).query;
+      // (the account changed since the last message: the session comes along)
+      if (this.sessionId) {
+        try { bringSession(this.sessionId, this.configDir ?? machineClaudeDir(), this.accountDirs); } catch {}
+      }
       const options: Options = {
           cwd: this.cwd,
           model: this.choice.model ?? undefined,

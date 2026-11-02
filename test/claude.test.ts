@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { ClaudeAgent, toolView, claudeModels, claudeUsage, claudeLoggedIn, claudeError, claudeEnv, claudeAuth, linkUserSettings } from '../src/agent/claude.ts';
+import { ClaudeAgent, toolView, claudeModels, claudeUsage, claudeLoggedIn, claudeError, claudeEnv, claudeAuth, linkUserSettings, bringSession } from '../src/agent/claude.ts';
 import type { ClaudeQuery, ClaudeRun } from '../src/agent/claude.ts';
 import type { AgentEvent, ApprovalAnswer, ApprovalRequest, Approve, EventOf } from '../src/types.ts';
 
@@ -280,4 +280,30 @@ test('an added account takes the user\'s settings, skills and instructions, not 
   linkUserSettings(account, user);
   assert.equal(await fs.readFile(path.join(account, 'settings.json'), 'utf8'), '{"own": true}');
   assert.ok((await fs.readdir(account)).includes('agents'));
+});
+
+test('a conversation goes on with another account: its session follows, the latest written', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'poney-switch-'));
+  const [a, b] = [path.join(root, 'a'), path.join(root, 'b')];
+  const project = path.join('projects', '-Users-moi-projet');
+  await fs.mkdir(path.join(a, project, 's1', 'subagents'), { recursive: true });
+  await fs.writeFile(path.join(a, project, 's1.jsonl'), 'tour 1\n');
+  await fs.writeFile(path.join(a, project, 's1', 'subagents', 'x.jsonl'), 'sous-agent');
+  // The next message, with B: the session is there, with what it keeps beside it.
+  const { a: agentB, calls } = agent([init, done]);
+  agentB.sessionId = 's1';
+  agentB.configDir = b;
+  agentB.accountDirs = [a, b];
+  await agentB.send('suite');
+  assert.equal(calls[0].options.resume, 's1');
+  assert.equal(await fs.readFile(path.join(b, project, 's1.jsonl'), 'utf8'), 'tour 1\n');
+  assert.equal(await fs.readFile(path.join(b, project, 's1', 'subagents', 'x.jsonl'), 'utf8'), 'sous-agent');
+  // B went on; back to A, it takes B's copy, the latest.
+  await fs.writeFile(path.join(b, project, 's1.jsonl'), 'tour 1\ntour 2\n');
+  const later = new Date(Date.now() + 5000);
+  await fs.utimes(path.join(b, project, 's1.jsonl'), later, later);
+  bringSession('s1', a, [a, b]);
+  assert.equal(await fs.readFile(path.join(a, project, 's1.jsonl'), 'utf8'), 'tour 1\ntour 2\n');
+  // (a session found nowhere: nothing to do)
+  bringSession('inconnue', a, [a, b]);
 });

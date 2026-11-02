@@ -262,7 +262,7 @@ function openModelMenu() {
     r.className = `pm-row model-row${engine === c.engine && same && model === (c.model ?? (engine === 'local' ? settings.config.model : claudeModel()?.value)) ? ' selected' : ''}`;
     r.innerHTML = `<span class="pm-icon">${group ? groupIcon(group) : engineIcon(engine)}</span><span class="pm-name">${esc(name)}</span>`;
     r.disabled = off;
-    if (off) r.title = engine === 'claude' && c.engine === 'claude' ? 'Une conversation commencée garde son compte Claude' : 'Une conversation commencée garde son type de modèle';
+    if (off) r.title = 'Une conversation commencée garde son type de modèle';
     r.onclick = () => {
       closeModelMenu();
       const m = account?.models.find((x) => x.value === model);
@@ -277,10 +277,10 @@ function openModelMenu() {
     if (g.error) menu.appendChild(div('pm-row muted', `<span class="pm-icon">${groupIcon(g)}</span><span class="pm-name">${esc(g.name)} : injoignable</span>`));
   }
   if (!modelGroups.some((g) => g.models.length || g.error)) menu.appendChild(div('pm-row muted', 'aucun modèle local'));
-  // One group per Claude account; a conversation started stays on its own.
+  // One group per Claude account; a conversation goes on with another one (its session follows).
   for (const a of claude.accounts) {
     label(accountLabel(a));
-    for (const m of a.models) row('claude', m.value, m.name, Boolean(started) && (c.engine !== 'claude' || accountId(c) !== a.id), undefined, a);
+    for (const m of a.models) row('claude', m.value, m.name, Boolean(started) && c.engine !== 'claude', undefined, a);
     if (!a.loggedIn) {
       const hint = menu.appendChild(document.createElement('button'));
       hint.type = 'button';

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Agent, DEFAULT_CONFIG } from './agent/agent.ts';
 import { loadSkills, skillDirs } from './agent/skills.ts';
-import { ClaudeAgent, findClaude, claudeAuth, claudeEnv, claudeLogin, claudeModels, claudeUsage, linkUserSettings } from './agent/claude.ts';
+import { ClaudeAgent, findClaude, claudeAuth, claudeEnv, machineClaudeDir, claudeLogin, claudeModels, claudeUsage, linkUserSettings } from './agent/claude.ts';
 import { listModels, lmStudioModels, setInferenceService } from './agent/llm.ts';
 import { ModelEngine } from './engine/engine.ts';
 import { ENGINE_BUILD, engineSupported, installEngine, installedEngine } from './engine/install.ts';
@@ -249,6 +249,7 @@ class Session {
     if (this.agent.isClaude) {
       this.agent.choice = this.choice;
       this.agent.configDir = claudeDirOf(claudeAccountOf(this.choice));
+      this.agent.accountDirs = settings.providers.filter((p) => p.type === 'claude').map((p) => claudeDirOf(p.id) ?? machineClaudeDir());
       if (this.agent.configDir) linkUserSettings(this.agent.configDir); // (what the user added since)
       this.agent.autoSkills = settings.config.autoSkills;
     }
@@ -884,8 +885,6 @@ handle('claude:loginCancel', [], () => { login?.cancel(); });
 handle('session:setChoice', [isObject], (patch) => {
   const s = current();
   if (s.started && patch.engine && patch.engine !== s.choice.engine) return publicSettings();
-  // (a Claude conversation stays on its account: its sessions are in that account's folder)
-  if (s.started && s.choice.engine === 'claude' && patch.provider !== undefined && patch.provider !== claudeAccountOf(s.choice)) return publicSettings();
   s.choice = { ...s.choice, ...patch };
   settings.lastChoice = s.choice;
   saveSettings();
