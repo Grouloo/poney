@@ -1905,11 +1905,10 @@ function showQuestionnaire(card: HTMLElement, id: number, questions: Question[])
   form.className = 'questionnaire';
   form.dataset.id = String(id);
   const n = questions.length;
-  form.innerHTML = `<div class="q-steps">${questions.map((q, i) => `<button type="button" class="q-step" data-step="${i}" title="${esc(q.question)}">${i + 1}</button>`).join('<span class="q-link"></span>')}<span class="q-count muted"></span></div>` +
-    questions.map((q, i) => `<fieldset class="q" data-step="${i}"><legend>${esc(q.question)}${q.multiple ? ' <span class="muted">(plusieurs choix possibles)</span>' : ''}</legend>${
+  form.innerHTML =     questions.map((q, i) => `<fieldset class="q" data-step="${i}"><legend>${esc(q.question)}${q.multiple ? ' <span class="muted">(plusieurs choix possibles)</span>' : ''}</legend>${
       q.options.map((o) => `<label class="q-opt"><input type="${q.multiple ? 'checkbox' : 'radio'}" name="q${i}" value="${esc(o)}"><span>${esc(o)}</span></label>`).join('')
     }<input type="text" class="q-other" name="other${i}" placeholder="${q.options.length ? 'Autre réponse ou précision…' : 'Votre réponse…'}"></fieldset>`).join('') +
-    `<div class="q-actions"><button type="button" class="ghost q-skip">Ignorer</button><span class="spacer-row"></span><button type="button" class="ghost q-prev">${CHEV_LEFT}<span>Précédent</span></button><button type="submit" class="primary q-next"></button></div>`;
+    `<div class="q-actions"><button type="button" class="ghost q-skip">Ignorer</button><span class="spacer-row"></span><div class="q-steps" role="group">${questions.map((q, i) => `<button type="button" class="q-step" data-step="${i}" title="${esc(q.question)}">${i + 1}</button>`).join('<span class="q-link"></span>')}</div><button type="button" class="ghost q-prev">${CHEV_LEFT}<span>Précédent</span></button><button type="submit" class="primary q-next"></button></div>`;
   const field = (i: number) => form.querySelector<HTMLInputElement>(`input[name="other${i}"]`)!;
   const answers = (): QuestionAnswer[] => questions.map((_, i) => ({
     choices: [...form.querySelectorAll<HTMLInputElement>(`input[name="q${i}"]:checked`)].map((x) => x.value),
@@ -1936,7 +1935,7 @@ function showQuestionnaire(card: HTMLElement, id: number, questions: Question[])
       b.classList.toggle('current', i === step);
       b.classList.toggle('done', i !== step && Boolean(given[i].choices.length || given[i].other));
     });
-    form.querySelector<HTMLElement>('.q-count')!.textContent = `Question ${step + 1} sur ${n}`;
+    form.querySelector<HTMLElement>('.q-steps')!.ariaLabel = `Question ${step + 1} sur ${n}`;
     form.querySelector<HTMLButtonElement>('.q-prev')!.disabled = step === 0;
     form.querySelector<HTMLElement>('.q-next')!.innerHTML = step === n - 1 ? `<span>Envoyer</span>${SEND_ICON}` : `<span>Suivant</span>${CHEV_RIGHT}`;
     form.querySelectorAll<HTMLElement>('.q-link').forEach((l, i) => l.classList.toggle('done', i < step));
@@ -1949,7 +1948,14 @@ function showQuestionnaire(card: HTMLElement, id: number, questions: Question[])
   // (a radio picked again is unpicked: a single choice can be left empty)
   form.querySelectorAll<HTMLInputElement>('input[type=radio]').forEach((r) => {
     r.onpointerdown = () => { r.dataset.was = String(r.checked); };
-    r.onclick = () => { if (r.dataset.was === 'true') { r.checked = false; keep(); } };
+    r.onclick = () => {
+      const was = r.dataset.was;
+      delete r.dataset.was; // (set by a pointer only: arrow keys also click, and only move among the choices)
+      if (was === 'true') { r.checked = false; keep(); return; }
+      // A single choice picked: the next question (not on the last one: sending stays the user's click).
+      const from = step;
+      if (was && from < n - 1) setTimeout(() => { if (step === from && r.checked) go(from + 1); }, 220);
+    };
   });
   form.oninput = keep;
   form.onchange = keep;

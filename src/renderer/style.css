@@ -226,19 +226,21 @@ details.thinking div { white-space: pre-wrap; border-left: 2px solid var(--borde
 .ask-wait::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; animation: ask-pulse 1.6s ease-in-out infinite; }
 @keyframes ask-pulse { 50% { opacity: 0.3; } }
 .composer-box.asking > #input { display: none; }
+/* (darker while it asks: the questions stand apart from the field they replace) */
+.composer-box.asking { background: color-mix(in srgb, var(--surface) 55%, #000); }
+@media (prefers-color-scheme: light) { .composer-box.asking { background: color-mix(in srgb, var(--panel-2) 85%, #000); } }
 .questionnaire { display: flex; flex-direction: column; gap: 14px; padding: 8px 8px 12px; max-height: min(56vh, 480px); overflow-y: auto; }
 
 /* The stepper: one dot per question, joined; answered ones filled, the current one ringed. */
-.q-steps { display: flex; align-items: center; padding: 2px 2px 0; }
+.q-steps { display: flex; align-items: center; margin-right: 6px; }
 .q-steps.hidden { display: none; }
 .q-step { flex: none; width: 22px; height: 22px; padding: 0; border-radius: 50%; border: 1.5px solid var(--border); background: transparent; color: var(--muted); font-size: 11.5px; font-weight: 600; line-height: 1; cursor: pointer; transition: background-color .2s, border-color .2s, color .2s, box-shadow .2s; }
 .q-step:hover { border-color: color-mix(in srgb, var(--accent) 60%, var(--border)); color: var(--text); }
 .q-step.done { background: color-mix(in srgb, var(--accent-2) 80%, transparent); border-color: transparent; color: #fff; }
 .q-step.current { border-color: var(--accent); color: var(--text); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 18%, transparent); }
 .q-step.current.done { background: color-mix(in srgb, var(--accent-2) 80%, transparent); color: #fff; }
-.q-link { flex: 0 1 32px; min-width: 10px; height: 1.5px; margin: 0 4px; border-radius: 1px; background: var(--border); transition: background-color .2s; }
+.q-link { flex: none; width: 14px; height: 1.5px; margin: 0 3px; border-radius: 1px; background: var(--border); transition: background-color .2s; }
 .q-link.done { background: color-mix(in srgb, var(--accent) 60%, var(--border)); }
-.q-count { margin-left: auto; font-size: 12px; letter-spacing: 0.02em; }
 
 /* A question: its title, its proposed answers as rows with their own marks, then a field for the user's own words. */
 .questionnaire .q { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; min-width: 0; animation: q-in .22s ease-out; }
@@ -271,6 +273,7 @@ details.thinking div { white-space: pre-wrap; border-left: 2px solid var(--borde
 .q-actions .spacer-row { flex: 1; }
 .q-actions button { display: inline-flex; align-items: center; gap: 6px; border-radius: 9px; padding: 6px 12px; font-size: 14px; }
 .q-actions button svg { width: 14px; height: 14px; flex: none; }
+.q-actions .q-step { justify-content: center; width: 22px; height: 22px; padding: 0; border-radius: 50%; font-size: 11.5px; }
 .q-actions .q-prev { padding-left: 8px; }
 .q-actions .q-next { padding-right: 10px; }
 .q-actions .q-skip { color: var(--muted); }
