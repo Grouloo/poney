@@ -71,7 +71,12 @@ const sdk = () => import('@anthropic-ai/claude-agent-sdk');
 // the SDK sets its own entrypoint.
 const HOST_SESSION = /^(CLAUDECODE|CLAUDE_PID|CLAUDE_EFFORT|CLAUDE_CODE_\w+|CLAUDE_AGENT_SDK_\w+|CLAUDE_PREVIEW_\w+|MCP_CONNECTION_NONBLOCKING|MCP_SERVER_CONNECTION_BATCH_SIZE)$/;
 // (what a user sets for Claude Code in their own shell: kept)
-const USER_SETTINGS = new Set(['CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_SHELL', 'CLAUDE_CODE_SHELL_PREFIX', 'CLAUDE_CODE_GIT_BASH_PATH', 'CLAUDE_CODE_MAX_OUTPUT_TOKENS', 'CLAUDE_CODE_API_KEY_HELPER_TTL_MS', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', 'CLAUDE_CODE_CLIENT_CERT', 'CLAUDE_CODE_CLIENT_KEY', 'CLAUDE_CODE_CLIENT_KEY_PASSPHRASE']);
+const USER_SETTINGS = new Set(['CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_SHELL', 'CLAUDE_CODE_SHELL_PREFIX', 'CLAUDE_CODE_GIT_BASH_PATH', 'CLAUDE_CODE_MAX_OUTPUT_TOKENS', 'CLAUDE_CODE_API_KEY_HELPER_TTL_MS', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', 'CLAUDE_CODE_CLIENT_CERT', 'CLAUDE_CODE_CLIENT_KEY', 'CLAUDE_CODE_CLIENT_KEY_PASSPHRASE', 'CLAUDE_CODE_AUTO_COMPACT_WINDOW']);
+
+// Each request bills the whole context again, cached or not: on the 1M window a long conversation
+// reaches 600k tokens a message, and its first compaction (after an account switch, uncached) costs
+// a large share of a 5-hour quota. Compacting at 200k keeps both small.
+const COMPACT_WINDOW = '200000';
 
 /**
  * The environment of the Claude processes Poney starts: its own, without a host session's.
@@ -83,6 +88,7 @@ export function claudeEnv(env: NodeJS.ProcessEnv = process.env, configDir: strin
   for (const [name, value] of Object.entries(env)) {
     if (value !== undefined && (USER_SETTINGS.has(name) || !HOST_SESSION.test(name))) out[name] = value;
   }
+  out.CLAUDE_CODE_AUTO_COMPACT_WINDOW ??= COMPACT_WINDOW;
   if (configDir) out.CLAUDE_CONFIG_DIR = configDir;
   return out;
 }

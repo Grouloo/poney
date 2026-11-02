@@ -238,7 +238,9 @@ test('started from a Claude session, Poney does not hand its variables on to its
     CLAUDE_AGENT_SDK_VERSION: '0.3', MCP_CONNECTION_NONBLOCKING: 'true',
     CLAUDE_CODE_USE_BEDROCK: '1', CLAUDE_CODE_SHELL: '/bin/zsh',
   };
-  assert.deepEqual(claudeEnv(host), { PATH: '/usr/bin', HOME: '/Users/a', ANTHROPIC_BASE_URL: 'https://api.anthropic.com', CLAUDE_CODE_USE_BEDROCK: '1', CLAUDE_CODE_SHELL: '/bin/zsh' });
+  assert.deepEqual(claudeEnv(host), { PATH: '/usr/bin', HOME: '/Users/a', ANTHROPIC_BASE_URL: 'https://api.anthropic.com', CLAUDE_CODE_USE_BEDROCK: '1', CLAUDE_CODE_SHELL: '/bin/zsh', CLAUDE_CODE_AUTO_COMPACT_WINDOW: '200000' });
+  // (compacting at 200k unless the user chose another window)
+  assert.equal(claudeEnv({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '400000' }).CLAUDE_CODE_AUTO_COMPACT_WINDOW, '400000');
   // (each turn gets that environment, not the SDK's default: Poney's own)
   const { a, calls } = agent([init, done]);
   await a.send('salut');
