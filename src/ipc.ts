@@ -159,6 +159,7 @@ export interface Channels {
   'tor:check': [[], TorCheck];
   'context:get': [[], ContextStats | null];
   'context:compact': [[], CompactResult];
+  'files:observe': [[dir: string | null], void];
   'files:list': [[rel?: string], FileEntries];
   'files:read': [[rel: string], ViewedFile];
   'files:openExternal': [[rel: string], string];

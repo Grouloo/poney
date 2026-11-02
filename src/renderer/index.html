@@ -27,6 +27,16 @@
   <button id="deckTab" class="deck-tab" type="button"></button>
   <aside id="sidebar">
     <div class="project-bar">
+      <div id="convFilter" class="conv-filter"><span class="picker-icon"></span><span class="picker-name"></span></div>
+      <button type="button" class="ghost icon deck-swap"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 5.5h10M10 3l2.5 2.5L10 8M13.5 10.5h-10M6 8l-2.5 2.5L6 13"/></svg></button>
+    </div>
+    <div id="convPane" class="pane">
+      <ul id="convList" class="groups"></ul>
+    </div>
+    <div id="projectDots" class="project-dots"></div>
+  </aside>
+  <aside id="filesBar" class="side-pane">
+    <div class="project-bar">
       <button id="projectPicker" class="project-picker" type="button">
         <span class="picker-icon"></span><span class="picker-name"></span>
         <svg class="picker-chev" viewBox="0 0 12 12" width="11" height="11" aria-hidden="true"><path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -35,22 +45,16 @@
       <button type="button" class="ghost icon deck-swap"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 5.5h10M10 3l2.5 2.5L10 8M13.5 10.5h-10M6 8l-2.5 2.5L6 13"/></svg></button>
       <div id="projectMenu" class="project-menu hidden"></div>
     </div>
-    <div id="convPane" class="pane">
-      <ul id="convList" class="groups"></ul>
-    </div>
-    <div id="projectDots" class="project-dots"></div>
-  </aside>
-  <aside id="filesBar" class="side-pane">
     <div class="files-head">
       <button id="sectionPicker" class="project-picker" type="button">
         <span class="picker-name"></span>
         <svg class="picker-chev" viewBox="0 0 12 12" width="11" height="11" aria-hidden="true"><path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
-      <span id="filesRoot" class="muted"></span>
+      <span class="spacer-row"></span>
       <button id="refreshFiles" class="ghost icon" data-tip="Rafraîchir">↻</button>
-      <button type="button" class="ghost icon deck-swap"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 5.5h10M10 3l2.5 2.5L10 8M13.5 10.5h-10M6 8l-2.5 2.5L6 13"/></svg></button>
       <div id="sectionMenu" class="project-menu hidden"></div>
     </div>
+    <div id="filesRoot" class="files-root muted"></div>
     <div id="filesPane" class="pane">
       <ul id="fileTree" class="tree"></ul>
     </div>

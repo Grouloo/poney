@@ -141,8 +141,15 @@ function shortPath(p: string) {
 // Outside any project, the agent works in a folder of the conversation's own.
 const offMode = () => Boolean(settings.active?.offProject);
 const activeDir = () => settings.active?.cwd || '';
+// The files card may look at another project than the conversation's: its files and Git
+// then, the chat greyed until the user comes back to it.
+let observed: string | null = null;
+let observedFor: string | null = null; // (the conversation it was chosen from)
+const viewDir = () => observed ?? activeDir();
+const viewOff = () => !observed && offMode();
 
 function renderSettings() {
+  if (observed && settings.active?.session !== observedFor) endObserving(); // (main forgot it too)
   const shellOn = settings.config.shellEnabled !== false;
   $<HTMLInputElement>('webEnabled').checked = settings.config.webEnabled !== false;
   $<HTMLInputElement>('shellEnabled').checked = shellOn;
@@ -2099,7 +2106,7 @@ $<HTMLInputElement>('ipSearch').addEventListener('input', renderIconPicker);
 $<HTMLButtonElement>('projectImage').onclick = () => applyProjectIcon(() => window.api.pickProjectIcon(settingsProject));
 $<HTMLButtonElement>('projectIconClear').onclick = () => applyProjectIcon(() => window.api.setProjectIcon(settingsProject, null));
 $<HTMLButtonElement>('projectDialogClose').onclick = () => $<HTMLDialogElement>('projectDialog').close();
-$<HTMLButtonElement>('projectSettingsBtn').onclick = () => openProjectSettings(projectFilter);
+$<HTMLButtonElement>('projectSettingsBtn').onclick = () => { const key = viewProject(); if (key) openProjectSettings(key); };
 $<HTMLButtonElement>('projectDelete').onclick = async () => {
   const dir = settingsProject;
   const n = everyConversation.filter((c) => projectOf(c) === dir).length;
@@ -2337,9 +2344,20 @@ function stepProject(dir: number) {
   setProjectFilter(keys[(keys.indexOf(projectFilter) + dir + keys.length) % keys.length], dir);
 }
 
+/** The project of the files card: the one observed, else the conversation's. */
+const viewProject = () => observed ?? activeProject();
+function renderPicker() {
+  const key = viewProject();
+  const picker = $<HTMLButtonElement>('projectPicker');
+  picker.querySelector<HTMLElement>('.picker-icon')!.innerHTML = key ? projectGlyph(key) : '';
+  picker.querySelector<HTMLElement>('.picker-name')!.textContent = key ? projectLabel(key) : 'Aucun projet';
+  picker.title = key && key !== OFF_KEY ? key : '';
+}
+
 function renderProjectBar(keys: string[]) {
-  $<HTMLButtonElement>('projectPicker').querySelector<HTMLElement>('.picker-icon')!.innerHTML = projectIcon(projectFilter);
-  $<HTMLButtonElement>('projectPicker').querySelector<HTMLElement>('.picker-name')!.textContent = projectLabel(projectFilter);
+  $('convFilter').querySelector<HTMLElement>('.picker-icon')!.innerHTML = projectIcon(projectFilter);
+  $('convFilter').querySelector<HTMLElement>('.picker-name')!.textContent = projectLabel(projectFilter);
+  renderPicker();
   const dots = $('projectDots');
   dots.innerHTML = '';
   for (const key of keys) {
@@ -2359,13 +2377,15 @@ function renderProjectBar(keys: string[]) {
 function openProjectMenu() {
   const menu = $('projectMenu');
   menu.innerHTML = '';
-  for (const key of projectKeys()) {
+  // (outside any project, each conversation has its own folder: only the one shown is there)
+  const own = activeProject();
+  for (const key of projectKeys().filter((k) => k !== ALL && (k !== OFF_KEY || own === OFF_KEY))) {
     const row = document.createElement('div');
-    row.className = `pm-row${key === projectFilter ? ' selected' : ''}`;
-    row.innerHTML = `<span class="pm-icon">${key === ALL ? '' : projectGlyph(key)}</span><span class="pm-name"></span>${key === ALL ? '' : '<button class="pm-edit" type="button" title="Paramètres du projet (icône, suppression)">⋯</button>'}`;
+    row.className = `pm-row${key === viewProject() ? ' selected' : ''}`;
+    row.innerHTML = `<span class="pm-icon">${projectGlyph(key)}</span><span class="pm-name"></span>${key === own ? '<span class="pm-note">conversation</span>' : ''}<button class="pm-edit" type="button" title="Paramètres du projet (icône, suppression)">⋯</button>`;
     row.querySelector<HTMLElement>('.pm-name')!.textContent = projectLabel(key);
-    row.title = key === ALL || key === OFF_KEY ? '' : key;
-    row.onclick = () => { closeProjectMenu(); setProjectFilter(key); };
+    row.title = key === OFF_KEY ? '' : key;
+    row.onclick = () => { closeProjectMenu(); observe(key === own ? null : key); };
     const edit = row.querySelector<HTMLElement>('.pm-edit');
     if (edit) edit.onclick = (e) => { e.stopPropagation(); closeProjectMenu(); openProjectSettings(key); };
     menu.appendChild(row);
@@ -2383,6 +2403,36 @@ function closeProjectMenu() {
   $('projectMenu').classList.add('hidden');
   $<HTMLButtonElement>('projectPicker').classList.remove('open');
 }
+
+/** Looks at another project in the files card (null: the conversation's). */
+async function observe(dir: string | null) {
+  if (dir === observed) return;
+  observed = dir;
+  observedFor = settings.active?.session ?? null;
+  await window.api.observeProject(dir);
+  greyChat(Boolean(dir));
+  renderPicker();
+  closeViewer(); // (what was open belongs to the other project)
+  closeDiffPanel();
+  expanded.clear();
+  refreshTree();
+}
+/** Back to the conversation: the files card follows it again. */
+function endObserving() {
+  if (!observed) return;
+  if (settings.active?.session === observedFor) return void observe(null);
+  // (another conversation is shown: main already looks at it)
+  observed = null;
+  greyChat(false);
+  renderPicker();
+}
+const chat = document.querySelector<HTMLElement>('.chat')!;
+/** Greyed, out of reach of the keyboard: a click on it only brings it back (its controls wait for the next one). */
+function greyChat(on: boolean) {
+  document.body.classList.toggle('observing', on);
+  for (const el of chat.children) (el as HTMLElement).inert = on;
+}
+chat.addEventListener('mousedown', () => endObserving());
 
 $<HTMLButtonElement>('projectPicker').onclick = (e) => {
   e.stopPropagation();
@@ -2787,11 +2837,11 @@ let treeStates: FileStates = {}; // the git state of each path, for its color
 async function refreshTree() {
   renderFilesHead();
   refreshGit();
-  if (!activeDir()) {
+  if (!viewDir()) {
     $('fileTree').innerHTML = '';
     return;
   }
-  treeStates = offMode() ? {} : await window.api.gitFileStates().catch(() => ({}));
+  treeStates = viewOff() ? {} : await window.api.gitFileStates().catch(() => ({}));
   await renderDir('.', $('fileTree'));
 }
 $<HTMLButtonElement>('refreshFiles').onclick = () => filesSection === 'git' ? refreshGit({ force: true }) : refreshTree();
@@ -2801,8 +2851,8 @@ function renderFilesHead() {
   const git = filesSection === 'git';
   const root = $('filesRoot');
   root.classList.toggle('branch', git);
-  root.textContent = git ? (gitState?.repo && gitState.branch) || '' : offMode() ? '' : shortPath(activeDir());
-  root.title = git ? root.textContent : activeDir();
+  root.textContent = git ? (gitState?.repo ? gitState.branch || 'Tête détachée' : '') : viewOff() ? '' : `\u200e${shortPath(viewDir())}`; // (the mark keeps ~ first: the line is right to left, to cut from the left)
+  root.title = git ? root.textContent : viewDir();
 }
 function renderSection() {
   $<HTMLButtonElement>('sectionPicker').querySelector<HTMLElement>('.picker-name')!.textContent = sectionLabel();
@@ -2878,7 +2928,7 @@ try { collapsedGit = new Set(JSON.parse(localStorage.getItem('gitCollapsed') || 
 
 async function refreshGit({ force = false } = {}) {
   if (filesSection !== 'git') return;
-  const dir = offMode() ? '' : activeDir();
+  const dir = viewOff() ? '' : viewDir();
   const run = ++gitRefresh;
   const st: GitRepoStatus = dir ? await window.api.gitStatus().catch((): GitRepoStatus => ({ repo: false })) : { repo: false };
   if (run !== gitRefresh) return; // (a newer one is on its way, perhaps for another project)
@@ -2969,7 +3019,7 @@ function renderGit() {
   pane.replaceChildren(...items);
 }
 async function syncGit() {
-  const dir = activeDir();
+  const dir = viewDir();
   gitSyncing = true;
   gitError = '';
   renderGit();
@@ -3000,7 +3050,7 @@ function showRemoteKind() {
 }
 
 async function openRemoteDialog() {
-  remoteDir = activeDir();
+  remoteDir = viewDir();
   $<HTMLInputElement>('remoteUrl').value = '';
   $<HTMLInputElement>('remoteToken').value = '';
   $<HTMLInputElement>('remoteName').value = baseName(remoteDir).replace(/[^\w.-]+/g, '-');

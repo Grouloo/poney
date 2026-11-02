@@ -76,6 +76,7 @@ const api = {
   getContext: call('context:get'),
   compactContext: call('context:compact'),
 
+  observeProject: call('files:observe'),
   listFiles: call('files:list'),
   readFile: call('files:read'),
   openFileExternal: call('files:openExternal'),

@@ -453,6 +453,7 @@ function activate(s: Session) {
   s.unread = 0;
   s.usedAt = Date.now();
   clearNotifications(s.key);
+  observed = null; // (the files card follows the conversation shown)
   if (prev && prev !== s && !prev.conv && !prev.running) prev.close();
   // Idle sessions beyond the limit: saved and dropped (reloaded from disk when opened).
   const idle = [...sessions.values()].filter((x) => x !== active && !x.running && !x.approvals.size).sort((a, b) => b.usedAt - a.usedAt);
@@ -462,6 +463,9 @@ function activate(s: Session) {
 }
 
 const activeCwd = () => active?.cwd ?? settings.workspace;
+// Another project looked at in the files card (its files and Git), while the conversation stays.
+let observed: string | null = null;
+const viewCwd = () => observed ?? activeCwd();
 /** The active session, a new one in the current project if there is none. */
 const current = () => active ?? activate(new Session({ cwd: settings.workspace }));
 const saveAll = () => { for (const s of sessions.values()) s.keepDraft(); };
@@ -1049,18 +1053,23 @@ handle('context:compact', [], async () => {
   return r;
 });
 
-handle('files:list', [optional(isString)], (rel) => listDir(activeCwd(), rel));
-handle('files:read', [isString], (rel) => readFileForViewer(activeCwd(), rel));
-handle('files:openExternal', [isString], (rel) => shell.openPath(path.join(activeCwd(), rel)));
-handle('files:reveal', [isString], (rel) => shell.showItemInFolder(path.join(activeCwd(), rel)));
+// A project of the list, or null: back to the conversation's.
+handle('files:observe', [(v: unknown): v is string | null => v === null || isString(v)], (dir) => {
+  const known = dir && (settings.recent.includes(dir) || dir === settings.workspace || store.listAll().some((c) => c.workspace === dir && !c.offProject));
+  observed = known && dir !== activeCwd() ? dir : null;
+});
+handle('files:list', [optional(isString)], (rel) => listDir(viewCwd(), rel));
+handle('files:read', [isString], (rel) => readFileForViewer(viewCwd(), rel));
+handle('files:openExternal', [isString], (rel) => shell.openPath(path.join(viewCwd(), rel)));
+handle('files:reveal', [isString], (rel) => shell.showItemInFolder(path.join(viewCwd(), rel)));
 // (git goes through the network like a terminal command: the same Tor setting)
 const gitEnv = async () => settings.config.torEnabled && settings.config.torShell ? proxyEnv(await requireTor(settings.config.torProxy)) : {};
-handle('git:status', [], () => gitStatus(activeCwd()));
-handle('git:fileStates', [], () => gitFileStates(activeCwd()));
-handle('git:diff', [isString, optional(isObject)], (file, opts) => gitDiff(activeCwd(), file, opts));
-handle('git:fetch', [], async () => gitFetch(activeCwd(), await gitEnv()));
-handle('git:sync', [], async () => gitSync(activeCwd(), await gitEnv()));
-handle('git:connect', [isString], async (url) => gitConnect(activeCwd(), url, await gitEnv()));
+handle('git:status', [], () => gitStatus(viewCwd()));
+handle('git:fileStates', [], () => gitFileStates(viewCwd()));
+handle('git:diff', [isString, optional(isObject)], (file, opts) => gitDiff(viewCwd(), file, opts));
+handle('git:fetch', [], async () => gitFetch(viewCwd(), await gitEnv()));
+handle('git:sync', [], async () => gitSync(viewCwd(), await gitEnv()));
+handle('git:connect', [isString], async (url) => gitConnect(viewCwd(), url, await gitEnv()));
 handle('git:remote', [nullable(isString)], (dir) => gitRemote(dir));
 handle('git:setRemote', [isString, isString], async (dir, url) => gitChangeRemote(dir, url, await gitEnv()));
 handle('git:removeRemote', [isString], (dir) => gitRemoveRemote(dir));
@@ -1111,7 +1120,7 @@ handle('git:createGithub', [isObject], async ({ name, isPrivate, token }) => {
   const gh = await readyGh();
   if (!gh && noDirectGithub()) throw new Error('La création sur GitHub avec un jeton ne passe pas par Tor : installez gh, ou raccordez un dépôt existant.');
   const url = await createGithubRepo({ name, isPrivate, gh, token: token || savedGithubToken(), env });
-  await gitConnect(activeCwd(), url, env, { keep: true });
+  await gitConnect(viewCwd(), url, env, { keep: true });
 });
 handle('agent:approve', [isObject], ({ id, ok, always, reason }) => {
   if (always) {
