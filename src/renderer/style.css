@@ -436,16 +436,18 @@ body.no-sidebar .deck { width: 0; margin-right: -12px; opacity: 0; transform: tr
 }
 /* (the card in front lets the other show through it, blurred) */
 .deck .front { z-index: 2; }
-#sidebar.front, #filesBar.front { background: var(--side), color-mix(in srgb, var(--sheet-solid) 60%, transparent); backdrop-filter: blur(6px) saturate(150%); }
+#sidebar.front, #filesBar.front { background: var(--side), color-mix(in srgb, var(--sheet-solid) 68%, transparent); }
 .deck .back { z-index: 1; transform: translateX(22px) scale(0.965); transform-origin: right center; filter: brightness(0.9); transition: transform 0.15s ease-out, filter 0.15s; }
 /* (its content fades out before the edge that shows, where its label is written; not while the cards swap) */
-.deck:not(.swapping) .back > * { -webkit-mask-image: linear-gradient(to left, transparent 34px, #000 64px); mask-image: linear-gradient(to left, transparent 34px, #000 64px); }
+.deck:not(.swapping) .back > :not(.card-glass) { -webkit-mask-image: linear-gradient(to left, transparent 34px, #000 64px); mask-image: linear-gradient(to left, transparent 34px, #000 64px); }
 .deck-tab:hover ~ .back { transform: translateX(26px) scale(0.965); filter: brightness(1); }
 .deck-tab {
   position: absolute; top: 12px; bottom: 12px; right: 0; width: 22px; z-index: 3; padding: 0; cursor: pointer;
   background: none; border: none; color: var(--muted); font-size: 12.5px; letter-spacing: 0.04em; writing-mode: vertical-rl;
-  transition: color 0.15s, transform 0.15s ease-out;
+  transition: color 0.15s, transform 0.15s ease-out, opacity 0.2s;
 }
+/* (its label is the other card's: it goes while they swap, and comes back on the new one) */
+.deck.swapping .deck-tab { opacity: 0; transition: none; }
 /* (the text follows the card; the button itself stays, or it would slip from under the pointer) */
 .deck-tab::before { content: ''; position: absolute; inset: 0 -4px 0 0; }
 .deck-tab:hover { color: var(--text); transform: translateX(4px); }
@@ -473,8 +475,12 @@ body.no-sidebar .deck { width: 0; margin-right: -12px; opacity: 0; transform: tr
 #sidebar > .pane::-webkit-scrollbar-track, #filesBar > .pane::-webkit-scrollbar-track { margin: var(--head-h, 0px) 0 var(--foot-h, 0px); }
 #sidebar > :not(.pane), #filesBar > :not(.pane) { position: relative; z-index: 2; }
 #sidebar > :has(.project-menu:not(.hidden)), #filesBar > :has(.project-menu:not(.hidden)) { z-index: 3; } /* (an open menu above what follows) */
+/* (the card's own blur, of what is behind it, is a layer under its content: on the card itself, it
+   would keep its head and foot from blurring the list) */
+#sidebar > .card-glass, #filesBar > .card-glass { position: absolute; inset: 0; z-index: 0; pointer-events: none; backdrop-filter: blur(24px) saturate(150%); }
+#sidebar.front > .card-glass, #filesBar.front > .card-glass { backdrop-filter: blur(6px) saturate(150%); }
 #sidebar::before, #sidebar::after, #filesBar::before, #filesBar::after {
-  content: ''; position: absolute; left: 0; right: 0; z-index: 1; pointer-events: none; backdrop-filter: blur(12px);
+  content: ''; position: absolute; left: 0; right: 0; z-index: 1; pointer-events: none; backdrop-filter: blur(26px) saturate(140%);
 }
 #sidebar::before, #filesBar::before {
   top: 0; height: var(--head-h, 0px);
@@ -609,7 +615,7 @@ img.proj-icon { width: 1.15em; height: 1.15em; object-fit: contain; vertical-ali
 .files-root:has(.files-root-line:empty) { padding-bottom: 4px; }
 /* the branch, a picker (see app.js) */
 .branch-picker {
-  display: inline-flex; align-items: center; gap: 6px; max-width: 100%; margin: -2px 0 -2px -6px; padding: 2px 6px; border-radius: 6px;
+  display: inline-flex; align-items: center; gap: 6px; flex: 0 1 auto; min-width: 0; margin-left: 2px; padding: 3px 6px; border-radius: 6px;
   background: none; border: none; color: var(--muted); font: 12px var(--mono);
 }
 .branch-picker:hover, .branch-picker.open { background: color-mix(in srgb, var(--text) 9%, transparent); color: var(--text); }
@@ -617,7 +623,7 @@ img.proj-icon { width: 1.15em; height: 1.15em; object-fit: contain; vertical-ali
 .branch-picker .dot-icon .line { stroke: currentColor; }
 .branch-name { overflow: hidden; text-overflow: ellipsis; }
 .branch-picker .picker-chev { flex: none; }
-.branch-menu { top: calc(100% - 4px); font-family: var(--mono); }
+.branch-menu { font-family: var(--mono); }
 .branch-menu .pm-row { font-size: 13px; }
 .branch-menu .pm-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pm-head { padding: 8px 8px 3px; color: var(--muted); font: 600 11px var(--ui); letter-spacing: 0.04em; text-transform: uppercase; }
@@ -1017,6 +1023,7 @@ body.running .resume-btn { display: none; }
   box-shadow: var(--float);
   backdrop-filter: blur(24px) saturate(150%);
 }
+#sidebar, #filesBar { backdrop-filter: none; } /* (see .card-glass) */
 .agent-panel, .live-panel { background: var(--glass-sheen), var(--surface); }
 .viewer-head { border-bottom-color: color-mix(in srgb, var(--border) 70%, transparent); padding-top: 8px; padding-bottom: 8px; }
 
@@ -1063,7 +1070,10 @@ body.running .resume-btn { display: none; }
 .model-menu { left: auto; right: 0; top: auto; bottom: calc(100% + 6px); min-width: 240px; max-height: min(50vh, var(--room, 50vh)); }
 .engine-img { width: 16px; height: 16px; display: block; }
 .provider-card { display: flex; flex-direction: column; gap: 8px; margin: 10px 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; }
-.provider-card.off > :not(.provider-head) { display: none; }
+.provider-card.off > :not(.provider-head), .provider-card.folded > :not(.provider-head) { display: none; }
+.provider-head { cursor: pointer; }
+.provider-chev { display: inline-flex; color: var(--muted); transition: transform 0.15s; }
+.provider-card.folded .provider-chev { transform: rotate(-90deg); }
 .provider-head { display: flex; align-items: center; gap: 8px; font-weight: 600; }
 .provider-head .spacer { flex: 1; }
 .provider-head label { display: flex; flex-direction: row; align-items: center; gap: 6px; margin: 0; font-weight: normal; font-size: 13px; color: var(--muted); }
@@ -1071,7 +1081,10 @@ body.running .resume-btn { display: none; }
 .provider-model { display: flex; align-items: center; gap: 8px; font-size: 13.5px; }
 .provider-model span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .provider-model input { flex: none; width: 110px; }
-.model-sep { display: flex; align-items: center; gap: 8px; padding: 8px 8px 4px; color: var(--muted); font-size: 12px; }
+.model-sep { display: flex; align-items: center; gap: 6px; width: 100%; padding: 8px 8px 4px; color: var(--muted); font-size: 12px; background: none; border: none; text-align: left; cursor: pointer; }
+.model-sep:hover { color: var(--text); }
+.model-sep .picker-chev { flex: none; transition: transform 0.15s; }
+.model-sep.folded .picker-chev { transform: rotate(-90deg); }
 .model-sep::after { content: ''; flex: 1; height: 1px; background: var(--border); }
 .model-row { width: 100%; background: none; border: none; color: var(--text); text-align: left; }
 .model-row:disabled { opacity: 0.45; cursor: default; }

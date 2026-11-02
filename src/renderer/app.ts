@@ -89,7 +89,7 @@ new ResizeObserver(() => document.body.style.setProperty('--topbar-h', `${topbar
 // The sidebar cards' lists likewise scroll under their head and foot: --head-h and --foot-h are
 // the heights of what lies above and below the pane shown.
 for (const card of document.querySelectorAll<HTMLElement>('#sidebar, #filesBar')) {
-  const kids = [...card.children].filter((el): el is HTMLElement => el instanceof HTMLElement);
+  const kids = [...card.children].filter((el): el is HTMLElement => el instanceof HTMLElement && !el.classList.contains('card-glass'));
   const fit = () => {
     const at = kids.findIndex((el) => el.classList.contains('pane') && !el.classList.contains('hidden'));
     const height = (els: HTMLElement[]) => els.reduce((sum, el) => sum + el.offsetHeight, 0);
@@ -109,6 +109,22 @@ document.addEventListener('pointermove', (e) => {
   b.style.setProperty('--mx', `${e.clientX - r.left}px`);
   b.style.setProperty('--my', `${e.clientY - r.top}px`);
 }, { passive: true });
+
+// One menu open at a time: a click elsewhere than in a menu or on its picker closes it.
+// (In the capture phase: the pickers stop their clicks from going further.)
+const MENUS: [picker: string, menu: string, close: () => void][] = [
+  ['modelPicker', 'modelMenu', () => closeModelMenu()], ['welcomePicker', 'welcomeMenu', () => closeWelcomeMenu()],
+  ['projectPicker', 'projectMenu', () => closeProjectMenu()], ['viewPicker', 'viewMenu', () => closeViewMenu()],
+  ['sectionPicker', 'sectionMenu', () => closeSectionMenu()], ['branchPicker', 'branchMenu', () => closeBranchMenu()],
+];
+document.addEventListener('click', (e) => {
+  const target = e.target instanceof Node ? e.target : null;
+  for (const [picker, menu, close] of MENUS) {
+    const m = document.getElementById(menu);
+    if (!m || m.classList.contains('hidden') || m.contains(target) || document.getElementById(picker)?.contains(target)) continue;
+    close();
+  }
+}, true);
 
 // ---------- helpers ----------
 function scrollDown(force?: boolean) {
@@ -282,12 +298,15 @@ function fitBelowBar(menu: HTMLElement, anchor: HTMLElement) {
   menu.style.setProperty('--room', `${Math.max(room, 0)}px`);
 }
 
+// The model menu's groups fold, and stay as they were left.
+const foldedModels = new Set<string>(((): string[] => { try { return JSON.parse(localStorage.getItem('modelFolded') ?? '[]'); } catch { return []; } })());
 function openModelMenu() {
   const menu = $('modelMenu');
   const c = choice();
   menu.innerHTML = '';
+  let into: HTMLElement = menu; // (the group the rows go in)
   const row = (engine: EngineName, model: string, name: string, off: boolean, group?: ModelGroup, account?: ClaudeAccount) => {
-    const r = menu.appendChild(document.createElement('button'));
+    const r = into.appendChild(document.createElement('button'));
     r.type = 'button';
     const same = engine === 'claude' ? account?.id === accountId(c) : group?.provider.id === choiceProvider();
     r.className = `pm-row model-row${engine === c.engine && same && model === (c.model ?? (engine === 'local' ? settings.config.model : claudeModel()?.value)) ? ' selected' : ''}`;
@@ -301,19 +320,35 @@ function openModelMenu() {
     };
   };
   const started = settings.active?.started;
-  const label = (text: string) => menu.appendChild(div('model-sep')).appendChild(document.createElement('span')).append(text);
+  const label = (text: string, key: string) => {
+    const head = menu.appendChild(document.createElement('button'));
+    head.type = 'button';
+    head.className = `model-sep${foldedModels.has(key) ? ' folded' : ''}`;
+    head.innerHTML = `${CHEVRON}<span></span>`;
+    head.querySelector('span')!.textContent = text;
+    into = menu.appendChild(div(`model-group${foldedModels.has(key) ? ' hidden' : ''}`));
+    const group = into;
+    head.onclick = () => {
+      if (foldedModels.has(key)) foldedModels.delete(key); else foldedModels.add(key);
+      try { localStorage.setItem('modelFolded', JSON.stringify([...foldedModels])); } catch {}
+      head.classList.toggle('folded', foldedModels.has(key));
+      group.classList.toggle('hidden', foldedModels.has(key));
+    };
+  };
+  const several = modelGroups.filter((g) => g.models.length || g.error).length + claude.accounts.length > 1;
   for (const g of modelGroups) {
-    if (g.provider.type !== 'poney' && (g.models.length || g.error)) label(g.name ?? '');
+    if (several && (g.models.length || g.error)) label(g.name ?? (g.provider.type === 'poney' ? 'Poney' : ''), g.provider.id);
     for (const m of g.models) row('local', m.id, m.name, started && c.engine !== 'local', g);
-    if (g.error) menu.appendChild(div('pm-row muted', `<span class="pm-icon">${groupIcon(g)}</span><span class="pm-name">${esc(g.name)} : injoignable</span>`));
+    if (g.error) into.appendChild(div('pm-row muted', `<span class="pm-icon">${groupIcon(g)}</span><span class="pm-name">${esc(g.name)} : injoignable</span>`));
+    into = menu;
   }
   if (!modelGroups.some((g) => g.models.length || g.error)) menu.appendChild(div('pm-row muted', 'aucun modèle local'));
   // One group per Claude account; a conversation goes on with another one (its session follows).
   for (const a of claude.accounts) {
-    label(accountLabel(a));
+    if (several) label(accountLabel(a), a.id);
     for (const m of a.models) row('claude', m.value, m.name, Boolean(started) && c.engine !== 'claude', undefined, a);
     if (!a.loggedIn) {
-      const hint = menu.appendChild(document.createElement('button'));
+      const hint = into.appendChild(document.createElement('button'));
       hint.type = 'button';
       hint.className = 'pm-row model-row model-hint';
       hint.innerHTML = `<span class="pm-icon">${CLAUDE_ICON}</span><span class="pm-name">Se connecter…</span>`;
@@ -368,11 +403,18 @@ async function changeProvider(call: Promise<PublicSettings>) {
   refreshGauge();
   refreshModels();
 }
+// The providers' cards are folded, but for those opened (until the app closes): an added one is.
+const openProviders = new Set<string>();
 function providerCard(p: Provider) {
-  const card = div(`provider-card${p.enabled ? '' : ' off'}`);
+  const card = div(`provider-card${p.enabled ? '' : ' off'}${openProviders.has(p.id) ? '' : ' folded'}`);
   const group = modelGroups.find((g) => g.provider.id === p.id);
   const head = card.appendChild(div('provider-head'));
-  head.innerHTML = `<span class="pm-icon">${p.type === 'claude' ? CLAUDE_ICON : groupIcon(group)}</span><span class="provider-name"></span><div class="spacer"></div><label><input type="checkbox"> Activé</label>`;
+  head.innerHTML = `<span class="provider-chev">${CHEVRON}</span><span class="pm-icon">${p.type === 'claude' ? CLAUDE_ICON : groupIcon(group)}</span><span class="provider-name"></span><div class="spacer"></div><label><input type="checkbox"> Activé</label>`;
+  head.onclick = (e) => {
+    if (e.target instanceof Element && e.target.closest('label, button, input')) return;
+    if (openProviders.has(p.id)) openProviders.delete(p.id); else openProviders.add(p.id);
+    card.classList.toggle('folded', !openProviders.has(p.id));
+  };
   head.querySelector<HTMLElement>('.provider-name')!.textContent = p.name || group?.name || 'Serveur';
   const on = head.querySelector<HTMLInputElement>('input')!;
   on.checked = p.enabled;
@@ -488,9 +530,15 @@ async function renderProviders() {
   const cards = await Promise.all((settings.providers ?? []).map((p) => (p.type === 'poney' ? poneyCard(p) : p.type === 'claude' ? claudeCard(p) : serverCard(p))));
   $('providersList').replaceChildren(...cards);
 }
-$<HTMLButtonElement>('addProvider').onclick = () => changeProvider(window.api.addProvider({ baseUrl: 'http://localhost:1234/v1' }));
+$<HTMLButtonElement>('addProvider').onclick = async () => {
+  const before = new Set(settings.providers.map((p) => p.id));
+  const after = await window.api.addProvider({ baseUrl: 'http://localhost:1234/v1' });
+  for (const p of after.providers) if (!before.has(p.id)) openProviders.add(p.id);
+  await changeProvider(Promise.resolve(after));
+};
 $<HTMLButtonElement>('addClaudeAccount').onclick = async () => {
   const added = await window.api.addClaudeAccount();
+  openProviders.add(added.id);
   await changeProvider(Promise.resolve(added.settings));
   claude = await window.api.claudeStatus().catch(() => claude);
   loginClaude(added.id);
@@ -3014,34 +3062,31 @@ function renderFilesHead() {
   const line = root.querySelector<HTMLElement>('.files-root-line')!;
   root.classList.toggle('branch', git);
   $('revealRoot').classList.toggle('hidden', git || viewOff() || !viewDir());
+  // (on Git, the branch is a picker beside the section's: switch to another, or start a new one)
+  const picker = $<HTMLButtonElement>('branchPicker');
+  picker.classList.toggle('hidden', !(git && gitState?.repo));
   if (git && gitState?.repo) {
-    // (the branch is a picker: switch to another, or start a new one)
-    line.innerHTML = `<button id="branchPicker" class="branch-picker" type="button">${BRANCH_ICON}<span class="branch-name"></span>${CHEVRON}</button>`;
-    line.querySelector<HTMLElement>('.branch-name')!.textContent = gitState.branch || 'Tête détachée';
-    line.title = '';
-    const picker = line.querySelector<HTMLButtonElement>('#branchPicker')!;
-    picker.dataset.tip = 'Changer de branche, ou en créer une';
-    picker.classList.toggle('open', !$('branchMenu').classList.contains('hidden'));
-    picker.onclick = (e) => { e.stopPropagation(); toggleBranchMenu(); };
-    return;
-  }
-  closeBranchMenu();
+    picker.innerHTML = `${BRANCH_ICON}<span class="branch-name"></span>${CHEVRON}`;
+    picker.querySelector<HTMLElement>('.branch-name')!.textContent = gitState.branch || 'Tête détachée';
+    picker.dataset.tip = `${gitState.branch || 'Tête détachée'} : changer de branche, ou en créer une`;
+  } else closeBranchMenu();
   line.textContent = git || viewOff() ? '' : `\u200e${shortPath(viewDir())}`; // (the mark keeps ~ first: the line is right to left, to cut from the left)
   line.title = git ? '' : viewDir();
 }
+$<HTMLButtonElement>('branchPicker').onclick = (e) => { e.stopPropagation(); toggleBranchMenu(); };
 
 // The branches: those here, then those only on the remote (switching to one brings it here),
 // and a new one, made from where the project stands.
 function closeBranchMenu() {
   $('branchMenu').classList.add('hidden');
-  document.getElementById('branchPicker')?.classList.remove('open');
+  $('branchPicker').classList.remove('open');
 }
 async function toggleBranchMenu() {
   const menu = $('branchMenu');
   if (!menu.classList.contains('hidden')) return closeBranchMenu();
   menu.replaceChildren(div('pm-row muted', 'Chargement…'));
   menu.classList.remove('hidden');
-  document.getElementById('branchPicker')?.classList.add('open');
+  $('branchPicker').classList.add('open');
   const branches = await window.api.gitBranches().catch(() => null);
   if (menu.classList.contains('hidden')) return;
   if (!branches) return menu.replaceChildren(div('pm-row muted', 'Branches illisibles.'));
