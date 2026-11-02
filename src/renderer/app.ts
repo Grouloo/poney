@@ -101,7 +101,7 @@ for (const card of document.querySelectorAll<HTMLElement>('#sidebar, #filesBar')
 }
 
 // The glint on a glass button follows the pointer.
-const GLASS = '.primary, .approval button, .new-conv, .git-sync, .msg-editor button, .ghost';
+const GLASS = '.primary, .approval button, .new-conv, .git-sync, .glass-btn, .msg-editor button, .ghost';
 document.addEventListener('pointermove', (e) => {
   const b = e.target instanceof Element ? e.target.closest<HTMLElement>(GLASS) : null;
   if (!b) return;
@@ -408,8 +408,8 @@ async function poneyCard(p: Provider) {
   if (!engine.supported) return card;
   const folder = card.appendChild(document.createElement('button'));
   folder.type = 'button';
-  folder.className = 'ghost provider-folder';
-  folder.textContent = 'Ouvrir le dossier des modèles';
+  folder.className = 'glass-btn provider-folder';
+  folder.innerHTML = `${FILE_MANAGER_ICON}<span>Ouvrir le dossier des modèles</span>`;
   folder.title = engine.folder;
   folder.onclick = () => window.api.openModelsFolder();
   const options = settings.engine;
@@ -3009,10 +3009,94 @@ $<HTMLButtonElement>('refreshFiles').onclick = () => filesSection === 'git' ? re
 function renderFilesHead() {
   const git = filesSection === 'git';
   const root = $('filesRoot');
+  const line = root.querySelector<HTMLElement>('.files-root-line')!;
   root.classList.toggle('branch', git);
-  root.textContent = git ? (gitState?.repo ? gitState.branch || 'Tête détachée' : '') : viewOff() ? '' : `\u200e${shortPath(viewDir())}`; // (the mark keeps ~ first: the line is right to left, to cut from the left)
-  root.title = git ? root.textContent : viewDir();
+  $('revealRoot').classList.toggle('hidden', git || viewOff() || !viewDir());
+  if (git && gitState?.repo) {
+    // (the branch is a picker: switch to another, or start a new one)
+    line.innerHTML = `<button id="branchPicker" class="branch-picker" type="button">${SECTIONS.find((x) => x.key === 'git')!.icon}<span class="branch-name"></span>${CHEVRON}</button>`;
+    line.querySelector<HTMLElement>('.branch-name')!.textContent = gitState.branch || 'Tête détachée';
+    line.title = '';
+    const picker = line.querySelector<HTMLButtonElement>('#branchPicker')!;
+    picker.dataset.tip = 'Changer de branche, ou en créer une';
+    picker.classList.toggle('open', !$('branchMenu').classList.contains('hidden'));
+    picker.onclick = (e) => { e.stopPropagation(); toggleBranchMenu(); };
+    return;
+  }
+  closeBranchMenu();
+  line.textContent = git || viewOff() ? '' : `\u200e${shortPath(viewDir())}`; // (the mark keeps ~ first: the line is right to left, to cut from the left)
+  line.title = git ? '' : viewDir();
 }
+
+// The branches: those here, then those only on the remote (switching to one brings it here),
+// and a new one, made from where the project stands.
+function closeBranchMenu() {
+  $('branchMenu').classList.add('hidden');
+  document.getElementById('branchPicker')?.classList.remove('open');
+}
+async function toggleBranchMenu() {
+  const menu = $('branchMenu');
+  if (!menu.classList.contains('hidden')) return closeBranchMenu();
+  menu.replaceChildren(div('pm-row muted', 'Chargement…'));
+  menu.classList.remove('hidden');
+  document.getElementById('branchPicker')?.classList.add('open');
+  const branches = await window.api.gitBranches().catch(() => null);
+  if (menu.classList.contains('hidden')) return;
+  if (!branches) return menu.replaceChildren(div('pm-row muted', 'Branches illisibles.'));
+  const rows: HTMLElement[] = [];
+  const row = (name: string, remote: boolean) => {
+    const r = div(`pm-row${name === branches.current ? ' selected' : ''}`);
+    r.innerHTML = '<span class="pm-name"></span>';
+    r.querySelector<HTMLElement>('.pm-name')!.textContent = name;
+    r.dataset.tip = remote ? `${name} : sur le dépôt distant, elle sera récupérée ici` : name;
+    r.onclick = () => name === branches.current ? closeBranchMenu() : changeBranch(() => window.api.gitSwitch(name));
+    return r;
+  };
+  rows.push(...branches.local.map((name) => row(name, false)));
+  if (branches.remote.length) rows.push(div('pm-head', 'Sur le dépôt distant'), ...branches.remote.map((name) => row(name, true)));
+  const add = div('pm-row branch-new', '<span class="pm-icon">＋</span><span class="pm-name">Nouvelle branche…</span>');
+  add.onclick = () => {
+    const form = document.createElement('form');
+    form.className = 'branch-form';
+    form.innerHTML = '<input class="rename" maxlength="200" placeholder="nom-de-la-branche" spellcheck="false" autocomplete="off">';
+    const input = form.querySelector('input')!;
+    form.onsubmit = (e) => {
+      e.preventDefault();
+      if (input.value.trim()) changeBranch(() => window.api.gitCreateBranch(input.value.trim()));
+    };
+    add.replaceWith(form);
+    input.focus();
+  };
+  rows.push(add);
+  menu.replaceChildren(...rows);
+}
+async function changeBranch(change: () => Promise<void>) {
+  const menu = $('branchMenu');
+  menu.querySelector('.branch-error')?.remove();
+  try {
+    await change();
+  } catch (e) {
+    menu.appendChild(div('pm-row branch-error', '')).textContent = errorMessage(e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+    return;
+  }
+  closeBranchMenu();
+  refreshTree(); // (the files are those of the branch now; this refreshes Git too)
+}
+$('branchMenu').onclick = (e) => e.stopPropagation();
+document.addEventListener('click', closeBranchMenu);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeBranchMenu(); });
+
+// The project's folder, opened in the system's file manager.
+const FILE_MANAGER = window.api.platform === 'darwin' ? 'le Finder' : window.api.platform === 'win32' ? 'l’Explorateur de fichiers' : 'le gestionnaire de fichiers';
+const FILE_MANAGER_NAME = window.api.platform === 'darwin' ? 'Finder' : window.api.platform === 'win32' ? 'Explorateur' : 'Dossier';
+const FILE_MANAGER_ICON = window.api.platform === 'darwin'
+  ? '<svg class="fm-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="1" y="1" width="14" height="14" rx="3.2" fill="#9ed2ff"/><path d="M4.2 1h4.6C8 4 7.4 6.6 7.3 9h1.2c0 2 .2 4 .5 6H4.2A3.2 3.2 0 0 1 1 11.8V4.2A3.2 3.2 0 0 1 4.2 1z" fill="#1f7ae8"/><path d="M5 4.8v1.7M11 4.8v1.7" stroke="#0b2a55" stroke-width="1.1" stroke-linecap="round"/><path d="M4 10.4c2.4 1.6 5.6 1.6 8 0" fill="none" stroke="#0b2a55" stroke-width="1" stroke-linecap="round"/></svg>'
+  : window.api.platform === 'win32'
+    ? '<svg class="fm-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 4.2c0-.7.6-1.2 1.2-1.2h3.4l1.4 1.5h5.8c.7 0 1.2.5 1.2 1.2v6.6c0 .7-.5 1.2-1.2 1.2H2.7c-.6 0-1.2-.5-1.2-1.2z" fill="#f4c542"/><path d="M1.5 6.4h13v1.5h-13z" fill="#3c8ce7"/></svg>'
+    : '<svg class="fm-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 4.2c0-.7.6-1.2 1.2-1.2h3.4l1.4 1.5h5.8c.7 0 1.2.5 1.2 1.2v6.6c0 .7-.5 1.2-1.2 1.2H2.7c-.6 0-1.2-.5-1.2-1.2z"/></svg>';
+$('revealRoot').innerHTML = FILE_MANAGER_ICON;
+$('revealRoot').dataset.tip = `Ouvrir le dossier dans ${FILE_MANAGER}`;
+$<HTMLButtonElement>('revealRoot').onclick = () => window.api.openFileExternal('.');
 function renderSection() {
   $<HTMLButtonElement>('sectionPicker').querySelector<HTMLElement>('.picker-icon')!.innerHTML = SECTIONS.find((s) => s.key === filesSection)!.icon;
   $<HTMLButtonElement>('sectionPicker').querySelector<HTMLElement>('.picker-name')!.textContent = sectionLabel();
@@ -3474,6 +3558,8 @@ function showDocument(body: HTMLElement, f: ViewedFile & { kind: 'text' }) {
 $<HTMLButtonElement>('viewerClose').onclick = closeViewer;
 $<HTMLButtonElement>('viewerReload').onclick = () => openPath && openFile(openPath, { keepScroll: true });
 $<HTMLButtonElement>('viewerOpen').onclick = () => openPath && window.api.openFileExternal(openPath);
+$('viewerReveal').innerHTML = `${FILE_MANAGER_ICON}${FILE_MANAGER_NAME}`;
+$('viewerReveal').title = `Afficher dans ${FILE_MANAGER}`;
 $<HTMLButtonElement>('viewerReveal').onclick = () => openPath && window.api.revealFile(openPath);
 
 // ---------- system prompt ----------

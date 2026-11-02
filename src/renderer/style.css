@@ -469,6 +469,7 @@ body.no-sidebar .deck { width: 0; margin-right: -12px; opacity: 0; transform: tr
 }
 #sidebar > .pane::-webkit-scrollbar-track, #filesBar > .pane::-webkit-scrollbar-track { margin: var(--head-h, 0px) 0 var(--foot-h, 0px); }
 #sidebar > :not(.pane), #filesBar > :not(.pane) { position: relative; z-index: 2; }
+#sidebar > :has(.project-menu:not(.hidden)), #filesBar > :has(.project-menu:not(.hidden)) { z-index: 3; } /* (an open menu above what follows) */
 #sidebar::before, #sidebar::after, #filesBar::before, #filesBar::after {
   content: ''; position: absolute; left: 0; right: 0; z-index: 1; pointer-events: none; backdrop-filter: blur(12px);
 }
@@ -597,11 +598,34 @@ img.proj-icon { width: 1.15em; height: 1.15em; object-fit: contain; vertical-ali
 .files-head .picker-icon .dot-icon { width: 13px; height: 13px; }
 /* under Fichiers / Git: the folder's path, or the branch */
 .files-root {
-  font-size: 12.5px; padding: 0 12px 7px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left;
+  font-size: 12.5px; padding: 0 12px 7px;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
 }
-.files-root.branch { direction: ltr; font-family: var(--mono); font-size: 12px; }
-.files-root:empty { padding-bottom: 4px; }
+.files-root-line { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.files-root.branch .files-root-line { direction: ltr; }
+.files-root:has(.files-root-line:empty) { padding-bottom: 4px; }
+/* the branch, a picker (see app.js) */
+.branch-picker {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 100%; margin: -2px 0 -2px -6px; padding: 2px 6px; border-radius: 6px;
+  background: none; border: none; color: var(--muted); font: 12px var(--mono);
+}
+.branch-picker:hover, .branch-picker.open { background: color-mix(in srgb, var(--text) 9%, transparent); color: var(--text); }
+.branch-picker .dot-icon { flex: none; width: 12px; height: 12px; fill: currentColor; }
+.branch-picker .dot-icon .line { stroke: currentColor; }
+.branch-name { overflow: hidden; text-overflow: ellipsis; }
+.branch-picker .picker-chev { flex: none; }
+.branch-menu { top: calc(100% - 4px); font-family: var(--mono); }
+.branch-menu .pm-row { font-size: 13px; }
+.branch-menu .pm-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pm-head { padding: 8px 8px 3px; color: var(--muted); font: 600 11px var(--ui); letter-spacing: 0.04em; text-transform: uppercase; }
+.branch-new { font-family: var(--ui); }
+.branch-form { padding: 4px; }
+.branch-form input { width: 100%; box-sizing: border-box; font: 13px var(--mono); padding: 5px 8px; border-radius: 6px; background: var(--bg); border: 1px solid var(--accent-2); color: var(--text); outline: none; }
+.branch-error { color: var(--err); cursor: default; white-space: normal; font: 12.5px var(--ui); }
+.branch-error:hover { background: none; }
+/* the system's file manager: its logo */
+.fm-icon { width: 15px; height: 15px; display: block; flex: none; }
+.reveal-root { display: inline-flex; align-items: center; justify-content: center; padding: 4px 7px; }
 .tree, .tree ul { list-style: none; margin: 0; padding: 0; }
 .tree ul { padding-left: 12px; }
 .tree .node {
@@ -932,11 +956,11 @@ body.running .resume-btn { display: none; }
    (--mx, --my: see app.js) and the drop swells, the focus coming forward with it: what lies
    behind the glass blurs further; pressed, it gives. */
 @property --glint { syntax: '<number>'; inherits: false; initial-value: 0; }
-.primary, .approval button, .new-conv, .git-sync, .msg-editor button, .ghost {
+.primary, .approval button, .new-conv, .git-sync, .glass-btn, .msg-editor button, .ghost {
   --tint: var(--glass);
   transition: --glint 0.25s, transform 0.25s, box-shadow 0.25s, border-color 0.25s, color 0.15s, backdrop-filter 0.25s;
 }
-.primary, .approval button, .new-conv, .git-sync, .msg-editor button, .ghost:hover {
+.primary, .approval button, .new-conv, .git-sync, .glass-btn, .msg-editor button, .ghost:hover {
   background:
     radial-gradient(circle at var(--mx, 50%) var(--my, 0%), color-mix(in srgb, var(--glass-glint) calc(var(--glint) * 100%), transparent), transparent 70%),
     linear-gradient(45deg, var(--glass-glare), transparent 22%, transparent 78%, var(--glass-glare)),
@@ -945,14 +969,14 @@ body.running .resume-btn { display: none; }
   box-shadow: var(--glass-drop);
   backdrop-filter: blur(5px) saturate(170%);
 }
-.primary:hover, .approval button:hover, .new-conv:hover, .git-sync:hover:not(:disabled), .msg-editor button:hover {
+.primary:hover, .approval button:hover, .new-conv:hover, .git-sync:hover:not(:disabled), .glass-btn:hover, .msg-editor button:hover {
   --glint: 1; backdrop-filter: blur(14px) saturate(170%);
 }
 /* (a ghost button is glass only under the pointer: lit, without a shadow) */
 .ghost:hover { --glint: 0.8; box-shadow: none; backdrop-filter: blur(14px) saturate(170%); }
 /* A glass button swells under the pointer, and gives as it is pressed. */
-:is(.primary, .approval button, .new-conv, .git-sync, .msg-editor button, .ghost):hover:not(:disabled) { transform: scale(1.06); }
-:is(.primary, .approval button, .new-conv, .git-sync, .msg-editor button, .ghost):active:not(:disabled) { transform: scale(0.96); transition-duration: 0.08s; }
+:is(.primary, .approval button, .new-conv, .git-sync, .glass-btn, .msg-editor button, .ghost):hover:not(:disabled) { transform: scale(1.06); }
+:is(.primary, .approval button, .new-conv, .git-sync, .glass-btn, .msg-editor button, .ghost):active:not(:disabled) { transform: scale(0.96); transition-duration: 0.08s; }
 /* Colored glass: the color thin at the top and deeper below, lit from within at its base, where
    the light comes through the drop (--hue: its color). */
 .primary, .approval button.yes { --hue: var(--accent-2); }
@@ -1040,7 +1064,7 @@ body.running .resume-btn { display: none; }
 .provider-head { display: flex; align-items: center; gap: 8px; font-weight: 600; }
 .provider-head .spacer { flex: 1; }
 .provider-head label { display: flex; flex-direction: row; align-items: center; gap: 6px; margin: 0; font-weight: normal; font-size: 13px; color: var(--muted); }
-.provider-folder { align-self: flex-start; }
+.provider-folder { align-self: flex-start; display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 10px; color: var(--text); font-weight: 600; }
 .provider-model { display: flex; align-items: center; gap: 8px; font-size: 13.5px; }
 .provider-model span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .provider-model input { flex: none; width: 110px; }

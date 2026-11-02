@@ -6,7 +6,7 @@ import type { Skill } from './agent/skills.ts';
 import type { TorStatus } from './agent/tor.ts';
 import type { ModelEngine } from './engine/engine.ts';
 import type { listDir, ViewedFile } from './files.ts';
-import type { GitRepoStatus, gitFileStates } from './git.ts';
+import type { GitBranches, GitRepoStatus, gitFileStates } from './git.ts';
 import type { AgentEvent, ApprovalRequest, Choice, Config, ContextStats, ConversationSummary, EngineSettings, ProjectIcon, Provider, ProviderType, PublicSettings, Steps } from './types.ts';
 
 /** An event of the agent, with the conversation it comes from. */
@@ -181,6 +181,9 @@ export interface Channels {
   'git:fileStates': [[], FileStates];
   'git:diff': [[file: string, opts?: { staged?: boolean; oldPath?: string }], { diff: string; truncated: boolean }];
   'git:fetch': [[], void];
+  'git:branches': [[], GitBranches];
+  'git:switch': [[name: string], void];
+  'git:createBranch': [[name: string], void];
   'git:sync': [[], void];
   'git:connect': [[url: string], void];
   'git:remote': [[dir: string | null | undefined], string | null];

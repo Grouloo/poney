@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseStatus, parseLog, fileStates, gitFileStates, gitStatus, gitDiff, gitSync, gitConnect, gitRemote, gitChangeRemote, gitRemoveRemote, createGithubRepo, githubAccount, readyGh, GITHUB_TOKEN_PAGE } from '../src/git.ts';
+import { parseStatus, parseLog, fileStates, gitFileStates, gitStatus, gitDiff, gitSync, gitConnect, gitRemote, gitChangeRemote, gitRemoveRemote, gitBranches, gitSwitch, gitCreateBranch, createGithubRepo, githubAccount, readyGh, GITHUB_TOKEN_PAGE } from '../src/git.ts';
 import { errorMessage } from '../src/unknown.ts';
 
 const run = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
@@ -339,4 +339,50 @@ test('the states of the files, from a subfolder and outside a repository', async
   assert.deepEqual(await gitFileStates(path.join(dir, 'sub')), { 'x.txt': 'M', deep: 'A', 'deep/new.txt': 'A' });
   assert.equal((await gitFileStates(dir)).sub, 'M');
   assert.deepEqual(await gitFileStates(fs.mkdtempSync(path.join(os.tmpdir(), 'poney-norepo-'))), {});
+});
+
+test('the branches: local ones first, then those only on the remote; switching to one of these makes it local', async () => {
+  const { a } = withRemote();
+  run(a, 'switch', '-q', '-c', 'feature');
+  commit(a, 'f.txt', 'f\n');
+  run(a, 'push', '-q', '-u', 'origin', 'feature');
+  run(a, 'switch', '-q', 'main');
+  run(a, 'branch', '-q', '-D', 'feature');
+  run(a, 'branch', '-q', 'local-only');
+  const before = await gitBranches(a);
+  assert.equal(before.current, 'main');
+  assert.deepEqual([...before.local].sort(), ['local-only', 'main']);
+  assert.deepEqual(before.remote, ['feature']);
+  await gitSwitch(a, 'feature');
+  const st = await status(a);
+  assert.equal(st.branch, 'feature');
+  assert.equal(st.upstream, 'origin/feature');
+  assert.deepEqual((await gitBranches(a)).remote, []);
+});
+
+test('a new branch starts where the project stands, with its changes; a bad name or an option is refused', async () => {
+  const dir = repo();
+  commit(dir, 'a.txt', 'a\n');
+  write(dir, 'a.txt', 'changed\n');
+  await gitCreateBranch(dir, 'idea');
+  const st = await status(dir);
+  assert.equal(st.branch, 'idea');
+  assert.equal(st.unstaged.length, 1);
+  await assert.rejects(gitCreateBranch(dir, 'two words'), /pas un nom de branche/);
+  await assert.rejects(gitCreateBranch(dir, '--orphan'), /Indiquez le nom/);
+  await assert.rejects(gitSwitch(dir, '-f'), /Indiquez le nom/);
+  assert.equal((await status(dir)).branch, 'idea');
+});
+
+test('a switch that would lose changes is refused, and the changes stay', async () => {
+  const dir = repo();
+  commit(dir, 'a.txt', 'a\n');
+  run(dir, 'branch', '-q', 'other');
+  run(dir, 'switch', '-q', 'other');
+  commit(dir, 'a.txt', 'other\n');
+  run(dir, 'switch', '-q', 'main');
+  write(dir, 'a.txt', 'mine\n');
+  await assert.rejects(gitSwitch(dir, 'other'), /Impossible de passer sur other/);
+  assert.equal(fs.readFileSync(path.join(dir, 'a.txt'), 'utf8'), 'mine\n');
+  assert.equal((await status(dir)).branch, 'main');
 });

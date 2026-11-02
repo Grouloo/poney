@@ -16,7 +16,7 @@ import { addClaudeAccount, addServer, CLAUDE, claudeAccountOf, loadProviders, mo
 import { ConversationStore, moveAppData } from './conversations.ts';
 import { listDir, readFileForViewer } from './files.ts';
 import { resolveInside } from './agent/tools.ts';
-import { gitFileStates, createGithubRepo, findGh, GITHUB_TOKEN_PAGE, gitChangeRemote, githubAccount, gitStatus, gitConnect, gitDiff, gitFetch, gitRemote, gitRemoveRemote, gitSync, readyGh } from './git.ts';
+import { gitFileStates, gitBranches, gitSwitch, gitCreateBranch, createGithubRepo, findGh, GITHUB_TOKEN_PAGE, gitChangeRemote, githubAccount, gitStatus, gitConnect, gitDiff, gitFetch, gitRemote, gitRemoveRemote, gitSync, readyGh } from './git.ts';
 import { migrateLegacy, rebuildHistory, rebuildForAction } from './agent/rebuild.ts';
 import { checkTor, torStatus, newCircuits, findTorProxy, requireTor, proxyEnv } from './agent/tor.ts';
 import { errorMessage, isBoolean, isNumber, isRecord, isString, isStringArray, parseJson, rec } from './unknown.ts';
@@ -1137,6 +1137,9 @@ handle('git:status', [], () => gitStatus(viewCwd()));
 handle('git:fileStates', [], () => gitFileStates(viewCwd()));
 handle('git:diff', [isString, optional(isObject)], (file, opts) => gitDiff(viewCwd(), file, opts));
 handle('git:fetch', [], async () => gitFetch(viewCwd(), await gitEnv()));
+handle('git:branches', [], () => viewCwd() ? gitBranches(viewCwd()) : { current: null, local: [], remote: [] });
+handle('git:switch', [isString], (name) => gitSwitch(viewCwd(), name));
+handle('git:createBranch', [isString], (name) => gitCreateBranch(viewCwd(), name));
 handle('git:sync', [], async () => gitSync(viewCwd(), await gitEnv()));
 handle('git:connect', [isString], async (url) => gitConnect(viewCwd(), url, await gitEnv()));
 handle('git:remote', [nullable(isString)], (dir) => gitRemote(dir));

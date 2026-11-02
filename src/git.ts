@@ -262,6 +262,65 @@ export async function gitRemoveRemote(cwd: string): Promise<void> {
   if (name) await git(cwd, ['remote', 'remove', name]);
 }
 
+export interface GitBranches {
+  current: string | null;
+  local: string[];
+  /** branches only on the remote, without the remote's name: switching to one makes it local */
+  remote: string[];
+}
+
+/** The branches to switch to: the local ones, then those of the remotes not yet here. */
+export async function gitBranches(cwd: string): Promise<GitBranches> {
+  const st = await gitStatus(cwd);
+  if (!st.repo) return { current: null, local: [], remote: [] };
+  const refs = (prefix: string) => git(cwd, ['for-each-ref', '--format=%(refname:short)', '--sort=-committerdate', prefix]).then((out) => out.split('\n').filter(Boolean));
+  const local = await refs('refs/heads');
+  const names = new Set(local);
+  const remote: string[] = [];
+  for (const ref of await refs('refs/remotes')) {
+    const name = ref.slice(ref.indexOf('/') + 1);
+    if (ref.indexOf('/') < 0 || name === 'HEAD' || names.has(name)) continue;
+    names.add(name);
+    remote.push(name);
+  }
+  return { current: st.branch, local, remote };
+}
+
+/** A branch name git accepts, which cannot pass for an option. */
+async function branchName(cwd: string, name: unknown) {
+  const clean = String(name ?? '').trim();
+  if (!clean || clean.startsWith('-')) throw plain('Indiquez le nom de la branche.');
+  try {
+    await git(cwd, ['check-ref-format', '--branch', clean]);
+  } catch {
+    throw plain(`« ${clean} » n’est pas un nom de branche valable.`);
+  }
+  return clean;
+}
+
+/**
+ * Switches to a branch, local or only on the remote (it then follows it). Git refuses
+ * when changes in progress would be lost: they stay, and the reason is given.
+ */
+export async function gitSwitch(cwd: string, name: unknown): Promise<void> {
+  const branch = await branchName(cwd, name);
+  try {
+    await git(cwd, ['switch', '--quiet', branch]);
+  } catch (e) {
+    throw plain(`Impossible de passer sur ${branch} : ${reason(e)}`);
+  }
+}
+
+/** Creates a branch from where the project stands, and switches to it (changes in progress come along). */
+export async function gitCreateBranch(cwd: string, name: unknown): Promise<void> {
+  const branch = await branchName(cwd, name);
+  try {
+    await git(cwd, ['switch', '--quiet', '-c', branch]);
+  } catch (e) {
+    throw plain(`Impossible de créer ${branch} : ${reason(e)}`);
+  }
+}
+
 /** The gh program, or null. (From the Finder, the PATH lacks the usual folders.) */
 export function findGh(env = process.env) {
   const dirs = [...(env.PATH || '').split(path.delimiter), '/opt/homebrew/bin', '/usr/local/bin'];

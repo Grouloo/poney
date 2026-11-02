@@ -55,10 +55,11 @@
         <svg class="picker-chev" viewBox="0 0 12 12" width="11" height="11" aria-hidden="true"><path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
       <span class="spacer-row"></span>
+      <button id="revealRoot" class="ghost icon reveal-root" type="button"></button>
       <button id="refreshFiles" class="ghost icon" data-tip="Rafraîchir">↻</button>
       <div id="sectionMenu" class="project-menu hidden"></div>
     </div>
-    <div id="filesRoot" class="files-root muted"></div>
+    <div id="filesRoot" class="files-root muted"><span class="files-root-line"></span><div id="branchMenu" class="project-menu branch-menu hidden"></div></div>
     <div id="filesPane" class="pane">
       <ul id="fileTree" class="tree"></ul>
     </div>
@@ -133,7 +134,7 @@
       <button id="viewerMode" class="ghost hidden" title="Basculer entre le document mis en forme et le code source">Code</button>
       <button id="viewerReload" class="ghost icon" title="Recharger">↻</button>
       <button id="viewerOpen" class="ghost" title="Ouvrir avec l’application par défaut">Ouvrir</button>
-      <button id="viewerReveal" class="ghost" title="Afficher dans le Finder">Finder</button>
+      <button id="viewerReveal" class="ghost with-icon"></button>
       <button id="viewerClose" class="ghost icon" title="Fermer">✕</button>
     </div>
     <div id="viewerBody" class="viewer-body"></div>
