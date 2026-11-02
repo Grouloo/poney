@@ -1,4 +1,4 @@
-// Where models come from: Poney's own engine, servers, Claude. A provider has a
+// Where models come from: Poney's own engine, servers, Claude accounts. A provider has a
 // stable id and a type, so that a conversation can name its own and that new
 // types can come. See docs/instances.md.
 import { randomUUID } from 'node:crypto';
@@ -6,7 +6,9 @@ import { isRecord, rec } from './unknown.ts';
 import type { Choice, Config, Provider, ProviderType } from './types.ts';
 
 export const SERVER_TYPES: ProviderType[] = ['openai', 'ollama'];
-const FIXED: Partial<Record<ProviderType, string>> = { poney: 'Poney', claude: 'Claude' };
+/** The machine's Claude account (in ~/.claude); those added in Poney follow it. */
+export const CLAUDE = 'claude';
+const isClaudeId = (id: string) => id === CLAUDE || id.startsWith(`${CLAUDE}-`);
 
 /** The list saved in the settings; from a configuration of before, its server becomes the first entry. */
 export function loadProviders(saved: Provider[] | undefined, config: Pick<Config, 'provider' | 'baseUrl' | 'apiKey'>): Provider[] {
@@ -26,8 +28,15 @@ export function addServer(providers: Provider[], { type = 'openai', name = '', b
   return [...providers.slice(0, at < 0 ? providers.length : at), added, ...(at < 0 ? [] : providers.slice(at))];
 }
 
-/** Poney and Claude can be turned off, not removed. */
-export const removeProvider = (providers: Provider[], id: string) => providers.filter((p) => p.id !== id || FIXED[p.type]);
+/** Another Claude account, after the others; it logs in from the providers' page. */
+export function addClaudeAccount(providers: Provider[]): { providers: Provider[]; id: string } {
+  const added: Provider = { id: `${CLAUDE}-${randomUUID()}`, type: 'claude', name: '', enabled: true };
+  const at = providers.findLastIndex((p) => p.type === 'claude') + 1;
+  return { providers: [...providers.slice(0, at || providers.length), added, ...(at ? providers.slice(at) : [])], id: added.id };
+}
+
+/** Poney and the machine's Claude account can be turned off, not removed. */
+export const removeProvider = (providers: Provider[], id: string) => providers.filter((p) => p.id !== id || p.id === 'poney' || p.id === CLAUDE);
 
 export const updateProvider = (providers: Provider[], id: string, patch: Partial<Provider>) => providers.map((p): Provider => {
   if (p.id !== id) return p;
@@ -35,9 +44,12 @@ export const updateProvider = (providers: Provider[], id: string, patch: Partial
   return { ...p, ...rest, ...(isServer(p) && type && SERVER_TYPES.includes(type) ? { type } : {}) };
 });
 
-/** The provider of a conversation (one from before providers: the first server). */
+/**
+ * The provider of a conversation (one from before providers: the first server). For Claude, its
+ * account: the machine's when it names none (or a server's id, left from a model chosen before).
+ */
 export function providerOf(providers: Provider[], choice?: Choice | null): Provider | undefined {
-  if (choice?.engine === 'claude') return providers.find((p) => p.type === 'claude');
+  if (choice?.engine === 'claude') return providers.find((p) => p.id === claudeAccountOf(choice));
   return choice?.provider ? providers.find((p) => p.id === choice.provider) : providers.find(isServer);
 }
 
@@ -77,3 +89,6 @@ export function modelConfig(config: Config, provider: Pick<Provider, 'type' | 'b
     maxParallelAgents: config.maxInferences ? Math.min(config.maxInferences, 8) : 8,
   };
 }
+
+/** The Claude account a choice names. */
+export const claudeAccountOf = (choice: Choice) => (choice.provider && isClaudeId(choice.provider) ? choice.provider : CLAUDE);

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { ClaudeAgent, toolView, claudeModels, claudeUsage, claudeLoggedIn, claudeError, claudeEnv } from '../src/agent/claude.ts';
+import { ClaudeAgent, toolView, claudeModels, claudeUsage, claudeLoggedIn, claudeError, claudeEnv, claudeAuth, linkUserSettings } from '../src/agent/claude.ts';
 import type { ClaudeQuery, ClaudeRun } from '../src/agent/claude.ts';
 import type { AgentEvent, ApprovalAnswer, ApprovalRequest, Approve, EventOf } from '../src/types.ts';
 
@@ -136,7 +136,7 @@ test('not logged in: seen before the first message, and said in the words of the
   assert.equal(await claudeLoggedIn('/bin/claude', says('{"loggedIn": false}')), false);
   assert.equal(await claudeLoggedIn('/bin/claude', says('{"loggedIn": true}')), true);
   assert.equal(await claudeLoggedIn('/bin/claude', says('', new Error('no such command'))), false);
-  assert.match(claudeError('Claude Code returned an error result: Not logged in · Please run /login'), /claude auth login/);
+  assert.match(claudeError('Claude Code returned an error result: Not logged in · Please run /login'), /Réglages › Fournisseurs/);
   assert.doesNotMatch(claudeError('Claude Code returned an error result: boom in Claude Code'), /Claude Code/);
 });
 
@@ -244,4 +244,40 @@ test('started from a Claude session, Poney does not hand its variables on to its
   await a.send('salut');
   assert.equal(calls[0].options.env?.CLAUDE_CODE_ENTRYPOINT, undefined);
   assert.equal(calls[0].options.env?.PATH, process.env.PATH);
+});
+
+test('an account added in Poney runs in its own folder; the machine\'s in its usual one', async () => {
+  assert.equal(claudeEnv({ PATH: '/usr/bin' }, '/data/claude-accounts/a').CLAUDE_CONFIG_DIR, '/data/claude-accounts/a');
+  assert.equal(claudeEnv({ PATH: '/usr/bin' }).CLAUDE_CONFIG_DIR, undefined);
+  const { a, calls } = agent([init, done]);
+  a.configDir = '/data/claude-accounts/a';
+  await a.send('salut');
+  assert.equal(calls[0].options.env?.CLAUDE_CONFIG_DIR, '/data/claude-accounts/a');
+  // Who it is logged in as, asked in its folder.
+  let asked: string | undefined;
+  const auth = await claudeAuth('/bin/claude', '/data/claude-accounts/a', (_file, _args, options, callback) => {
+    asked = options.env.CLAUDE_CONFIG_DIR;
+    callback(null, '{"loggedIn": true, "email": "moi@pro.fr", "subscriptionType": "max"}');
+  });
+  assert.deepEqual([asked, auth], ['/data/claude-accounts/a', { loggedIn: true, email: 'moi@pro.fr', plan: 'max' }]);
+});
+
+test('an added account takes the user\'s settings, skills and instructions, not their login', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'poney-accounts-'));
+  const user = path.join(root, 'user');
+  await fs.mkdir(path.join(user, 'skills'), { recursive: true });
+  await fs.writeFile(path.join(user, 'settings.json'), '{}');
+  await fs.writeFile(path.join(user, 'CLAUDE.md'), 'mes règles');
+  await fs.writeFile(path.join(user, '.credentials.json'), 'secret');
+  const account = path.join(root, 'account');
+  linkUserSettings(account, user);
+  assert.deepEqual((await fs.readdir(account)).sort(), ['CLAUDE.md', 'settings.json', 'skills']);
+  assert.equal(await fs.readFile(path.join(account, 'CLAUDE.md'), 'utf8'), 'mes règles');
+  // (its own file wins, and a later call adds only what is new)
+  await fs.rm(path.join(account, 'settings.json'));
+  await fs.writeFile(path.join(account, 'settings.json'), '{"own": true}');
+  await fs.mkdir(path.join(user, 'agents'));
+  linkUserSettings(account, user);
+  assert.equal(await fs.readFile(path.join(account, 'settings.json'), 'utf8'), '{"own": true}');
+  assert.ok((await fs.readdir(account)).includes('agents'));
 });

@@ -56,10 +56,19 @@ export interface EngineStatus {
 export type ClaudeModel = Awaited<ReturnType<typeof claudeModels>>[number];
 export type ClaudeUsage = Awaited<ReturnType<typeof claudeUsage>>;
 
-export interface ClaudeStatus {
-  available: boolean;
-  installed: boolean;
+/** A Claude account: the machine's (id 'claude'), or one added in Poney. */
+export interface ClaudeAccount {
+  id: string;
+  name: string;
+  email: string | null;
+  plan: string | null;
+  loggedIn: boolean;
   models: ClaudeModel[];
+}
+
+export interface ClaudeStatus {
+  installed: boolean;
+  accounts: ClaudeAccount[];
 }
 
 export interface GithubStatus {
@@ -147,6 +156,10 @@ export interface Channels {
   'session:setDraft': [[text: string], void];
   'claude:status': [[], ClaudeStatus];
   'claude:usage': [[], ClaudeUsage];
+  'claude:addAccount': [[], { settings: PublicSettings; id: string }];
+  'claude:login': [[id: string], boolean];
+  'claude:loginCode': [[code: string], void];
+  'claude:loginCancel': [[], void];
   'skills:list': [[], ListedSkill[]];
   'memory:get': [[], string[]];
   'memory:set': [[notes: unknown[]], string[]];

@@ -2,7 +2,7 @@
 // file only turns what it says into the events of Poney's interface. Nothing of
 // Poney's own harness runs here (assessment, test gates, compaction, memory),
 // except the skills, added to the message the same way.
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -73,13 +73,37 @@ const HOST_SESSION = /^(CLAUDECODE|CLAUDE_PID|CLAUDE_EFFORT|CLAUDE_CODE_\w+|CLAU
 // (what a user sets for Claude Code in their own shell: kept)
 const USER_SETTINGS = new Set(['CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_SHELL', 'CLAUDE_CODE_SHELL_PREFIX', 'CLAUDE_CODE_GIT_BASH_PATH', 'CLAUDE_CODE_MAX_OUTPUT_TOKENS', 'CLAUDE_CODE_API_KEY_HELPER_TTL_MS', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', 'CLAUDE_CODE_CLIENT_CERT', 'CLAUDE_CODE_CLIENT_KEY', 'CLAUDE_CODE_CLIENT_KEY_PASSPHRASE']);
 
-/** The environment of the Claude processes Poney starts: its own, without a host session's. */
-export function claudeEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+/**
+ * The environment of the Claude processes Poney starts: its own, without a host session's.
+ * An account added in Poney has a folder of its own (its login, its sessions); the first one
+ * is the machine's, in ~/.claude, shared with the CLI and the app.
+ */
+export function claudeEnv(env: NodeJS.ProcessEnv = process.env, configDir: string | null = null): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [name, value] of Object.entries(env)) {
     if (value !== undefined && (USER_SETTINGS.has(name) || !HOST_SESSION.test(name))) out[name] = value;
   }
+  if (configDir) out.CLAUDE_CONFIG_DIR = configDir;
   return out;
+}
+
+// What an added account takes from the user's own folder, so that every account works the same:
+// settings, instructions, skills, agents, commands, plugins. (Not the login, sessions or history.)
+const SHARED = ['settings.json', 'CLAUDE.md', 'skills', 'agents', 'commands', 'output-styles', 'plugins', 'hooks'];
+
+/** Links what the user's folder has (and the account's does not) into an added account's folder. */
+export function linkUserSettings(configDir: string, userDir = path.join(os.homedir(), '.claude')) {
+  fs.mkdirSync(configDir, { recursive: true });
+  for (const name of SHARED) {
+    const from = path.join(userDir, name);
+    const to = path.join(configDir, name);
+    if (!fs.existsSync(from)) continue;
+    try {
+      fs.lstatSync(to);
+    } catch {
+      try { fs.symlinkSync(from, to); } catch {}
+    }
+  }
 }
 
 /** The installed `claude` program, or null. (From the Finder, the PATH lacks the usual folders.) */
@@ -99,19 +123,48 @@ export function findClaude(env = process.env) {
   return null;
 }
 
-const NOT_LOGGED_IN = 'Claude n’est pas connecté sur cette machine : lancez « claude auth login » dans un terminal.';
+const NOT_LOGGED_IN = 'Ce compte Claude n’est pas connecté : connectez-le dans Réglages › Fournisseurs.';
 
-/** Whether the installed program is logged in (if it cannot tell: as if it were, the first message will say). */
-export function claudeLoggedIn(executable: string, run: ExecFn = (file, args, options, callback) => execFile(file, args, options, callback)) {
-  return new Promise<boolean>((resolve) => {
-    run(executable, ['auth', 'status'], { timeout: 15000, env: claudeEnv() }, (error, stdout) => {
+export interface ClaudeAuth {
+  loggedIn: boolean;
+  email: string | null;
+  plan: string | null;
+}
+
+const defaultExec: ExecFn = (file, args, options, callback) => execFile(file, args, options, callback);
+
+/** Who an account's folder is logged in as (if it cannot tell: as if it were, the first message will say). */
+export function claudeAuth(executable: string, configDir: string | null = null, run: ExecFn = defaultExec) {
+  return new Promise<ClaudeAuth>((resolve) => {
+    run(executable, ['auth', 'status'], { timeout: 15000, env: claudeEnv(process.env, configDir) }, (error, stdout) => {
       try {
-        resolve(rec(parseJson(stdout)).loggedIn !== false);
+        const r = rec(parseJson(stdout));
+        resolve({ loggedIn: r.loggedIn !== false, email: str(r.email) || null, plan: str(r.subscriptionType) || null });
       } catch {
-        resolve(!error);
+        resolve({ loggedIn: !error, email: null, plan: null });
       }
     });
   });
+}
+
+/** Whether the machine's account is logged in. */
+export const claudeLoggedIn = async (executable: string, run: ExecFn = defaultExec) => (await claudeAuth(executable, null, run)).loggedIn;
+
+/**
+ * Logs an account in: the browser opens on Claude's page, and the login comes back by
+ * itself; when the page shows a code instead, `code` passes it on. `done`: logged in or not.
+ */
+export function claudeLogin(executable: string, configDir: string | null) {
+  const child = spawn(executable, ['auth', 'login', '--claudeai'], { env: claudeEnv(process.env, configDir), stdio: ['pipe', 'ignore', 'ignore'] });
+  const done = new Promise<boolean>((resolve) => {
+    child.on('error', () => resolve(false));
+    child.on('exit', (code) => resolve(code === 0));
+  });
+  return {
+    done,
+    code: (code: string) => { child.stdin.write(`${code.trim()}\n`); },
+    cancel: () => { child.kill(); },
+  };
 }
 
 /** An error of the Claude harness, in the words of the interface. */
@@ -121,10 +174,10 @@ export function claudeError(message: unknown): string {
 }
 
 /** The models the local login can use: [{ value, name, efforts, auto }]. */
-export async function claudeModels(executable: string, { query }: { query?: ClaudeRun } = {}) {
+export async function claudeModels(executable: string, { query, configDir = null }: { query?: ClaudeRun; configDir?: string | null } = {}) {
   const run: ClaudeRun = query ?? (await sdk()).query;
   const idle = (async function* () { await new Promise(() => {}); })(); // (no message: only the list)
-  const q = run({ prompt: idle, options: { pathToClaudeCodeExecutable: executable, env: claudeEnv() } });
+  const q = run({ prompt: idle, options: { pathToClaudeCodeExecutable: executable, env: claudeEnv(process.env, configDir) } });
   try {
     const models = list(await q.supportedModels?.());
     return models.map(rec).map((m) => ({ value: str(m.value), name: str(m.displayName), efforts: list(m.supportedEffortLevels).filter(isEffort), auto: Boolean(m.supportsAutoMode) }));
@@ -138,10 +191,10 @@ export async function claudeModels(executable: string, { query }: { query?: Clau
  * resetsAt }, or null where plan limits do not apply.
  * (The SDK marks this call as experimental: anything else than the expected shape counts as null.)
  */
-export async function claudeUsage(executable: string, { query }: { query?: ClaudeRun } = {}) {
+export async function claudeUsage(executable: string, { query, configDir = null }: { query?: ClaudeRun; configDir?: string | null } = {}) {
   const run: ClaudeRun = query ?? (await sdk()).query;
   const idle = (async function* () { await new Promise(() => {}); })(); // (no message: only the numbers)
-  const q = run({ prompt: idle, options: { pathToClaudeCodeExecutable: executable, env: claudeEnv() } });
+  const q = run({ prompt: idle, options: { pathToClaudeCodeExecutable: executable, env: claudeEnv(process.env, configDir) } });
   try {
     const r = rec(await q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?.({ skipBehaviors: true }));
     if (!r.rate_limits_available) return null;
@@ -188,6 +241,7 @@ export class ClaudeAgent extends EventEmitter<{ event: [AgentEvent] }> {
   readonly isClaude = true;
   cwd: string;
   executable: string | null;
+  configDir: string | null;
   approve: Approve;
   skillsDir: string | null;
   runQuery: ClaudeRun | null;
@@ -211,10 +265,11 @@ export class ClaudeAgent extends EventEmitter<{ event: [AgentEvent] }> {
   checkpoints: Checkpoint[];
   archives: (Message[] | null)[];
 
-  constructor({ cwd, executable, approve, skillsDir = null, query = null }: { cwd: string; executable: string | null; approve: Approve; skillsDir?: string | null; query?: ClaudeRun | null }) {
+  constructor({ cwd, executable, configDir = null, approve, skillsDir = null, query = null }: { cwd: string; executable: string | null; configDir?: string | null; approve: Approve; skillsDir?: string | null; query?: ClaudeRun | null }) {
     super();
     this.cwd = cwd;
     this.executable = executable;
+    this.configDir = configDir; // the account's folder (null: the machine's)
     this.approve = approve;
     this.skillsDir = skillsDir;
     this.runQuery = query;
@@ -287,7 +342,7 @@ export class ClaudeAgent extends EventEmitter<{ event: [AgentEvent] }> {
           systemPrompt: { type: 'preset', preset: 'claude_code' },
           settingSources: ['user', 'project', 'local'],
           pathToClaudeCodeExecutable: this.executable ?? undefined,
-          env: claudeEnv(),
+          env: claudeEnv(process.env, this.configDir),
           abortController: controller,
           ...(this.sessionId ? { resume: this.sessionId } : {}),
       };

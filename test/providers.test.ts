@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { loadProviders, addServer, removeProvider, updateProvider, providerOf, unavailable, modelConfig, isServer } from '../src/providers.ts';
+import { loadProviders, addServer, addClaudeAccount, removeProvider, updateProvider, providerOf, unavailable, modelConfig, isServer } from '../src/providers.ts';
 import { cfg } from './helpers.ts';
 import type { Provider } from '../src/types.ts';
 
@@ -57,4 +57,20 @@ test('the limit of calls sets how many sub-agents run', () => {
   assert.deepEqual(of(1), [false, 1]);
   assert.deepEqual(of(3), [true, 3]);
   assert.deepEqual(of(0), [true, 8]);
+});
+
+test('Claude accounts: added after the others, chosen by a conversation, removed but not the machine\'s', () => {
+  const first = addClaudeAccount(loadProviders(undefined, config));
+  const second = addClaudeAccount(first.providers);
+  let list = addServer(second.providers);
+  assert.deepEqual(list.map((p) => p.type), ['poney', 'openai', 'openai', 'claude', 'claude', 'claude']);
+  assert.deepEqual(list.slice(3).map((p) => p.id), ['claude', first.id, second.id]);
+  assert.equal((providerOf(list, { engine: 'claude', provider: second.id }))!.id, second.id);
+  // (none named, or a server's left from a model chosen before: the machine's)
+  assert.equal((providerOf(list, { engine: 'claude' }))!.id, 'claude');
+  assert.equal((providerOf(list, { engine: 'claude', provider: 'server-1' }))!.id, 'claude');
+  list = removeProvider(removeProvider(list, first.id), 'claude');
+  assert.deepEqual(list.filter((p) => p.type === 'claude').map((p) => p.id), ['claude', second.id]);
+  // (a conversation of a removed account says so, it does not move to another)
+  assert.match(unavailable(providerOf(list, { engine: 'claude', provider: first.id }))!, /supprimé/);
 });

@@ -9,7 +9,7 @@ import { EMOJIS, ICONS, ICON_COLORS, iconSvg } from './project-icons.ts';
 import { fileIconSvg, folderIconSvg } from './file-icons.ts';
 import DOMPurify from '../../node_modules/dompurify/dist/purify.es.mjs';
 import type { Api } from '../preload.cts';
-import type { AppAlert, ClaudeStatus, FileStates, GithubStatus, ListedSkill, ModelGroup, SessionApproval, SessionEvent, SessionView, SystemPromptView } from '../ipc.ts';
+import type { AppAlert, ClaudeAccount, ClaudeStatus, FileStates, GithubStatus, ListedSkill, ModelGroup, SessionApproval, SessionEvent, SessionView, SystemPromptView } from '../ipc.ts';
 import type { TorStatus } from '../agent/tor.ts';
 import type { GitFile, GitRepoStatus } from '../git.ts';
 import type { ViewedFile } from '../files.ts';
@@ -178,10 +178,16 @@ const SERVER_ICON = '<svg class="engine-icon" viewBox="0 0 16 16" aria-hidden="t
 const groupIcon = (g?: ModelGroup) => (g?.icon ? `<img class="engine-img" src="${esc(g.icon)}" alt="">` : g && g.provider.type !== 'poney' ? SERVER_ICON : LOCAL_ICON);
 const EFFORT_LABEL: Record<string, string> = { low: 'Faible', medium: 'Moyen', high: 'Élevé', xhigh: 'Très élevé', max: 'Maximum' };
 let modelGroups: ModelGroup[] = []; // the models by provider
-let claude: Pick<ClaudeStatus, 'available' | 'models'> & { installed?: boolean } = { available: false, models: [] };
+let claude: ClaudeStatus = { installed: false, accounts: [] };
 const choice = () => settings.active?.choice ?? { engine: 'local', model: null };
 const usesClaude = () => choice().engine === 'claude';
-const claudeModel = () => claude.models.find((m) => m.value === choice().model) ?? claude.models[0];
+/** The Claude account a choice names (the machine's when none). */
+const accountId = (c: Choice) => (c.provider === 'claude' || c.provider?.startsWith('claude-') ? c.provider : 'claude');
+const claudeAccount = () => claude.accounts.find((a) => a.id === accountId(choice()));
+const claudeModel = () => claudeAccount()?.models.find((m) => m.value === choice().model) ?? claudeAccount()?.models[0];
+/** An account by the name given, else by who it is logged in as. */
+const accountLabel = (a: Pick<ClaudeAccount, 'id' | 'name' | 'email'>) => (a.name && a.name !== 'Claude' ? a.name : a.email ? `Claude · ${a.email}` : a.id === 'claude' ? 'Claude' : 'Compte Claude');
+const accountShort = (a: Pick<ClaudeAccount, 'id' | 'name' | 'email'>) => (a.name && a.name !== 'Claude' ? a.name : a.email ?? accountLabel(a));
 
 async function setChoice(patch: Choice) {
   settings = await window.api.setChoice(patch);
@@ -220,7 +226,11 @@ function renderChoice() {
   const group = modelGroups.find((g) => g.provider.id === choiceProvider());
   picker.querySelector<HTMLElement>('.model-icon')!.innerHTML = isClaude ? CLAUDE_ICON : groupIcon(group);
   const local = c.model || settings.config.model;
-  picker.querySelector<HTMLElement>('.model-name')!.textContent = isClaude ? claudeModel()?.name ?? c.model ?? 'Claude' : group?.models.find((m) => m.id === local)?.name ?? local ?? 'aucun modèle';
+  // (with several Claude accounts, the conversation's is said beside its model)
+  const account = isClaude && claude.accounts.length > 1 ? claudeAccount() : undefined;
+  const modelName = isClaude ? claudeModel()?.name ?? c.model ?? 'Claude' : group?.models.find((m) => m.id === local)?.name ?? local ?? 'aucun modèle';
+  picker.querySelector<HTMLElement>('.model-name')!.textContent = account ? `${modelName} · ${accountShort(account)}` : modelName;
+  picker.dataset.tip = account ? `Modèle · ${accountLabel(account)}` : 'Modèle';
   document.body.classList.toggle('claude-mode', isClaude);
   $('claudeControls').classList.toggle('hidden', !isClaude);
   document.querySelector<HTMLElement>('.toggles')!.classList.toggle('hidden', isClaude);
@@ -245,18 +255,18 @@ function openModelMenu() {
   const menu = $('modelMenu');
   const c = choice();
   menu.innerHTML = '';
-  const row = (engine: EngineName, model: string, name: string, off: boolean, group?: ModelGroup) => {
+  const row = (engine: EngineName, model: string, name: string, off: boolean, group?: ModelGroup, account?: ClaudeAccount) => {
     const r = menu.appendChild(document.createElement('button'));
     r.type = 'button';
-    const same = engine === 'claude' || group?.provider.id === choiceProvider();
+    const same = engine === 'claude' ? account?.id === accountId(c) : group?.provider.id === choiceProvider();
     r.className = `pm-row model-row${engine === c.engine && same && model === (c.model ?? (engine === 'local' ? settings.config.model : claudeModel()?.value)) ? ' selected' : ''}`;
     r.innerHTML = `<span class="pm-icon">${group ? groupIcon(group) : engineIcon(engine)}</span><span class="pm-name">${esc(name)}</span>`;
     r.disabled = off;
-    if (off) r.title = 'Une conversation commencée garde son type de modèle';
+    if (off) r.title = engine === 'claude' && c.engine === 'claude' ? 'Une conversation commencée garde son compte Claude' : 'Une conversation commencée garde son type de modèle';
     r.onclick = () => {
       closeModelMenu();
-      const m = claude.models.find((x) => x.value === model);
-      setChoice(engine === 'claude' ? { engine, model, effort: c.effort ?? (m?.efforts.includes('high') ? 'high' : m?.efforts[0]), mode: c.mode ?? 'manual' } : { engine, model, provider: group?.provider.id });
+      const m = account?.models.find((x) => x.value === model);
+      setChoice(engine === 'claude' ? { engine, model, provider: account?.id, effort: c.effort ?? (m?.efforts.includes('high') ? 'high' : m?.efforts[0]), mode: c.mode ?? 'manual' } : { engine, model, provider: group?.provider.id });
     };
   };
   const started = settings.active?.started;
@@ -267,10 +277,17 @@ function openModelMenu() {
     if (g.error) menu.appendChild(div('pm-row muted', `<span class="pm-icon">${groupIcon(g)}</span><span class="pm-name">${esc(g.name)} : injoignable</span>`));
   }
   if (!modelGroups.some((g) => g.models.length || g.error)) menu.appendChild(div('pm-row muted', 'aucun modèle local'));
-  if (claude.available || claude.installed) label('Claude');
-  for (const m of claude.models) row('claude', m.value, m.name, started && c.engine !== 'claude');
-  if (claude.installed && !claude.available) {
-    menu.appendChild(div('pm-row muted model-hint', `<span class="pm-icon">${CLAUDE_ICON}</span><span class="pm-name">Pour les modèles Claude : lancez « claude auth login » dans un terminal</span>`));
+  // One group per Claude account; a conversation started stays on its own.
+  for (const a of claude.accounts) {
+    label(accountLabel(a));
+    for (const m of a.models) row('claude', m.value, m.name, Boolean(started) && (c.engine !== 'claude' || accountId(c) !== a.id), undefined, a);
+    if (!a.loggedIn) {
+      const hint = menu.appendChild(document.createElement('button'));
+      hint.type = 'button';
+      hint.className = 'pm-row model-row model-hint';
+      hint.innerHTML = `<span class="pm-icon">${CLAUDE_ICON}</span><span class="pm-name">Se connecter…</span>`;
+      hint.onclick = () => { closeModelMenu(); loginClaude(a.id); };
+    }
   }
   fitBelowBar(menu, $<HTMLButtonElement>('modelPicker'));
   menu.classList.remove('hidden');
@@ -281,7 +298,7 @@ $<HTMLButtonElement>('modelPicker').onclick = async (e) => {
   e.stopPropagation();
   if (!$('modelMenu').classList.contains('hidden')) return closeModelMenu();
   settings = await window.api.getSettings(); // (has it started since?)
-  if (!claude.available) claude = await window.api.claudeStatus().catch(() => claude); // (logged in since?)
+  if (claude.accounts.some((a) => !a.loggedIn)) claude = await window.api.claudeStatus().catch(() => claude); // (logged in since?)
   openModelMenu();
   refreshModels(); // (a server started or stopped since)
 };
@@ -377,11 +394,76 @@ async function poneyCard(p: Provider) {
   }
   return card;
 }
+/** A Claude account: who it is logged in as; a name to tell it apart; the login. */
+function claudeCard(p: Provider) {
+  const card = providerCard(p);
+  const head = card.querySelector<HTMLElement>('.provider-head')!;
+  const a = claude.accounts.find((x) => x.id === p.id);
+  head.querySelector<HTMLElement>('.provider-name')!.textContent = a ? accountLabel(a) : p.name || 'Compte Claude';
+  if (p.id !== 'claude') {
+    const remove = head.appendChild(document.createElement('button'));
+    remove.type = 'button';
+    remove.className = 'ghost';
+    remove.textContent = 'Supprimer';
+    remove.onclick = () => confirm('Supprimer ce compte Claude de Poney ? Il y est déconnecté, et ses conversations ne pourront plus continuer (elles restent lisibles).') && changeProvider(window.api.removeProvider(p.id));
+  }
+  const state = card.appendChild(div('muted'));
+  state.textContent = !claude.installed ? 'Claude n’est pas installé sur cette machine.'
+    : !a ? '' : a.loggedIn ? `Connecté : ${a.email ?? 'compte inconnu'}${a.plan ? ` (${a.plan})` : ''}` : 'Non connecté.';
+  if (p.id === 'claude') state.title = 'Le compte de cette machine, partagé avec Claude Code et l’application Claude.';
+  fieldIn(card, 'Nom', p.name === 'Claude' ? '' : p.name, (name) => changeProvider(window.api.updateProvider(p.id, { name: name || (p.id === 'claude' ? 'Claude' : '') })), { placeholder: a?.email ?? 'automatique' });
+  if (claude.installed && a && (!a.loggedIn || p.id !== 'claude')) {
+    const login = card.appendChild(document.createElement('button'));
+    login.type = 'button';
+    login.className = 'ghost provider-folder';
+    login.textContent = a.loggedIn ? 'Changer de compte…' : 'Se connecter…';
+    login.onclick = () => loginClaude(p.id);
+  }
+  return card;
+}
+
+// ---------- Claude login ----------
+// Claude's page opens in the browser; the login comes back by itself, or with a code the page shows.
+const loginDialog = $<HTMLDialogElement>('claudeLoginDialog');
+async function loginClaude(id: string) {
+  const a = claude.accounts.find((x) => x.id === id);
+  const p = settings.providers.find((x) => x.id === id);
+  $('claudeLoginAccount').textContent = a ? accountLabel(a) : p?.name || 'ce compte';
+  $<HTMLInputElement>('claudeLoginCode').value = '';
+  $('claudeLoginError').textContent = '';
+  loginDialog.showModal();
+  const ok = await window.api.claudeLogin(id).catch(() => false);
+  claude = await window.api.claudeStatus().catch(() => claude);
+  const now = claude.accounts.find((x) => x.id === id);
+  if (ok && now?.loggedIn) {
+    loginDialog.close();
+    $('status').textContent = `Claude connecté : ${now.email ?? accountLabel(now)}`;
+  } else if (loginDialog.open) $('claudeLoginError').textContent = 'La connexion n’a pas abouti. Réessayez, ou annulez.';
+  renderChoice();
+  if (settingsDialog.open) renderProviders();
+}
+$('claudeLoginForm').onsubmit = (e) => {
+  e.preventDefault();
+  const code = $<HTMLInputElement>('claudeLoginCode').value.trim();
+  if (code) window.api.claudeLoginCode(code);
+};
+$<HTMLButtonElement>('claudeLoginCancel').onclick = () => {
+  window.api.claudeLoginCancel();
+  loginDialog.close();
+};
+loginDialog.addEventListener('cancel', () => window.api.claudeLoginCancel()); // (Escape)
+
 async function renderProviders() {
-  const cards = await Promise.all((settings.providers ?? []).map((p) => (p.type === 'poney' ? poneyCard(p) : p.type === 'claude' ? providerCard(p) : serverCard(p))));
+  const cards = await Promise.all((settings.providers ?? []).map((p) => (p.type === 'poney' ? poneyCard(p) : p.type === 'claude' ? claudeCard(p) : serverCard(p))));
   $('providersList').replaceChildren(...cards);
 }
 $<HTMLButtonElement>('addProvider').onclick = () => changeProvider(window.api.addProvider({ baseUrl: 'http://localhost:1234/v1' }));
+$<HTMLButtonElement>('addClaudeAccount').onclick = async () => {
+  const added = await window.api.addClaudeAccount();
+  await changeProvider(Promise.resolve(added.settings));
+  claude = await window.api.claudeStatus().catch(() => claude);
+  loginClaude(added.id);
+};
 $<HTMLInputElement>('autoApprove').onchange = async (e) => {
   settings = await window.api.setConfig({ approval: (e.target as HTMLInputElement).checked ? 'auto' : 'ask' });
   renderSettings();

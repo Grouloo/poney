@@ -6,20 +6,20 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Agent, DEFAULT_CONFIG } from './agent/agent.ts';
 import { loadSkills, skillDirs } from './agent/skills.ts';
-import { ClaudeAgent, findClaude, claudeLoggedIn, claudeModels, claudeUsage } from './agent/claude.ts';
+import { ClaudeAgent, findClaude, claudeAuth, claudeEnv, claudeLogin, claudeModels, claudeUsage, linkUserSettings } from './agent/claude.ts';
 import { listModels, lmStudioModels, setInferenceService } from './agent/llm.ts';
 import { ModelEngine } from './engine/engine.ts';
 import { ENGINE_BUILD, engineSupported, installEngine, installedEngine } from './engine/install.ts';
 import { scanModels, sameModelFile } from './engine/models.ts';
 import type { LocalModel } from './types.ts';
-import { addServer, loadProviders, modelConfig, providerOf, removeProvider, savedConfig, unavailable, updateProvider } from './providers.ts';
+import { addClaudeAccount, addServer, CLAUDE, claudeAccountOf, loadProviders, modelConfig, providerOf, removeProvider, savedConfig, unavailable, updateProvider } from './providers.ts';
 import { ConversationStore, moveAppData } from './conversations.ts';
 import { listDir, readFileForViewer } from './files.ts';
 import { gitFileStates, createGithubRepo, findGh, GITHUB_TOKEN_PAGE, gitChangeRemote, githubAccount, gitStatus, gitConnect, gitDiff, gitFetch, gitRemote, gitRemoveRemote, gitSync, readyGh } from './git.ts';
 import { migrateLegacy, rebuildHistory, rebuildForAction } from './agent/rebuild.ts';
 import { checkTor, torStatus, newCircuits, findTorProxy, requireTor, proxyEnv } from './agent/tor.ts';
 import { errorMessage, isBoolean, isNumber, isRecord, isString, isStringArray, parseJson, rec } from './unknown.ts';
-import type { AppAlert, Args, Channel, ClaudeStatus, ClaudeUsage, Reply, SessionView } from './ipc.ts';
+import type { AppAlert, Args, Channel, ClaudeAccount, ClaudeUsage, Reply, SessionView } from './ipc.ts';
 import type { AgentEvent, ApprovalAnswer, ApprovalRequest, Choice, ConversationFile, ProjectIcon, Provider, PublicSettings, Settings } from './types.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -156,6 +156,9 @@ const offProjectRoot = () => path.join(app.getPath('userData'), 'off-project');
 
 const LOCAL_ONLY = 'Cette action n’existe pas pour les modèles Claude.';
 
+/** The folder of a Claude account added in Poney (its login, its sessions); null: the machine's, ~/.claude. */
+const claudeDirOf = (id: string | undefined) => (id && id !== CLAUDE ? path.join(app.getPath('userData'), 'claude-accounts', id) : null);
+
 class Session {
   key: string;
   cwd: string;
@@ -214,7 +217,7 @@ class Session {
         alertUser(this, 'approval', `Autorisation demandée${req.agentTitle ? ` (${req.agentTitle})` : ''} : ${req.command ?? req.tool}`);
       });
       const onEvent = (ev: AgentEvent) => this.onEvent(ev);
-      if (claude) this.agent = new ClaudeAgent({ cwd: this.cwd, executable: findClaude(), approve, skillsDir: userSkills() }).on('event', onEvent);
+      if (claude) this.agent = new ClaudeAgent({ cwd: this.cwd, executable: findClaude(), configDir: claudeDirOf(claudeAccountOf(this.choice)), approve, skillsDir: userSkills() }).on('event', onEvent);
       else {
         this.agent = new Agent({
           cwd: this.cwd,
@@ -245,6 +248,8 @@ class Session {
     this.agent.config = { ...DEFAULT_CONFIG, ...modelConfig(settings.config, local ? providerOf(settings.providers, this.choice) : null, local ? this.choice.model : null, settings.modelContexts) };
     if (this.agent.isClaude) {
       this.agent.choice = this.choice;
+      this.agent.configDir = claudeDirOf(claudeAccountOf(this.choice));
+      if (this.agent.configDir) linkUserSettings(this.agent.configDir); // (what the user added since)
       this.agent.autoSkills = settings.config.autoSkills;
     }
   }
@@ -653,7 +658,15 @@ const changeProviders = (providers: Provider[]) => {
 };
 handle('providers:add', [isObject], (server) => changeProviders(addServer(settings.providers, server)));
 handle('providers:update', [isString, isObject], (id, patch) => changeProviders(updateProvider(settings.providers, id, patch)));
-handle('providers:remove', [isString], (id) => changeProviders(removeProvider(settings.providers, id)));
+handle('providers:remove', [isString], async (id) => {
+  // An added Claude account: logged out (its keychain entry goes), and its folder removed.
+  const dir = settings.providers.some((p) => p.id === id && p.type === 'claude') ? claudeDirOf(id) : null;
+  const executable = findClaude();
+  if (dir && executable) await new Promise<void>((done) => execFile(executable, ['auth', 'logout'], { timeout: 15000, env: claudeEnv(process.env, dir) }, () => done()));
+  if (dir) fs.rmSync(dir, { recursive: true, force: true });
+  claudeInfo.delete(id);
+  return changeProviders(removeProvider(settings.providers, id));
+});
 handle('engine:status', [], async () => ({
   supported: engineSupported(),
   installed: Boolean(await installedEngine(engineDir())),
@@ -802,37 +815,77 @@ handle('conversations:newOffProject', [], () => {
   return publicSettings();
 });
 handle('session:current', [], () => sessionView(current()));
-// The Claude models, when Claude is installed here and its login works (asked once: it starts a process).
-let claudeInfo: Promise<ClaudeStatus> | null = null;
+// Each Claude account: who it is logged in as, and its models (asked once: it starts a process).
+const claudeInfo = new Map<string, Promise<ClaudeAccount>>();
+async function claudeAccount(p: Provider, executable: string): Promise<ClaudeAccount> {
+  const configDir = claudeDirOf(p.id);
+  const auth = await claudeAuth(executable, configDir);
+  const base = { id: p.id, name: p.name, email: auth.email, plan: auth.plan, loggedIn: auth.loggedIn, models: [] };
+  if (!auth.loggedIn) return base;
+  const models = await claudeModels(executable, { configDir }).catch((e) => {
+    logError('claude', e);
+    return null;
+  });
+  if (!models) claudeInfo.delete(p.id); // (asked again next time)
+  return { ...base, models: models ?? [] };
+}
 handle('claude:status', [], async () => {
   const executable = findClaude();
-  if (!executable || !settings.providers.find((p) => p.type === 'claude')?.enabled) return { available: false, installed: false, models: [] };
-  if (!(await claudeLoggedIn(executable))) {
-    claudeInfo = null;
-    return { available: false, installed: true, models: [] };
-  }
-  claudeInfo ??= claudeModels(executable).then((models) => ({ available: models.length > 0, installed: true, models })).catch((e) => {
-    logError('claude', e);
-    claudeInfo = null;
-    return { available: false, installed: true, models: [] };
-  });
-  return claudeInfo;
+  if (!executable) return { installed: false, accounts: [] };
+  const accounts = settings.providers.filter((p) => p.type === 'claude' && p.enabled);
+  return {
+    installed: true,
+    accounts: await Promise.all(accounts.map((p) => {
+      const known = claudeInfo.get(p.id);
+      if (known) return known.then((a) => ({ ...a, name: p.name }));
+      const asked = claudeAccount(p, executable);
+      claudeInfo.set(p.id, asked);
+      return asked;
+    })),
+  };
 });
-// The plan's limits, asked at most once a minute (it starts a process).
-let claudeUsageInfo: { at: number; usage: ClaudeUsage } = { at: 0, usage: null };
+// The plan's limits of the conversation's account, asked at most once a minute (it starts a process).
+const claudeUsageInfo = new Map<string, { at: number; usage: ClaudeUsage }>();
 handle('claude:usage', [], async () => {
   const executable = findClaude();
   if (!executable) return null;
-  if (Date.now() - claudeUsageInfo.at > 60000) {
-    claudeUsageInfo = { at: Date.now(), usage: await claudeUsage(executable).catch((e) => { logError('claude usage', e); return null; }) };
-  }
-  return claudeUsageInfo.usage;
+  const id = claudeAccountOf(current().choice);
+  const known = claudeUsageInfo.get(id);
+  if (known && Date.now() - known.at < 60000) return known.usage;
+  const usage = await claudeUsage(executable, { configDir: claudeDirOf(id) }).catch((e) => { logError('claude usage', e); return null; });
+  claudeUsageInfo.set(id, { at: Date.now(), usage });
+  return usage;
 });
+// Another account: its folder takes the user's settings; it logs in next.
+handle('claude:addAccount', [], () => {
+  const added = addClaudeAccount(settings.providers);
+  linkUserSettings(claudeDirOf(added.id)!);
+  return { settings: changeProviders(added.providers), id: added.id };
+});
+// One login at a time: the browser opens on Claude's page; a code it shows comes by claude:loginCode.
+let login: ReturnType<typeof claudeLogin> | null = null;
+handle('claude:login', [isString], async (id) => {
+  const executable = findClaude();
+  if (!executable) throw new Error('Claude n’est pas installé sur cette machine.');
+  if (!settings.providers.some((p) => p.id === id && p.type === 'claude')) throw new Error('Ce compte Claude n’existe plus.');
+  login?.cancel();
+  const started = claudeLogin(executable, claudeDirOf(id));
+  login = started;
+  const ok = await started.done;
+  if (login === started) login = null;
+  claudeInfo.delete(id);
+  claudeUsageInfo.delete(id);
+  return ok;
+});
+handle('claude:loginCode', [isString], (code) => { login?.code(code); });
+handle('claude:loginCancel', [], () => { login?.cancel(); });
 // The model of the conversation shown. Once it has started, its engine stays: the two
 // keep their histories apart.
 handle('session:setChoice', [isObject], (patch) => {
   const s = current();
   if (s.started && patch.engine && patch.engine !== s.choice.engine) return publicSettings();
+  // (a Claude conversation stays on its account: its sessions are in that account's folder)
+  if (s.started && s.choice.engine === 'claude' && patch.provider !== undefined && patch.provider !== claudeAccountOf(s.choice)) return publicSettings();
   s.choice = { ...s.choice, ...patch };
   settings.lastChoice = s.choice;
   saveSettings();

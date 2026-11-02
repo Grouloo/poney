@@ -265,6 +265,23 @@
     </form>
   </dialog>
 
+  <dialog id="claudeLoginDialog" class="prompt-dialog remote-dialog">
+    <form class="prompt-form" id="claudeLoginForm">
+      <div class="prompt-head">
+        <h2>Connexion à Claude</h2>
+      </div>
+      <div class="remote-body">
+        <p>Connectez-vous dans la page qui vient de s’ouvrir dans votre navigateur, avec le compte voulu pour <b id="claudeLoginAccount"></b>.</p>
+        <label>Si la page affiche un code, collez-le ici <input id="claudeLoginCode" type="text" spellcheck="false" autocomplete="off"></label>
+        <div id="claudeLoginError" class="git-error"></div>
+      </div>
+      <div class="prompt-foot">
+        <div class="spacer"></div>
+        <button type="button" id="claudeLoginCancel" class="ghost">Annuler</button>
+        <button type="submit" id="claudeLoginSubmit" class="primary">Valider le code</button>
+      </div>
+    </form>
+  </dialog>
   <dialog id="remoteDialog" class="prompt-dialog remote-dialog">
     <form class="prompt-form" id="remoteForm">
       <div class="prompt-head">
@@ -333,7 +350,10 @@
       <fieldset class="nav-page" data-page="providers">
         <legend>Fournisseurs</legend>
         <div id="providersList" class="providers"></div>
-        <button type="button" id="addProvider" class="ghost">Ajouter un serveur</button>
+        <div class="github-actions">
+          <button type="button" id="addProvider" class="ghost">Ajouter un serveur</button>
+          <button type="button" id="addClaudeAccount" class="ghost">Ajouter un compte Claude</button>
+        </div>
       </fieldset>
       <fieldset class="nav-page" data-page="generation">
         <legend>Génération</legend>
