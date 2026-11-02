@@ -385,6 +385,8 @@ details.thinking div { white-space: pre-wrap; border-left: 2px solid var(--borde
 .nav-body { flex: 1; min-height: 0; display: flex; gap: 6px; padding: 6px 0 0; }
 .dialog-nav { flex: none; width: 204px; display: flex; flex-direction: column; gap: 2px; padding: 4px 8px 12px 12px; }
 .dialog-nav button { background: none; border: none; color: var(--muted); text-align: left; padding: 6px 10px; border-radius: 8px; }
+.dialog-nav button:has(.nav-icon) { display: flex; align-items: center; gap: 9px; }
+.nav-icon { flex: none; width: 16px; height: 16px; }
 .dialog-nav button:hover { background: color-mix(in srgb, var(--text) 7%, transparent); }
 .dialog-nav button.active { background: color-mix(in srgb, var(--accent-2) 22%, transparent); color: var(--text); }
 .nav-pages { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow-y: auto; padding: 0 18px 0 8px; }

@@ -2314,9 +2314,11 @@ $<HTMLButtonElement>('sidebarBtn').onclick = () => projectActions.toggleSidebar(
 let filesInFront = false;
 try { filesInFront = localStorage.getItem('deckFront') === 'files'; } catch {}
 // On the card of the files, two sections, gone through as the projects are on the other card.
+// A branch (the Git section has the Git mark).
+const BRANCH_ICON = '<svg class="proj-icon dot-icon" viewBox="0 0 12 12" aria-hidden="true"><circle cx="3" cy="2.5" r="1.6"/><circle cx="3" cy="9.5" r="1.6"/><circle cx="9" cy="3.5" r="1.6"/><path class="line" d="M3 3v6M9 4.5C9 7 3 6 3 8.5"/></svg>';
 const SECTIONS = [
   { key: 'files', label: 'Fichiers', shortcut: 'showFiles', icon: '<svg class="proj-icon dot-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M1 3a1 1 0 0 1 1-1h2.6l1.2 1.3H10a1 1 0 0 1 1 1V9a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1z"/></svg>' },
-  { key: 'git', label: 'Git', shortcut: 'showGit', icon: '<svg class="proj-icon dot-icon" viewBox="0 0 12 12" aria-hidden="true"><circle cx="3" cy="2.5" r="1.6"/><circle cx="3" cy="9.5" r="1.6"/><circle cx="9" cy="3.5" r="1.6"/><path class="line" d="M3 3v6M9 4.5C9 7 3 6 3 8.5"/></svg>' },
+  { key: 'git', label: 'Git', shortcut: 'showGit', icon: '<svg class="proj-icon dot-icon" viewBox="0 0 12 12" aria-hidden="true"><path class="line" d="M6 .9 11.1 6 6 11.1.9 6z" stroke-linejoin="round"/><path class="line" d="M4.3 3.6 6 5.3v2.6M6 5.3l1.9 1.9"/><circle cx="6" cy="8.1" r="1"/><circle cx="8" cy="7.3" r="1"/></svg>' },
 ];
 let filesSection = 'files';
 try { if (localStorage.getItem('filesSection') === 'git') filesSection = 'git'; } catch {}
@@ -3014,7 +3016,7 @@ function renderFilesHead() {
   $('revealRoot').classList.toggle('hidden', git || viewOff() || !viewDir());
   if (git && gitState?.repo) {
     // (the branch is a picker: switch to another, or start a new one)
-    line.innerHTML = `<button id="branchPicker" class="branch-picker" type="button">${SECTIONS.find((x) => x.key === 'git')!.icon}<span class="branch-name"></span>${CHEVRON}</button>`;
+    line.innerHTML = `<button id="branchPicker" class="branch-picker" type="button">${BRANCH_ICON}<span class="branch-name"></span>${CHEVRON}</button>`;
     line.querySelector<HTMLElement>('.branch-name')!.textContent = gitState.branch || 'Tête détachée';
     line.title = '';
     const picker = line.querySelector<HTMLButtonElement>('#branchPicker')!;
