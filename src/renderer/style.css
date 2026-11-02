@@ -446,10 +446,6 @@ body.no-sidebar .deck { width: 0; margin-right: -12px; opacity: 0; transform: tr
 .conv-card.leaving, .group-head.leaving { position: absolute; margin: 0; pointer-events: none; list-style: none; } /* (the cards slide in sideways when the project changes) */
 /* the project listed: its name and a chevron, highlighted on hover (no glass) */
 .project-bar { position: relative; display: flex; align-items: center; gap: 4px; padding: 8px 8px 0; }
-/* the conversations card: the project listed (chosen by its dots), as a title */
-.conv-filter { display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0; padding: 6px 8px; font-size: 15px; font-weight: 600; }
-.conv-filter .picker-icon:empty { display: none; }
-.conv-filter .picker-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pm-note { flex: none; font-size: 12px; color: var(--muted); }
 .deck-swap, #projectSettingsBtn { flex: none; display: inline-flex; align-items: center; justify-content: center; }
 .with-icon { display: inline-flex; align-items: center; gap: 6px; }

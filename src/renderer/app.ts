@@ -2106,7 +2106,7 @@ $<HTMLInputElement>('ipSearch').addEventListener('input', renderIconPicker);
 $<HTMLButtonElement>('projectImage').onclick = () => applyProjectIcon(() => window.api.pickProjectIcon(settingsProject));
 $<HTMLButtonElement>('projectIconClear').onclick = () => applyProjectIcon(() => window.api.setProjectIcon(settingsProject, null));
 $<HTMLButtonElement>('projectDialogClose').onclick = () => $<HTMLDialogElement>('projectDialog').close();
-$<HTMLButtonElement>('projectSettingsBtn').onclick = () => { const key = viewProject(); if (key) openProjectSettings(key); };
+$<HTMLButtonElement>('projectSettingsBtn').onclick = () => openProjectSettings(projectFilter);
 $<HTMLButtonElement>('projectDelete').onclick = async () => {
   const dir = settingsProject;
   const n = everyConversation.filter((c) => projectOf(c) === dir).length;
@@ -2348,15 +2348,15 @@ function stepProject(dir: number) {
 const viewProject = () => observed ?? activeProject();
 function renderPicker() {
   const key = viewProject();
-  const picker = $<HTMLButtonElement>('projectPicker');
+  const picker = $<HTMLButtonElement>('viewPicker');
   picker.querySelector<HTMLElement>('.picker-icon')!.innerHTML = key ? projectGlyph(key) : '';
   picker.querySelector<HTMLElement>('.picker-name')!.textContent = key ? projectLabel(key) : 'Aucun projet';
   picker.title = key && key !== OFF_KEY ? key : '';
 }
 
 function renderProjectBar(keys: string[]) {
-  $('convFilter').querySelector<HTMLElement>('.picker-icon')!.innerHTML = projectIcon(projectFilter);
-  $('convFilter').querySelector<HTMLElement>('.picker-name')!.textContent = projectLabel(projectFilter);
+  $<HTMLButtonElement>('projectPicker').querySelector<HTMLElement>('.picker-icon')!.innerHTML = projectIcon(projectFilter);
+  $<HTMLButtonElement>('projectPicker').querySelector<HTMLElement>('.picker-name')!.textContent = projectLabel(projectFilter);
   renderPicker();
   const dots = $('projectDots');
   dots.innerHTML = '';
@@ -2377,15 +2377,13 @@ function renderProjectBar(keys: string[]) {
 function openProjectMenu() {
   const menu = $('projectMenu');
   menu.innerHTML = '';
-  // (outside any project, each conversation has its own folder: only the one shown is there)
-  const own = activeProject();
-  for (const key of projectKeys().filter((k) => k !== ALL && (k !== OFF_KEY || own === OFF_KEY))) {
+  for (const key of projectKeys()) {
     const row = document.createElement('div');
-    row.className = `pm-row${key === viewProject() ? ' selected' : ''}`;
-    row.innerHTML = `<span class="pm-icon">${projectGlyph(key)}</span><span class="pm-name"></span>${key === own ? '<span class="pm-note">conversation</span>' : ''}<button class="pm-edit" type="button" title="Paramètres du projet (icône, suppression)">⋯</button>`;
+    row.className = `pm-row${key === projectFilter ? ' selected' : ''}`;
+    row.innerHTML = `<span class="pm-icon">${key === ALL ? '' : projectGlyph(key)}</span><span class="pm-name"></span>${key === ALL ? '' : '<button class="pm-edit" type="button" title="Paramètres du projet (icône, suppression)">⋯</button>'}`;
     row.querySelector<HTMLElement>('.pm-name')!.textContent = projectLabel(key);
-    row.title = key === OFF_KEY ? '' : key;
-    row.onclick = () => { closeProjectMenu(); observe(key === own ? null : key); };
+    row.title = key === ALL || key === OFF_KEY ? '' : key;
+    row.onclick = () => { closeProjectMenu(); setProjectFilter(key); };
     const edit = row.querySelector<HTMLElement>('.pm-edit');
     if (edit) edit.onclick = (e) => { e.stopPropagation(); closeProjectMenu(); openProjectSettings(key); };
     menu.appendChild(row);
@@ -2403,6 +2401,44 @@ function closeProjectMenu() {
   $('projectMenu').classList.add('hidden');
   $<HTMLButtonElement>('projectPicker').classList.remove('open');
 }
+
+/** The menu of the files card: the project to look at. */
+function openViewMenu() {
+  const menu = $('viewMenu');
+  menu.innerHTML = '';
+  // (outside any project, each conversation has its own folder: only the one shown is there)
+  const own = activeProject();
+  for (const key of projectKeys().filter((k) => k !== ALL && (k !== OFF_KEY || own === OFF_KEY))) {
+    const row = document.createElement('div');
+    row.className = `pm-row${key === viewProject() ? ' selected' : ''}`;
+    row.innerHTML = `<span class="pm-icon">${projectGlyph(key)}</span><span class="pm-name"></span>${key === own ? '<span class="pm-note">conversation</span>' : ''}<button class="pm-edit" type="button" title="Paramètres du projet (icône, suppression)">⋯</button>`;
+    row.querySelector<HTMLElement>('.pm-name')!.textContent = projectLabel(key);
+    row.title = key === OFF_KEY ? '' : key;
+    row.onclick = () => { closeViewMenu(); observe(key === own ? null : key); };
+    const edit = row.querySelector<HTMLElement>('.pm-edit');
+    if (edit) edit.onclick = (e) => { e.stopPropagation(); closeViewMenu(); openProjectSettings(key); };
+    menu.appendChild(row);
+  }
+  const add = document.createElement('div');
+  add.className = 'pm-row';
+  add.innerHTML = '<span class="pm-icon">＋</span><span class="pm-name">Ajouter un projet…</span>';
+  add.dataset.tip = `Choisir un dossier (${shortcutText(SHORTCUTS.addProject)})`;
+  add.onclick = () => { closeViewMenu(); addProject(); };
+  menu.appendChild(add);
+  menu.classList.remove('hidden');
+  $<HTMLButtonElement>('viewPicker').classList.add('open');
+}
+function closeViewMenu() {
+  $('viewMenu').classList.add('hidden');
+  $<HTMLButtonElement>('viewPicker').classList.remove('open');
+}
+$<HTMLButtonElement>('viewPicker').onclick = (e) => {
+  e.stopPropagation();
+  if ($('viewMenu').classList.contains('hidden')) openViewMenu(); else closeViewMenu();
+};
+$('viewMenu').onclick = (e) => e.stopPropagation();
+document.addEventListener('click', closeViewMenu);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeViewMenu(); });
 
 /** Looks at another project in the files card (null: the conversation's). */
 async function observe(dir: string | null) {
