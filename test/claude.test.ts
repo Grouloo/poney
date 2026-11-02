@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { ClaudeAgent, toolView, claudeModels, claudeUsage, claudeLoggedIn, claudeError } from '../src/agent/claude.ts';
+import { ClaudeAgent, toolView, claudeModels, claudeUsage, claudeLoggedIn, claudeError, claudeEnv } from '../src/agent/claude.ts';
 import type { ClaudeQuery, ClaudeRun } from '../src/agent/claude.ts';
 import type { AgentEvent, ApprovalAnswer, ApprovalRequest, Approve, EventOf } from '../src/types.ts';
 
@@ -228,4 +228,20 @@ test('the plan\'s session usage, or nothing where limits do not apply or the cal
   assert.equal(await claudeUsage('/bin/claude', { query: query({ rate_limits_available: false, rate_limits: null }) }), null);
   assert.equal(await claudeUsage('/bin/claude', { query: () => idle({ close() { closed++; } }) }), null);
   assert.equal(closed, 3);
+});
+
+test('started from a Claude session, Poney does not hand its variables on to its own Claude', async () => {
+  const host = {
+    PATH: '/usr/bin', HOME: '/Users/a', ANTHROPIC_BASE_URL: 'https://api.anthropic.com',
+    CLAUDECODE: '1', CLAUDE_CODE_ENTRYPOINT: 'claude-desktop', CLAUDE_CODE_SESSION_ID: 's', CLAUDE_CODE_HOST_SESSION_ID: 'h',
+    CLAUDE_CODE_MESSAGING_SOCKET: '/tmp/x.sock', CLAUDE_CODE_MESSAGING_TOKEN: 't', CLAUDE_EFFORT: 'medium', CLAUDE_PID: '1',
+    CLAUDE_AGENT_SDK_VERSION: '0.3', MCP_CONNECTION_NONBLOCKING: 'true',
+    CLAUDE_CODE_USE_BEDROCK: '1', CLAUDE_CODE_SHELL: '/bin/zsh',
+  };
+  assert.deepEqual(claudeEnv(host), { PATH: '/usr/bin', HOME: '/Users/a', ANTHROPIC_BASE_URL: 'https://api.anthropic.com', CLAUDE_CODE_USE_BEDROCK: '1', CLAUDE_CODE_SHELL: '/bin/zsh' });
+  // (each turn gets that environment, not the SDK's default: Poney's own)
+  const { a, calls } = agent([init, done]);
+  await a.send('salut');
+  assert.equal(calls[0].options.env?.CLAUDE_CODE_ENTRYPOINT, undefined);
+  assert.equal(calls[0].options.env?.PATH, process.env.PATH);
 });

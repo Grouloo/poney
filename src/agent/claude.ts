@@ -23,7 +23,7 @@ export interface ClaudeQuery extends AsyncIterable<unknown> {
 
 export type ClaudeRun = (params: Parameters<typeof sdkQuery>[0]) => ClaudeQuery;
 
-type ExecFn = (file: string, args: string[], options: { timeout: number }, callback: (error: unknown, stdout: string) => void) => unknown;
+type ExecFn = (file: string, args: string[], options: { timeout: number; env: Record<string, string> }, callback: (error: unknown, stdout: string) => void) => unknown;
 
 interface Block {
   id: string;
@@ -64,6 +64,24 @@ const isEffort = (v: unknown): v is Effort => isString(v);
 const MODES: Record<string, PermissionMode | undefined> = { auto: 'auto', manual: 'default', plan: 'plan' };
 const sdk = () => import('@anthropic-ai/claude-agent-sdk');
 
+// What a Claude session gives the programs it starts. Poney started from one (a terminal of
+// Claude Code, the Claude app) would hand them on to its own Claude, which then takes itself
+// for part of that session: the app's entrypoint ("claude-desktop") gives another system
+// prompt, and each conversation writes its prompt cache again (about 16k tokens). Without them,
+// the SDK sets its own entrypoint.
+const HOST_SESSION = /^(CLAUDECODE|CLAUDE_PID|CLAUDE_EFFORT|CLAUDE_CODE_\w+|CLAUDE_AGENT_SDK_\w+|CLAUDE_PREVIEW_\w+|MCP_CONNECTION_NONBLOCKING|MCP_SERVER_CONNECTION_BATCH_SIZE)$/;
+// (what a user sets for Claude Code in their own shell: kept)
+const USER_SETTINGS = new Set(['CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_SHELL', 'CLAUDE_CODE_SHELL_PREFIX', 'CLAUDE_CODE_GIT_BASH_PATH', 'CLAUDE_CODE_MAX_OUTPUT_TOKENS', 'CLAUDE_CODE_API_KEY_HELPER_TTL_MS', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', 'CLAUDE_CODE_CLIENT_CERT', 'CLAUDE_CODE_CLIENT_KEY', 'CLAUDE_CODE_CLIENT_KEY_PASSPHRASE']);
+
+/** The environment of the Claude processes Poney starts: its own, without a host session's. */
+export function claudeEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [name, value] of Object.entries(env)) {
+    if (value !== undefined && (USER_SETTINGS.has(name) || !HOST_SESSION.test(name))) out[name] = value;
+  }
+  return out;
+}
+
 /** The installed `claude` program, or null. (From the Finder, the PATH lacks the usual folders.) */
 export function findClaude(env = process.env) {
   const home = os.homedir();
@@ -86,7 +104,7 @@ const NOT_LOGGED_IN = 'Claude n’est pas connecté sur cette machine : lancez �
 /** Whether the installed program is logged in (if it cannot tell: as if it were, the first message will say). */
 export function claudeLoggedIn(executable: string, run: ExecFn = (file, args, options, callback) => execFile(file, args, options, callback)) {
   return new Promise<boolean>((resolve) => {
-    run(executable, ['auth', 'status'], { timeout: 15000 }, (error, stdout) => {
+    run(executable, ['auth', 'status'], { timeout: 15000, env: claudeEnv() }, (error, stdout) => {
       try {
         resolve(rec(parseJson(stdout)).loggedIn !== false);
       } catch {
@@ -106,7 +124,7 @@ export function claudeError(message: unknown): string {
 export async function claudeModels(executable: string, { query }: { query?: ClaudeRun } = {}) {
   const run: ClaudeRun = query ?? (await sdk()).query;
   const idle = (async function* () { await new Promise(() => {}); })(); // (no message: only the list)
-  const q = run({ prompt: idle, options: { pathToClaudeCodeExecutable: executable } });
+  const q = run({ prompt: idle, options: { pathToClaudeCodeExecutable: executable, env: claudeEnv() } });
   try {
     const models = list(await q.supportedModels?.());
     return models.map(rec).map((m) => ({ value: str(m.value), name: str(m.displayName), efforts: list(m.supportedEffortLevels).filter(isEffort), auto: Boolean(m.supportsAutoMode) }));
@@ -123,7 +141,7 @@ export async function claudeModels(executable: string, { query }: { query?: Clau
 export async function claudeUsage(executable: string, { query }: { query?: ClaudeRun } = {}) {
   const run: ClaudeRun = query ?? (await sdk()).query;
   const idle = (async function* () { await new Promise(() => {}); })(); // (no message: only the numbers)
-  const q = run({ prompt: idle, options: { pathToClaudeCodeExecutable: executable } });
+  const q = run({ prompt: idle, options: { pathToClaudeCodeExecutable: executable, env: claudeEnv() } });
   try {
     const r = rec(await q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?.({ skipBehaviors: true }));
     if (!r.rate_limits_available) return null;
@@ -269,6 +287,7 @@ export class ClaudeAgent extends EventEmitter<{ event: [AgentEvent] }> {
           systemPrompt: { type: 'preset', preset: 'claude_code' },
           settingSources: ['user', 'project', 'local'],
           pathToClaudeCodeExecutable: this.executable ?? undefined,
+          env: claudeEnv(),
           abortController: controller,
           ...(this.sessionId ? { resume: this.sessionId } : {}),
       };
