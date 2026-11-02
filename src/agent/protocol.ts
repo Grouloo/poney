@@ -47,6 +47,8 @@ export const TOOLS: Record<string, ToolSpec> = {
   forget: { args: ['id'], bodyArg: 'id', needsBody: true, observes: false },
   // Search the earlier part of the conversation, out of the context (see history.js).
   recall: { args: ['query'], bodyArg: 'query', needsBody: false, observes: true },
+  // A questionnaire for the user: the turn waits for the answers (see ask.ts).
+  ask: { args: [], bodyArg: 'body', needsBody: true, observes: true },
 };
 
 // Common aliases small models reach for. Mapped to canonical names.
@@ -63,6 +65,7 @@ const ALIASES: Record<string, string> = {
   memorize: 'remember', memorise: 'remember', save_memory: 'remember', add_memory: 'remember',
   search_history: 'recall', recall_history: 'recall', search_conversation: 'recall',
   delete_memory: 'forget', remove_memory: 'forget', unremember: 'forget',
+  ask_user: 'ask', ask_question: 'ask', ask_questions: 'ask', questionnaire: 'ask', ask_user_question: 'ask', ask_followup_question: 'ask',
   todo: 'plan', todos: 'plan', todo_list: 'plan', todowrite: 'plan', todo_write: 'plan', update_plan: 'plan', task_list: 'plan',
 };
 
@@ -99,6 +102,31 @@ export function toolSchemas(config: Partial<Config> = {}, { subagentRole = false
     fn('remember', 'Keep a short note in the memory of this conversation (goals, decisions, preferences, constraints)', { note: 'one short sentence' }, ['note']),
     fn('forget', 'Remove a note from the memory', { id: 'number of the note' }, ['id']),
     fn('recall', 'Search the earlier part of this conversation (no longer in view) for keywords', { query: 'keywords' }, ['query']),
+    {
+      type: 'function',
+      function: {
+        name: 'ask',
+        description: 'Ask the user questions, each with proposed answers (they can also write their own). Their answers come back as the result.',
+        parameters: {
+          type: 'object',
+          properties: {
+            questions: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  question: { type: 'string' },
+                  options: { type: 'array', items: { type: 'string' }, description: 'proposed answers' },
+                  multiple: { type: 'boolean', description: 'several answers can be picked' },
+                },
+                required: ['question', 'options'],
+              },
+            },
+          },
+          required: ['questions'],
+        },
+      },
+    },
     {
       type: 'function',
       function: {
@@ -143,7 +171,7 @@ export function toolSchemas(config: Partial<Config> = {}, { subagentRole = false
       },
     },
   ];
-  return all.filter((t) => isToolEnabled(t.function.name, config) && !(subagentRole && t.function.name === 'plan'));
+  return all.filter((t) => isToolEnabled(t.function.name, config) && !(subagentRole && (t.function.name === 'plan' || t.function.name === 'ask')));
 }
 
 /** Tools that can be switched off in the settings, and the config flag for each. */
@@ -198,6 +226,7 @@ export function buildSystemPrompt({ cwd, offProject = false, scratch = false, me
     : subagents
       ? '<plan>\n- first task (goal, files)\n- next task\n</plan>                                 a plan: each task is done by a sub-agent, in order'
     : '<plan>\n- first task\n- next task\n</plan>                                 your task list');
+  if (!subagentRole) tools.push('<ask>\n? a question @multiple (when several answers fit)\n- a proposed answer\n- another\n</ask>                                  ask the user (they pick or write their own)');
   if (subagents) {
     tools.push('<agent title="short name">\ncomplete task, with all the context it needs\n</agent>                                delegate an independent task to a sub-agent');
   }
@@ -250,7 +279,7 @@ export function buildSystemPrompt({ cwd, offProject = false, scratch = false, me
 TALKING WITH THE USER
 - Not every message is a task. A question gets an answer, a remark gets a reply.
 - Use the user's language. Lead with the answer, keep it short. No preamble, no restating what the user said, no filler, no closing offers.
-- Read the intent, not just the words: the user may be ironic or sarcastic. If you are not sure what they want, ask one short question instead of guessing.
+- Read the intent, not just the words: the user may be ironic or sarcastic. If you are not sure what they want, ask instead of guessing (<ask> to propose answers).
 - Talk like a colleague. Say so when you do not know. No praise, hype or stacked hedges.
 - State facts: the file, the number, what it does. Cut sentences that would fit any project.
 - Short active sentences, common words, one name per thing. Keep articles and verbs: no telegraphic notes, no arrows.
@@ -471,6 +500,12 @@ function jsonToTag(name: string, a: LooseArgs = {}): string | null {
       if (!tasks) return `<plan>\n${show(a.plan ?? a.body)}\n</plan>`;
       return `<plan>\n${tasks.map((t) => (typeof t === 'string' ? { task: t } : rec(t)))
         .map((t: LooseArgs) => `- ${t.done || t.status === 'completed' || t.status === 'done' ? '[x] ' : ''}${t.parallel || t.agent ? '@parallel ' : ''}${show(t.task ?? t.content ?? t.text ?? t.title)}`).join('\n')}\n</plan>`;
+    }
+    case 'ask': {
+      const qs: unknown[] | null = Array.isArray(a.questions) ? a.questions : null;
+      if (!qs) return `<ask>\n${show(a.body ?? a.question)}\n</ask>`;
+      return `<ask>\n${qs.map((q) => (typeof q === 'string' ? { question: q } : rec(q)))
+        .map((q: LooseArgs) => `? ${show(q.question ?? q.text)}${q.multiple || q.multiSelect ? ' @multiple' : ''}\n${list(q.options ?? q.choices).map((o) => `- ${typeof o === 'string' ? o : show(rec(o).label ?? rec(o).text)}`).join('\n')}`).join('\n')}\n</ask>`;
     }
     case 'search': return a.query || a.keywords ? `<search${quoteAttr('path', a.path)}>${show(a.query ?? a.keywords)}</search>` : `<search${quoteAttr('pattern', a.pattern)}${quoteAttr('path', a.path)} />`;
     default: return `<${tool}${['path', 'start', 'end', 'pattern', 'depth'].map((k) => quoteAttr(k, a[k])).join('')} />`;

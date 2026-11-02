@@ -10,7 +10,8 @@ import { remember, forget, memoryBlock, standingInstructions, instructionNote, r
 import { loadSkills, skillDirs, mentionedSkills, matchingSkills, skillBlock, type Skill } from './skills.ts';
 import { recall, autoRecall, recalledBlock, keywordsOf, outOfContext } from './history.ts';
 import { linksToRead, readLinks } from './autofetch.ts';
-import { TRIAGE_SCHEMA, TRIAGE_ATTEMPTS, TRIAGE_RETRY, TRIAGE_RETRY_CUT, fallbackTriage, ROUTE_SOURCES, SOURCE_TOOLS, MAX_REFUSALS, triageRequest, triageInstruction, triageUpdateInstruction, needsUpdate, parseTriage, triageBlock, triageReminder, triageRefusal } from './triage.ts';
+import { TRIAGE_SCHEMA, TRIAGE_ATTEMPTS, TRIAGE_RETRY, TRIAGE_RETRY_CUT, fallbackTriage, ROUTE_SOURCES, SOURCE_TOOLS, MAX_REFUSALS, triageRequest, triageInstruction, triageUpdateInstruction, needsUpdate, parseTriage, triageBlock, triageReminder, triageRefusal, askNudge, asksInProse } from './triage.ts';
+import { parseQuestions, askResult, answersText, cleanAnswers, ASK_FORMAT } from './ask.ts';
 import { parsePlan, taskParts, mergePlan, carryPlan, nextGroup, setStatus, formatPlan, subAgentTask, turnDigest, conversationDigest, stoppedPlanText } from './plan.ts';
 import {
   summaryTokens, summaryWords, mechanicalSummary, DEFAULT_CHARS_PER_TOKEN,
@@ -1225,6 +1226,8 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
     let triageUpdates = 0;
     let sourcesRead = 0; // sources read this turn (for the route of the assessment)
     let triageBase = 0; // sources already read when the current assessment was made
+    let asked = false; // a questionnaire was shown this turn
+    let askNudged = false;
     const recent: string[] = [];
     let reason = 'done';
 
@@ -1244,7 +1247,7 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
         triage = t ?? fallbackTriage();
         sourcesRead = preRead;
         const last = this.messages[this.messages.length - 1];
-        last.content += `\n\n${triageBlock(triage)}`;
+        last.content += `\n\n${triageBlock(triage, { ask: this.role === 'main' })}`;
         this.emit('event', { type: 'triage', turnId, ...triage, ...(t ? {} : { failed: true }) });
       }
       for (let step = 0; ; step++) {
@@ -1350,6 +1353,14 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
             continue;
           }
 
+          // The assessment said the user should be asked something, and the answer asks
+          // them in prose: the questionnaire instead (once), where they pick and answer.
+          if (triage?.questions.length && this.role === 'main' && !asked && !askNudged && asksInProse(prose)) {
+            askNudged = true;
+            notice('Questions posées dans le texte : le modèle est relancé pour utiliser le questionnaire.');
+            this.messages.push({ role: 'user', content: askNudge(triage) });
+            continue;
+          }
           // The assessment said something was doubtful or unknown: no final answer before
           // the sources its route asks for were read (asked twice at most, then let through).
           const since = sourcesRead - triageBase;
@@ -1479,6 +1490,26 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
               continue;
             }
           }
+          if (action.tool === 'ask') {
+            // The questionnaire: the same wait as an approval (the conversation is on hold).
+            const questions = parseQuestions(action.args.body);
+            const fail = this.role !== 'main'
+              ? 'You cannot ask the user: you are a sub-agent. Put your questions in your report.'
+              : questions.length ? '' : `No question found. ${ASK_FORMAT}`;
+            if (fail) {
+              this.emit('event', { type: 'action_end', id: actId, ok: false, output: fail, meta: {} });
+              results.push(formatResult('ask', {}, fail));
+              continue;
+            }
+            asked = true;
+            const answer = await this.approve({ id: actId, tool: 'ask', questions });
+            if (signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+            const answers = typeof answer === 'object' && answer.ok ? cleanAnswers(questions, answer.answers) : null;
+            this.emit('event', { type: 'action_end', id: actId, ok: Boolean(answers), output: answers ? answersText(questions, answers) : 'Questionnaire fermé sans réponse.', meta: {} });
+            results.push(formatResult('ask', {}, askResult(questions, answers)));
+            stopBatch = true; // (what came after the questions was written without the answers)
+            continue;
+          }
           if (action.tool === 'recall') {
             const r = recall([...this.parentHistory, ...this.archives], this.messages, action.args.query, {
               maxChars: Math.min(3000, this.maxResultChars),
@@ -1585,7 +1616,7 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
             triage = t;
             triageBase = sourcesRead;
             triageRefusals = 0;
-            this.messages[this.messages.length - 1].content += `\n\n${triageBlock(t, { update: true, web: received.some((x) => x.ok && (x.tool === 'web_search' || x.tool === 'fetch')) })}`;
+            this.messages[this.messages.length - 1].content += `\n\n${triageBlock(t, { update: true, ask: this.role === 'main', web: received.some((x) => x.ok && (x.tool === 'web_search' || x.tool === 'fetch')) })}`;
           }
           this.emit('event', t ? { type: 'triage', update: true, ...t } : { type: 'triage', update: true, failed: true });
         }

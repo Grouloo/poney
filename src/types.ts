@@ -80,15 +80,29 @@ export interface ParsedAction extends Action {
 
 export type Meta = Record<string, unknown>;
 
+/** A question of the questionnaire (<ask>, see ask.ts). */
+export interface Question {
+  question: string;
+  options: string[];
+  multiple: boolean;
+}
+
+/** The answer to a question: the options picked, and the user's own words. */
+export interface QuestionAnswer {
+  choices: string[];
+  other: string;
+}
+
 export interface ApprovalRequest {
   id: number;
   tool: string;
   command?: string;
+  questions?: Question[]; // (a questionnaire: the same wait as an approval)
   claude?: boolean;
   agentTitle?: string;
 }
 
-export type ApprovalAnswer = boolean | { ok: boolean; reason?: string };
+export type ApprovalAnswer = boolean | { ok: boolean; reason?: string; answers?: QuestionAnswer[] };
 export type Approve = (req: ApprovalRequest) => Promise<ApprovalAnswer>;
 
 export type TaskStatus = 'pending' | 'running' | 'done' | 'failed';
@@ -193,6 +207,7 @@ export interface Triage {
   known: TriageItem[];
   doubts: TriageItem[];
   unknowns: TriageItem[];
+  questions: string[]; // what the model should ask the user (answered with <ask>)
   route: TriageRoute;
 }
 

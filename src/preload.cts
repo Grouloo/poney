@@ -1,4 +1,5 @@
 import type { AppAlert, Args, Channel, ContextMenuParams, Reply, SessionApproval, SessionEvent } from './ipc.ts' with { 'resolution-mode': 'import' };
+import type { QuestionAnswer } from './types.ts' with { 'resolution-mode': 'import' };
 
 const { contextBridge, ipcRenderer } = require('electron') as typeof Electron;
 
@@ -38,6 +39,7 @@ const api = {
   reset: call('agent:reset'),
   newOffProject: call('conversations:newOffProject'),
   approve: (id: number, ok: boolean, always?: boolean, reason?: string) => ipcRenderer.invoke('agent:approve', { id, ok, always, reason }) as Promise<Reply<'agent:approve'>>,
+  answer: (id: number, answers: QuestionAnswer[] | null) => ipcRenderer.invoke('agent:approve', { id, ok: Boolean(answers), answers: answers ?? undefined }) as Promise<Reply<'agent:approve'>>,
   onEvent: onValue<SessionEvent>('agent:event'),
   onApproval: onValue<SessionApproval>('agent:approval'),
 

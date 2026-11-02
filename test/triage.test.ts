@@ -32,7 +32,7 @@ const isTriage = (r: ModelRequest) => /honest assessment/.test(r.messages.at(-1)
 const lastUser = (r: ModelRequest) => r.messages.at(-1)!.content;
 
 test('the assessment is read from JSON (in a fence, in prose, cut) and gives the route', () => {
-  assert.deepEqual(parseTriage('```json\n{"known": ["Node 24"], "doubts": [], "unknowns": []}\n```'), { known: [{ point: 'Node 24', why: '' }], doubts: [], unknowns: [], route: 'direct' });
+  assert.deepEqual(parseTriage('```json\n{"known": ["Node 24"], "doubts": [], "unknowns": []}\n```'), { known: [{ point: 'Node 24', why: '' }], doubts: [], unknowns: [], questions: [], route: 'direct' });
   const t = parseTriage('Here: {"known": [], "doubts": [{"point": "the test command", "why": "not read"}], "unknowns": []} done')!;
   assert.equal(t!.route, 'check');
   assert.deepEqual(t!.doubts, [{ point: 'the test command', why: 'not read' }]);
@@ -293,7 +293,7 @@ test('an unreadable assessment is asked again (low temperature, then a little hi
 test('search snippets are not pages read: a doubt needs a fetched page; from the web, pages are cited', async () => {
   const { triageUpdateInstruction } = await import('../src/agent/triage.ts');
   assert.match(triageUpdateInstruction('task'), /only a snippet gives is a "doubt" until a page you fetched confirms it/);
-  const t: Triage = { known: [], doubts: [{ point: 'the date', why: 'a snippet' }], unknowns: [], route: 'check' };
+  const t: Triage = { known: [], doubts: [{ point: 'the date', why: 'a snippet' }], unknowns: [], questions: [], route: 'check' };
   assert.match(triageBlock(t, { update: true, web: true }), /"Sources" \(only pages you opened with <fetch>\) and "Seen in search results \(not opened\)"/);
   assert.doesNotMatch(triageBlock(t, { update: true }), /Sources/);
 

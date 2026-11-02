@@ -2,6 +2,7 @@ import { parseActions, splitThinking, normalizeToolCalls, liveAction, partialEdi
 import hljs from '../../node_modules/@highlightjs/cdn-assets/es/highlight.min.js';
 import { fmtNum, fmtDuration } from './format.ts';
 import { parsePlan, taskParts } from '../agent/plan.ts';
+import { parseQuestions } from '../agent/ask.ts';
 import { markdown, esc } from './markdown.ts';
 import { documentHtml } from './document.ts';
 import { SwipeDetector } from './swipe.ts';
@@ -13,8 +14,8 @@ import type { AppAlert, ClaudeAccount, ClaudeStatus, FileStates, GithubStatus, L
 import type { TorStatus } from '../agent/tor.ts';
 import type { GitFile, GitRepoStatus } from '../git.ts';
 import type { ViewedFile } from '../files.ts';
-import { errorMessage, isRecord, num, str } from '../unknown.ts';
-import type { AgentEvent, Choice, ContextStats, ConversationSummary, Effort, EngineName, EventOf, PlanTask, ProjectIcon, Provider, ProviderType, PublicSettings, ToolArgs, TriageItem, TurnStats } from '../types.ts';
+import { errorMessage, isRecord, isStringArray, num, str } from '../unknown.ts';
+import type { AgentEvent, Choice, ContextStats, ConversationSummary, Effort, EngineName, EventOf, PlanTask, ProjectIcon, Provider, ProviderType, PublicSettings, Question, QuestionAnswer, ToolArgs, TriageItem, TurnStats } from '../types.ts';
 
 declare global {
   interface Window {
@@ -299,7 +300,7 @@ function fitBelowBar(menu: HTMLElement, anchor: HTMLElement) {
 }
 
 // The model menu's groups fold, and stay as they were left.
-const foldedModels = new Set<string>(((): string[] => { try { return JSON.parse(localStorage.getItem('modelFolded') ?? '[]'); } catch { return []; } })());
+const foldedModels = new Set<string>(((): string[] => { try { const v: unknown = JSON.parse(localStorage.getItem('modelFolded') ?? '[]'); return isStringArray(v) ? v : []; } catch { return []; } })());
 function openModelMenu() {
   const menu = $('modelMenu');
   const c = choice();
@@ -1317,6 +1318,10 @@ function summarize(tool: string, args: ToolArgs = {}) {
     case 'recall': return args.query || '';
     case 'remember': return args.note || '';
     case 'forget': return `note ${args.id || ''}`;
+    case 'ask': {
+      const n = parseQuestions(args.body).length;
+      return `${n} question${n > 1 ? 's' : ''}`;
+    }
     case 'plan': {
       const n = parsePlan(args.body).length; // (as the agent counts them: a step's commands are part of it)
       return `${n} tâche${n > 1 ? 's' : ''}`;
@@ -1325,7 +1330,7 @@ function summarize(tool: string, args: ToolArgs = {}) {
   }
 }
 
-const TOOL_LABEL: Record<string, string> = { list: 'Lister', read: 'Lire', search: 'Chercher', write: 'Écrire', edit: 'Modifier', run: 'Exécuter', web_search: 'Web', fetch: 'Page web', agent: 'Sous-agent', plan: 'Plan', remember: 'Mémoriser', forget: 'Oublier', recall: 'Retrouver' };
+const TOOL_LABEL: Record<string, string> = { list: 'Lister', read: 'Lire', search: 'Chercher', write: 'Écrire', edit: 'Modifier', run: 'Exécuter', web_search: 'Web', fetch: 'Page web', agent: 'Sous-agent', plan: 'Plan', remember: 'Mémoriser', forget: 'Oublier', recall: 'Retrouver', ask: 'Questions' };
 
 function renderDiff(diff: string) {
   return `<pre class="diff">${diff.split('\n').map((l) => {
@@ -1614,7 +1619,7 @@ function onEvent(ev: SessionEvent) {
       }
       // (selecting text in the head, e.g. a long command, does not close the card)
       card.querySelector<HTMLElement>('.card-head')!.onclick = () => !getSelection()?.toString() && card.classList.toggle('open');
-      if (ev.tool === 'run') {
+      if (ev.tool === 'run' || ev.tool === 'ask') {
         card.classList.add('open');
         summaryEl.title = ev.args?.command || '';
       }
@@ -1642,7 +1647,7 @@ function onEvent(ev: SessionEvent) {
       card.classList.remove('running');
       card.classList.add(ev.ok ? 'ok' : 'fail');
       card.querySelector<HTMLElement>('.status')!.textContent = ev.ok ? '✓' : '✗';
-      card.querySelector<HTMLElement>('.approval')?.remove();
+      card.querySelector<HTMLElement>('.approval, .questionnaire')?.remove();
       if (card.dataset.tool === 'agent') {
         // The report in its view; its first line on the card; the figures.
         const view = agentViews.get(ev.id);
@@ -1722,7 +1727,8 @@ function onEvent(ev: SessionEvent) {
       const d = document.createElement('details');
       d.className = `triage route-${ev.route}`;
       const list = (title: string, items: (string | TriageItem)[] = []) => (items.length ? `<div class="triage-sec"><b>${title}</b><ul>${items.map((x) => `<li>${esc(typeof x === 'string' ? x : x.point)}${typeof x !== 'string' && x.why ? ` <span class="muted">— ${esc(x.why)}</span>` : ''}</li>`).join('')}</ul></div>` : '');
-      d.innerHTML = `<summary>🧭 ${ev.update ? 'Bilan mis à jour' : 'Bilan'}${parts.length ? ` : ${parts.join(', ')}` : ''} → ${route}</summary>${list('Sait', ev.known)}${list('Doute', ev.doubts)}${list('Ignore', ev.unknowns)}`;
+      if (ev.questions?.length) parts.push(count(ev.questions.length, 'question', 'questions'));
+      d.innerHTML = `<summary>🧭 ${ev.update ? 'Bilan mis à jour' : 'Bilan'}${parts.length ? ` : ${parts.join(', ')}` : ''} → ${route}</summary>${list('Sait', ev.known)}${list('Doute', ev.doubts)}${list('Ignore', ev.unknowns)}${list('À demander', ev.questions)}`;
       place(d);
       break;
     }
@@ -1845,6 +1851,7 @@ function onEvent(ev: SessionEvent) {
 function onApproval(req: SessionApproval) {
   const card = cards.get(req.id);
   if (!card) return;
+  if (req.questions) return showQuestionnaire(card, req.id, req.questions);
   // A sub-agent's command: its view is shown, or the question would go unseen.
   for (const [id, view] of agentViews) if (view.contains(card) && panelAgent !== id) openAgentPanel(id);
   card.classList.add('open');
@@ -1876,6 +1883,35 @@ function onApproval(req: SessionApproval) {
   };
   card.appendChild(bar);
   bar.querySelector<HTMLElement>('.yes')!.focus();
+  scrollDown(true);
+}
+
+// The agent's questions (<ask>): proposed answers to pick (one, or several), and a field
+// for the user's own words under each. The turn waits for them like an approval.
+function showQuestionnaire(card: HTMLElement, id: number, questions: Question[]) {
+  if (card.querySelector('.questionnaire')) return;
+  const form = document.createElement('form');
+  form.className = 'questionnaire';
+  form.innerHTML = questions.map((q, i) => `<fieldset class="q"><legend>${esc(q.question)}${q.multiple ? ' <span class="muted">(plusieurs choix possibles)</span>' : ''}</legend>${
+    q.options.map((o) => `<label class="q-opt"><input type="${q.multiple ? 'checkbox' : 'radio'}" name="q${i}" value="${esc(o)}"><span>${esc(o)}</span></label>`).join('')
+  }<input type="text" class="q-other" name="other${i}" placeholder="${q.options.length ? 'Autre réponse ou précision…' : 'Votre réponse…'}"></fieldset>`).join('') +
+    '<div class="q-actions"><button type="button" class="ghost q-skip">Ignorer</button><button type="submit" class="primary">Envoyer les réponses</button></div>';
+  // (a radio picked again is unpicked: a single choice can be left empty)
+  form.querySelectorAll<HTMLInputElement>('input[type=radio]').forEach((r) => {
+    r.onpointerdown = () => { r.dataset.was = String(r.checked); };
+    r.onclick = () => { if (r.dataset.was === 'true') r.checked = false; };
+  });
+  const send = (answers: QuestionAnswer[] | null) => { form.remove(); window.api.answer(id, answers); };
+  form.onsubmit = (e) => {
+    e.preventDefault();
+    send(questions.map((_, i) => ({
+      choices: [...form.querySelectorAll<HTMLInputElement>(`input[name="q${i}"]:checked`)].map((x) => x.value),
+      other: form.querySelector<HTMLInputElement>(`input[name="other${i}"]`)!.value.trim(),
+    })));
+  };
+  form.querySelector<HTMLElement>('.q-skip')!.onclick = () => send(null);
+  card.appendChild(form);
+  form.querySelector<HTMLElement>('input')?.focus();
   scrollDown(true);
 }
 
@@ -2325,7 +2361,7 @@ window.addEventListener('blur', hideTip);
 // A conversation in the background finished, failed or asks for an approval (the window is
 // in front: else the system notifies). A click opens it; the one shown has none.
 const toasts = document.body.appendChild(div('toasts'));
-const ALERT_LABELS: Record<AppAlert['kind'], string> = { done: 'Terminé', error: 'Erreur', approval: 'Autorisation demandée' };
+const ALERT_LABELS: Record<AppAlert['kind'], string> = { done: 'Terminé', error: 'Erreur', approval: 'Autorisation demandée', question: 'Questions de l’agent' };
 function showAlert(a: AppAlert) {
   if (a.session === currentConversation) return;
   for (const old of toasts.querySelectorAll<HTMLElement>(`[data-session="${CSS.escape(a.session)}"]`)) old.remove(); // (its latest news)
@@ -2343,9 +2379,10 @@ function showAlert(a: AppAlert) {
     if (!(e.target as HTMLElement).closest('.toast-close')) openConversation(a.session);
   };
   // (an approval waits for an answer: it stays; the others go after a while, not while pointed at)
-  let timer = a.kind === 'approval' ? undefined : setTimeout(close, 8000);
+  const waits = a.kind === 'approval' || a.kind === 'question';
+  let timer = waits ? undefined : setTimeout(close, 8000);
   t.onmouseenter = () => clearTimeout(timer);
-  t.onmouseleave = () => { if (a.kind !== 'approval') timer = setTimeout(close, 3000); };
+  t.onmouseleave = () => { if (!waits) timer = setTimeout(close, 3000); };
   toasts.prepend(t);
   for (const extra of [...toasts.children].slice(4)) extra.remove();
 }
@@ -2844,7 +2881,7 @@ function conversationItem(c: ConversationSummary, current: string | null) {
   if (c.approvals) {
     pill.textContent = String(c.approvals);
     pill.classList.add('warn');
-    pill.title = c.approvals > 1 ? `${c.approvals} autorisations en attente` : 'Une autorisation en attente';
+    pill.title = c.approvals > 1 ? `${c.approvals} demandes en attente de votre réponse` : 'Une demande en attente de votre réponse';
   } else if (c.sleeping) {
     pill.innerHTML = CLOCK_ICON;
     pill.classList.add('clock');

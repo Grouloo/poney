@@ -7,7 +7,7 @@ import type { TorStatus } from './agent/tor.ts';
 import type { ModelEngine } from './engine/engine.ts';
 import type { listDir, ViewedFile } from './files.ts';
 import type { GitBranches, GitRepoStatus, gitFileStates } from './git.ts';
-import type { AgentEvent, ApprovalRequest, Choice, Config, ContextStats, ConversationSummary, EngineSettings, ProjectIcon, Provider, ProviderType, PublicSettings, Steps } from './types.ts';
+import type { AgentEvent, ApprovalRequest, Choice, Config, ContextStats, ConversationSummary, EngineSettings, ProjectIcon, Provider, ProviderType, PublicSettings, QuestionAnswer, Steps } from './types.ts';
 
 /** An event of the agent, with the conversation it comes from. */
 export type SessionEvent = AgentEvent & { session?: string };
@@ -15,7 +15,7 @@ export type SessionApproval = ApprovalRequest & { session: string };
 /** A conversation in the background finished, failed or asks for an approval. */
 export interface AppAlert {
   session: string;
-  kind: 'done' | 'error' | 'approval';
+  kind: 'done' | 'error' | 'approval' | 'question';
   title: string;
   body: string;
 }
@@ -144,7 +144,7 @@ export interface Channels {
   'agent:stop': [[], void];
   'agent:reset': [[], PublicSettings];
   'agent:retryText': [[], string];
-  'agent:approve': [[answer: { id: number; ok: boolean; always?: boolean; reason?: string }], PublicSettings];
+  'agent:approve': [[answer: { id: number; ok: boolean; always?: boolean; reason?: string; answers?: QuestionAnswer[] }], PublicSettings];
   'conversations:list': [[], { current: string | null; all: ConversationSummary[] }];
   'conversations:newOffProject': [[], PublicSettings];
   'conversations:open': [[id: string], SessionView];

@@ -19,7 +19,7 @@ import { resolveInside } from './agent/tools.ts';
 import { gitFileStates, gitBranches, gitSwitch, gitCreateBranch, createGithubRepo, findGh, GITHUB_TOKEN_PAGE, gitChangeRemote, githubAccount, gitStatus, gitConnect, gitDiff, gitFetch, gitRemote, gitRemoveRemote, gitSync, readyGh } from './git.ts';
 import { migrateLegacy, rebuildHistory, rebuildForAction } from './agent/rebuild.ts';
 import { checkTor, torStatus, newCircuits, findTorProxy, requireTor, proxyEnv } from './agent/tor.ts';
-import { errorMessage, isBoolean, isNumber, isRecord, isString, isStringArray, parseJson, rec } from './unknown.ts';
+import { errorMessage, isBoolean, isNumber, isRecord, isString, isStringArray, list, parseJson, rec, str } from './unknown.ts';
 import type { AppAlert, Args, Channel, ClaudeAccount, ClaudeUsage, Reply, SessionView } from './ipc.ts';
 import type { AgentEvent, ApprovalAnswer, ApprovalRequest, Choice, ConversationFile, ProjectIcon, Provider, PublicSettings, Settings } from './types.ts';
 
@@ -218,7 +218,8 @@ class Session {
         if (this === active) send('agent:approval', { ...req, session: this.key });
         send('sessions:changed');
         updateBadge();
-        alertUser(this, 'approval', `Autorisation demandée${req.agentTitle ? ` (${req.agentTitle})` : ''} : ${req.command ?? req.tool}`);
+        if (req.questions) alertUser(this, 'question', req.questions.map((q) => q.question).join(' · '));
+        else alertUser(this, 'approval', `Autorisation demandée${req.agentTitle ? ` (${req.agentTitle})` : ''} : ${req.command ?? req.tool}`);
       });
       const onEvent = (ev: AgentEvent) => this.onEvent(ev);
       if (claude) this.agent = new ClaudeAgent({ cwd: this.cwd, executable: findClaude(), configDir: claudeDirOf(claudeAccountOf(this.choice)), approve, skillsDir: userSkills() }).on('event', onEvent);
@@ -1194,7 +1195,7 @@ handle('git:createGithub', [isObject], async ({ name, isPrivate, token }) => {
   const url = await createGithubRepo({ name, isPrivate, gh, token: token || savedGithubToken(), env });
   await gitConnect(viewCwd(), url, env, { keep: true });
 });
-handle('agent:approve', [isObject], ({ id, ok, always, reason }) => {
+handle('agent:approve', [isObject], ({ id, ok, always, reason, answers }) => {
   if (always) {
     settings.config.approval = 'auto';
     saveSettings();
@@ -1204,7 +1205,9 @@ handle('agent:approve', [isObject], ({ id, ok, always, reason }) => {
   for (const s of sessions.values()) {
     const p = s.approvals.get(id);
     if (!p) continue;
-    p.resolve(!ok && reason?.trim() ? { ok: false, reason: String(reason).slice(0, 2000) } : ok);
+    // (a questionnaire's answers are narrowed by the agent, against its questions)
+    if (p.req.questions) p.resolve(ok ? { ok: true, answers: list(answers).map(rec).map((a) => ({ choices: list(a.choices).filter(isString), other: str(a.other) })) } : false);
+    else p.resolve(!ok && reason?.trim() ? { ok: false, reason: String(reason).slice(0, 2000) } : ok);
     s.approvals.delete(id);
     send('sessions:changed');
   }

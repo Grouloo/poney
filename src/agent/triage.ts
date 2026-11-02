@@ -8,6 +8,7 @@
 // sure of itself.
 
 import { list, rec } from '../unknown.ts';
+import { ASK_FORMAT } from './ask.ts';
 import type { Message, Triage, TriageItem, TriageRoute } from '../types.ts';
 
 // The model lists the facts its answer will rely on, then grades each one. Asked
@@ -27,11 +28,13 @@ const claim = {
 /** The JSON the assessment call must produce (sent as structured output when the server supports it). */
 export const TRIAGE_SCHEMA = {
   type: 'object',
-  properties: { claims: { type: 'array', items: claim, maxItems: 6 } },
-  required: ['claims'],
+  properties: { claims: { type: 'array', items: claim, maxItems: 6 }, questions: { type: 'array', items: { type: 'string' }, maxItems: 3 } },
+  required: ['claims', 'questions'],
 };
 
-const CLAIM_FORMAT = '{"claims": [{"point": "a fact your answer or work relies on", "why": "where your knowledge of it comes from, or why it may be wrong", "status": "known" or "doubt" or "unknown"}]}';
+const CLAIM_FORMAT = '{"claims": [{"point": "a fact your answer or work relies on", "why": "where your knowledge of it comes from, or why it may be wrong", "status": "known" or "doubt" or "unknown"}], "questions": ["what you should ask the user"]}';
+// What only the user can settle is asked, not looked up: the app then reminds the model of <ask>.
+const QUESTIONS = '"questions": what you should ask the user before going on: a choice, a preference or a detail only they can give, that the conversation does not settle. Usually none: [].';
 const GRADES = [
   '"known": you are sure of it: well-established knowledge you could state precisely, or read in this conversation.',
   '"doubt": you may be wrong: details, numbers, names, formulas, versions, edge cases you remember only roughly.',
@@ -69,7 +72,7 @@ export const TRIAGE_RETRY_CUT = '(Your previous reply ran out of room while you 
  * that failing it is never a way around it (one source to read before answering).
  */
 export function fallbackTriage(): Triage {
-  return { known: [], doubts: [{ point: 'what your answer relies on', why: 'your assessment could not be read' }], unknowns: [], route: 'check' };
+  return { known: [], doubts: [{ point: 'what your answer relies on', why: 'your assessment could not be read' }], unknowns: [], questions: [], route: 'check' };
 }
 
 export function triageInstruction() {
@@ -79,6 +82,7 @@ export function triageInstruction() {
     'Reply with ONLY this JSON object:',
     CLAIM_FORMAT,
     GRADES,
+    QUESTIONS,
     'A fact about this project (its files, its code, its state) that you have not read in this conversation is a doubt at best. A recent fact (versions, news, prices, APIs that change) is a doubt or unknown. An empty list only when the message needs no knowledge at all (a greeting, a thanks). Short items, at most 6.)',
   ].join('\n');
 }
@@ -112,6 +116,7 @@ export function triageUpdateInstruction(task: string | null | undefined): string
     'Reply with ONLY this JSON object:',
     CLAIM_FORMAT,
     GRADES,
+    QUESTIONS,
     'The facts your task relies on, as the results leave them: a point the results settled is "known".',
     'Search results are snippets, not pages read: a detail (a number, a date, a name, a quote) that only a snippet gives is a "doubt" until a page you fetched confirms it; only the broad picture several snippets agree on can be "known".',
     'Only what matters for YOUR CURRENT TASK: a doubt or unknown only if the task cannot be done well without it. Something the results mention that is interesting but not needed: leave it out, do not chase it. At most 6 items.)',
@@ -175,7 +180,11 @@ export function parseTriage(text: unknown): Triage | null {
     doubts = items(fields.doubts ?? fields.doubt);
     unknowns = items(fields.unknowns ?? fields.unknown ?? fields.ignored);
   }
-  return { known, doubts, unknowns, route: unknowns.length ? 'investigate' : doubts.length ? 'check' : 'direct' };
+  const questions = list(fields.questions)
+    .map((x) => clean(typeof x === 'string' ? x : rec(x).question ?? rec(x).point))
+    .filter((x) => x && !/^(none|n\/a|nothing)\.?$/i.test(x))
+    .slice(0, 3);
+  return { known, doubts, unknowns, questions, route: unknowns.length ? 'investigate' : doubts.length ? 'check' : 'direct' };
 }
 
 const ROUTE_TEXT = {
@@ -185,16 +194,28 @@ const ROUTE_TEXT = {
 };
 
 /** The assessment as added to the user's message (or, updated, to the results), with the route the app chose. */
-export function triageBlock(t: Triage, { update = false, web = false } = {}): string {
+export function triageBlock(t: Triage, { update = false, web = false, ask = true } = {}): string {
   const line = (x: TriageItem) => `- ${x.point}${x.why ? ` (${x.why})` : ''}`;
   return [
     update ? '(Your assessment, updated from these results at the app\'s request (it replaces the earlier one):' : '(Your assessment before acting, made at the app\'s request:',
     t.known.length ? `You know:\n${t.known.map(line).join('\n')}` : '',
     t.doubts.length ? `You doubt:\n${t.doubts.map(line).join('\n')}` : '',
     t.unknowns.length ? `You do not know:\n${t.unknowns.map(line).join('\n')}` : '',
+    t.questions.length && ask ? `To ask the user:\n${t.questions.map((q) => `- ${q}`).join('\n')}\n${ASK_REMINDER}` : '',
     web ? `Route set by the app: ${ROUTE_TEXT[t.route]}\nWhen you answer from the web: end with "Sources" (only pages you opened with <fetch>) and "Seen in search results (not opened)", and say which details you could not check.)` : `Route set by the app: ${ROUTE_TEXT[t.route]})`,
   ].filter(Boolean).join('\n');
 }
+
+export const ASK_REMINDER = 'Ask them with <ask> (a questionnaire: your proposed answers, and their own words) before relying on a guess, unless the conversation already answers it.';
+
+/** The message after a final answer that asks in prose what the assessment said to ask: the questionnaire instead. */
+export function askNudge(t: Triage): string {
+  return `In your assessment you said you should ask the user:\n${t.questions.map((q) => `- ${q}`).join('\n')}\n` +
+    `Your answer asks them in prose. Ask with <ask> instead (they pick among your proposed answers or write their own). ${ASK_FORMAT}`;
+}
+
+/** Whether a final answer asks the user something (one of its last lines is a question). */
+export const asksInProse = (text: string) => text.split('\n').filter((l) => l.trim()).slice(-3).some((l) => /\?[\s*_)]*$/.test(l));
 
 /** What is still missing, recalled with each result until the route is satisfied. */
 export function triageReminder(t: Triage, read: number): string {
