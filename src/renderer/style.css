@@ -426,7 +426,9 @@ body.no-sidebar .deck { width: 0; margin-right: -12px; opacity: 0; transform: tr
   position: absolute; top: 0; bottom: 0; left: 0; width: 270px;
   display: flex; flex-direction: column; min-height: 0; background: var(--side), var(--sheet-solid);
 }
+/* (the card in front lets the other show through it, blurred) */
 .deck .front { z-index: 2; }
+#sidebar.front, #filesBar.front { background: var(--side), color-mix(in srgb, var(--sheet-solid) 60%, transparent); backdrop-filter: blur(6px) saturate(150%); }
 .deck .back { z-index: 1; transform: translateX(22px) scale(0.965); transform-origin: right center; filter: brightness(0.9); transition: transform 0.15s ease-out, filter 0.15s; }
 .deck-tab:hover ~ .back { transform: translateX(26px) scale(0.965); filter: brightness(1); }
 .deck-tab {
