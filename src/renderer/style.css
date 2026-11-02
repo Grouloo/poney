@@ -430,6 +430,8 @@ body.no-sidebar .deck { width: 0; margin-right: -12px; opacity: 0; transform: tr
 .deck .front { z-index: 2; }
 #sidebar.front, #filesBar.front { background: var(--side), color-mix(in srgb, var(--sheet-solid) 60%, transparent); backdrop-filter: blur(6px) saturate(150%); }
 .deck .back { z-index: 1; transform: translateX(22px) scale(0.965); transform-origin: right center; filter: brightness(0.9); transition: transform 0.15s ease-out, filter 0.15s; }
+/* (its content fades out before the edge that shows, where its label is written; not while the cards swap) */
+.deck:not(.swapping) .back > * { -webkit-mask-image: linear-gradient(to left, transparent 34px, #000 64px); mask-image: linear-gradient(to left, transparent 34px, #000 64px); }
 .deck-tab:hover ~ .back { transform: translateX(26px) scale(0.965); filter: brightness(1); }
 .deck-tab {
   position: absolute; top: 12px; bottom: 12px; right: 0; width: 22px; z-index: 3; padding: 0; cursor: pointer;
