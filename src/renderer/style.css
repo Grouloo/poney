@@ -31,6 +31,7 @@
   --glass-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0) 55%);
   --glass-light: inset 0 1px 0 rgba(255, 255, 255, 0.16), inset 0 -1px 0 rgba(0, 0, 0, 0.22);
   --glass-drop: 0 4px 14px rgba(0, 0, 0, 0.22);
+  --glass-glint: rgba(255, 255, 255, 0.2); /* (the light a pointer brings to a glass button) */
   --ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif;
   /* Conversations: a humanist face, softer to read at length than the system UI one. */
   --chat: Seravek, 'Gill Sans Nova', Ubuntu, Calibri, 'Segoe UI', -apple-system, sans-serif;
@@ -52,6 +53,7 @@
     --glass-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0) 60%);
     --glass-light: inset 0 1px 0 rgba(255, 255, 255, 0.9), inset 0 -1px 0 rgba(0, 0, 0, 0.05);
     --glass-drop: 0 3px 12px rgba(60, 50, 40, 0.1);
+    --glass-glint: rgba(255, 255, 255, 0.75);
   }
 }
 
@@ -120,8 +122,6 @@ body:has(dialog[open]) .topbar { -webkit-app-region: no-drag; }
 .ghost:hover { background: var(--panel-2); color: var(--text); }
 .icon { font-size: 16px; padding: 4px 9px; }
 .primary { background: var(--accent-2); color: #fff; border: none; border-radius: 8px; padding: 8px 16px; font-weight: 600; }
-.primary:hover { background: var(--accent); }
-.primary.stop { background: var(--err); }
 
 /* ---------- transcript ---------- */
 /* (it runs under the input, which floats over it: --composer-h is its height, see app.js) */
@@ -212,8 +212,8 @@ details.thinking div { white-space: pre-wrap; border-left: 2px solid var(--borde
 .approval span { flex: 1; color: var(--warn); font-size: 14px; }
 .approval button { border-radius: 7px; padding: 4px 12px; border: 1px solid var(--border); background: var(--panel-2); }
 .approval.refuse input { flex: 1; min-width: 0; padding: 5px 9px; border-radius: 7px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font: inherit; font-size: 14px; }
-.approval.refuse button.no { background: color-mix(in srgb, var(--err) 75%, var(--panel)); color: #fff; border: none; }
-.approval button.yes { background: var(--accent-2); color: #fff; border: none; }
+.approval.refuse button.no { color: #fff; border: none; }
+.approval button.yes { color: #fff; border: none; }
 
 .notice { color: var(--warn); font-size: 13.5px; margin: 6px auto; }
 .notice::before { content: '• '; }
@@ -924,23 +924,39 @@ body.running .resume-btn { display: none; }
 .empty h1 { font-family: var(--chat); font-weight: 500; letter-spacing: 0.2px; }
 
 /* ---------- liquid glass ---------- */
-.primary, .approval button, .new-conv, .git-sync, .ghost:hover, .msg-editor button {
-  background: var(--glass-sheen), var(--glass);
+/* A blurred, tinted pane, lit on its top edge and rimmed with light. On hover, a glint follows the
+   pointer (--mx, --my: see app.js) and the pane rises a little; pressed, it gives. */
+@property --glint { syntax: '<number>'; inherits: false; initial-value: 0; }
+.primary, .approval button, .new-conv, .git-sync, .msg-editor button, .ghost {
+  --tint: var(--glass);
+  transition: --glint 0.2s, transform 0.15s ease-out, box-shadow 0.2s, border-color 0.2s, color 0.15s;
+}
+.primary, .approval button, .new-conv, .git-sync, .msg-editor button, .ghost:hover {
+  background:
+    radial-gradient(circle at var(--mx, 50%) var(--my, 0%), color-mix(in srgb, var(--glass-glint) calc(var(--glint) * 100%), transparent), transparent 70%),
+    var(--glass-sheen), var(--tint);
   border: 1px solid var(--glass-edge);
-  box-shadow: var(--glass-light), var(--glass-drop);
-  backdrop-filter: blur(14px) saturate(160%);
+  box-shadow: var(--glass-light), inset 0 0 0 1px color-mix(in srgb, var(--glass-glint) 25%, transparent), var(--glass-drop);
+  backdrop-filter: blur(14px) saturate(170%);
 }
-.ghost { transition: background-color 0.15s, box-shadow 0.15s; }
-.primary, .approval button.yes {
-  background: var(--glass-sheen), color-mix(in srgb, var(--accent-2) 82%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 55%, transparent); color: #fff;
+.primary:hover, .approval button:hover, .new-conv:hover, .git-sync:hover:not(:disabled), .msg-editor button:hover {
+  --glint: 1; transform: translateY(-1px);
+  box-shadow: var(--glass-light), inset 0 0 0 1px color-mix(in srgb, var(--glass-glint) 45%, transparent), 0 6px 20px rgba(0, 0, 0, 0.28);
 }
-.primary:hover, .approval button.yes:hover { background: var(--glass-sheen), color-mix(in srgb, var(--accent) 80%, transparent); }
-.primary.stop { background: var(--glass-sheen), color-mix(in srgb, var(--err) 82%, transparent); border-color: color-mix(in srgb, var(--err) 60%, transparent); }
-.approval.refuse button.no { background: var(--glass-sheen), color-mix(in srgb, var(--err) 75%, transparent); }
-.new-conv:hover, .git-sync:hover:not(:disabled), .approval button:not(.yes):not(.no):hover { background: var(--glass-sheen), color-mix(in srgb, var(--glass) 100%, var(--glass-edge) 40%); }
+/* (a ghost button is glass only under the pointer: lit, without rising or a shadow) */
+.ghost:hover { --glint: 0.8; box-shadow: var(--glass-light), inset 0 0 0 1px color-mix(in srgb, var(--glass-glint) 30%, transparent); }
+.primary:active, .approval button:active, .new-conv:active, .git-sync:active:not(:disabled), .msg-editor button:active, .ghost:active {
+  transform: translateY(0) scale(0.97); transition-duration: 0.06s;
+}
+.primary, .approval button.yes { --tint: color-mix(in srgb, var(--accent-2) 80%, transparent); border-color: color-mix(in srgb, var(--accent) 55%, transparent); color: #fff; }
+.primary:hover, .approval button.yes:hover { --tint: color-mix(in srgb, var(--accent-2) 70%, var(--accent)); }
+.primary.stop { --tint: color-mix(in srgb, var(--err) 80%, transparent); border-color: color-mix(in srgb, var(--err) 60%, transparent); }
+.approval.refuse button.no { --tint: color-mix(in srgb, var(--err) 75%, transparent); }
 .primary, .ghost, .approval button { border-radius: 10px; }
 .primary { padding: 8px 18px; }
+/* The send button: a round glass drop with an icon (its name in its tooltip). */
+#sendBtn { flex: none; width: 34px; height: 34px; padding: 0; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; }
+#sendBtn svg { width: 16px; height: 16px; display: block; }
 
 .prompt-dialog {
   background: var(--glass-sheen), var(--glass-strong);

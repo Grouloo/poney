@@ -100,6 +100,16 @@ for (const card of document.querySelectorAll<HTMLElement>('#sidebar, #filesBar')
   for (const el of kids) watch.observe(el);
 }
 
+// The glint on a glass button follows the pointer.
+const GLASS = '.primary, .approval button, .new-conv, .git-sync, .msg-editor button, .ghost';
+document.addEventListener('pointermove', (e) => {
+  const b = e.target instanceof Element ? e.target.closest<HTMLElement>(GLASS) : null;
+  if (!b) return;
+  const r = b.getBoundingClientRect();
+  b.style.setProperty('--mx', `${e.clientX - r.left}px`);
+  b.style.setProperty('--my', `${e.clientY - r.top}px`);
+}, { passive: true });
+
 // ---------- helpers ----------
 function scrollDown(force?: boolean) {
   if (replaying) return; // (a conversation is drawn at once, and placed once at the end)
@@ -135,10 +145,15 @@ function div(cls: string, html?: string) {
   return d;
 }
 
+const SEND_ICON = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 13V3.5M3.8 7.5 8 3.3l4.2 4.2"/></svg>';
+const STOP_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="4" y="4" width="8" height="8" rx="1.6" fill="currentColor"/></svg>';
+sendBtn.innerHTML = SEND_ICON;
 function setRunning(v: boolean) {
   running = v;
   document.body.classList.toggle('running', v); // hides the "edit message" buttons
-  sendBtn.textContent = v ? 'Arrêter' : 'Envoyer';
+  sendBtn.innerHTML = v ? STOP_ICON : SEND_ICON;
+  sendBtn.dataset.tip = v ? 'Arrêter' : 'Envoyer (Entrée)';
+  sendBtn.setAttribute('aria-label', v ? 'Arrêter' : 'Envoyer');
   sendBtn.classList.toggle('stop', v);
   if (v) startRunTimer();
   else {
