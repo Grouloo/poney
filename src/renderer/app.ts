@@ -100,20 +100,8 @@ for (const card of document.querySelectorAll<HTMLElement>('#sidebar, #filesBar')
   for (const el of kids) watch.observe(el);
 }
 
-// The glint on a glass button follows the pointer, and what it holds grows: its bare text is
-// wrapped for that as the pointer comes (text set again later is wrapped again).
+// The glint on a glass button follows the pointer.
 const GLASS = '.primary, .approval button, .new-conv, .git-sync, .msg-editor button, .ghost';
-document.addEventListener('pointerover', (e) => {
-  const b = e.target instanceof Element ? e.target.closest<HTMLElement>(GLASS) : null;
-  if (!b) return;
-  for (const node of [...b.childNodes]) {
-    if (node.nodeType !== Node.TEXT_NODE || !node.textContent?.trim()) continue;
-    const span = document.createElement('span');
-    span.className = 'glass-text';
-    node.replaceWith(span);
-    span.append(node);
-  }
-}, { passive: true });
 document.addEventListener('pointermove', (e) => {
   const b = e.target instanceof Element ? e.target.closest<HTMLElement>(GLASS) : null;
   if (!b) return;

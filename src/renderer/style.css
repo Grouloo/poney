@@ -929,7 +929,7 @@ body.running .resume-btn { display: none; }
 
 /* ---------- liquid glass ---------- */
 /* A drop of glass: a glare across it, a thin even edge. On hover, a glint follows the pointer
-   (--mx, --my: see app.js) and its content grows, the focus coming forward with it: what lies
+   (--mx, --my: see app.js) and the drop swells, the focus coming forward with it: what lies
    behind the glass blurs further; pressed, it gives. */
 @property --glint { syntax: '<number>'; inherits: false; initial-value: 0; }
 .primary, .approval button, .new-conv, .git-sync, .msg-editor button, .ghost {
@@ -950,15 +950,9 @@ body.running .resume-btn { display: none; }
 }
 /* (a ghost button is glass only under the pointer: lit, without a shadow) */
 .ghost:hover { --glint: 0.8; box-shadow: none; backdrop-filter: blur(14px) saturate(170%); }
-/* What a glass button holds grows under the pointer, and back as it is pressed (its bare
-   text is put in a .glass-text span for that: see app.js). */
-:is(.primary, .approval button, .new-conv, .git-sync, .msg-editor button, .ghost) > * { transition: transform 0.25s; }
-:is(.primary, .approval button, .new-conv, .git-sync, .msg-editor button, .ghost):hover:not(:disabled) > * { transform: scale(1.08); }
-:is(.primary, .approval button, .new-conv, .git-sync, .msg-editor button, .ghost):active:not(:disabled) > * { transform: none; transition-duration: 0.08s; }
-.glass-text { display: inline-block; }
-.primary:active, .approval button:active, .new-conv:active, .git-sync:active:not(:disabled), .msg-editor button:active, .ghost:active {
-  transform: scale(0.94); transition-duration: 0.08s;
-}
+/* A glass button swells under the pointer, and gives as it is pressed. */
+:is(.primary, .approval button, .new-conv, .git-sync, .msg-editor button, .ghost):hover:not(:disabled) { transform: scale(1.06); }
+:is(.primary, .approval button, .new-conv, .git-sync, .msg-editor button, .ghost):active:not(:disabled) { transform: scale(0.96); transition-duration: 0.08s; }
 /* Colored glass: the color thin at the top and deeper below, lit from within at its base, where
    the light comes through the drop (--hue: its color). */
 .primary, .approval button.yes { --hue: var(--accent-2); }
