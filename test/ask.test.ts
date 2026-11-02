@@ -83,12 +83,15 @@ test('the questionnaire waits for the user like an approval (even in auto), and 
   const end = events.find((e): e is EventOf<'action_end'> => e.type === 'action_end')!;
   assert.equal(end.ok, true);
   assert.match(end.output, /→ export; "CSV only"/);
+  // (kept on the card: resuming from it starts from these answers)
+  assert.deepEqual(end.meta?.answers, [{ choices: ['SQLite'], other: '' }, { choices: ['export'], other: 'CSV only' }, { choices: [], other: '' }]);
 });
 
 test('a questionnaire closed unanswered tells the model so', async () => {
   const { f, events } = await run(false);
   assert.match(f.requests[1].messages.at(-1)!.content, /closed the questionnaire without answering/);
   assert.equal(events.find((e): e is EventOf<'action_end'> => e.type === 'action_end')!.output, 'Questionnaire fermé sans réponse.');
+  assert.equal(events.find((e): e is EventOf<'action_end'> => e.type === 'action_end')!.meta?.answers, undefined);
 });
 
 test('an empty questionnaire is not shown: the model is told the format', async () => {

@@ -1505,7 +1505,8 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
             const answer = await this.approve({ id: actId, tool: 'ask', questions });
             if (signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
             const answers = typeof answer === 'object' && answer.ok ? cleanAnswers(questions, answer.answers) : null;
-            this.emit('event', { type: 'action_end', id: actId, ok: Boolean(answers), output: answers ? answersText(questions, answers) : 'Questionnaire fermé sans réponse.', meta: {} });
+            // (the answers in the card: resuming from it starts from them)
+            this.emit('event', { type: 'action_end', id: actId, ok: Boolean(answers), output: answers ? answersText(questions, answers) : 'Questionnaire fermé sans réponse.', meta: answers ? { answers } : {} });
             results.push(formatResult('ask', {}, askResult(questions, answers)));
             stopBatch = true; // (what came after the questions was written without the answers)
             continue;

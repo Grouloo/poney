@@ -2,7 +2,7 @@ import { parseActions, splitThinking, normalizeToolCalls, liveAction, partialEdi
 import hljs from '../../node_modules/@highlightjs/cdn-assets/es/highlight.min.js';
 import { fmtNum, fmtDuration } from './format.ts';
 import { parsePlan, taskParts } from '../agent/plan.ts';
-import { parseQuestions } from '../agent/ask.ts';
+import { parseQuestions, cleanAnswers } from '../agent/ask.ts';
 import { markdown, esc } from './markdown.ts';
 import { documentHtml } from './document.ts';
 import { SwipeDetector } from './swipe.ts';
@@ -15,7 +15,7 @@ import type { TorStatus } from '../agent/tor.ts';
 import type { GitFile, GitRepoStatus } from '../git.ts';
 import type { ViewedFile } from '../files.ts';
 import { errorMessage, isRecord, isStringArray, num, str } from '../unknown.ts';
-import type { AgentEvent, Choice, ContextStats, ConversationSummary, Effort, EngineName, EventOf, PlanTask, ProjectIcon, Provider, ProviderType, PublicSettings, Question, QuestionAnswer, ToolArgs, TriageItem, TurnStats } from '../types.ts';
+import type { AgentEvent, Choice, ContextStats, ConversationSummary, Effort, EngineName, EventOf, PlanTask, ProjectIcon, Provider, ProviderType, PublicSettings, AskDraft, Question, QuestionAnswer, ToolArgs, TriageItem, TurnStats } from '../types.ts';
 
 declare global {
   interface Window {
@@ -903,7 +903,7 @@ function addUserMessage(text: string, turnId?: string) {
 
 /** Inline editor on a previous user message; "Relancer" restarts the conversation from it. */
 function startEditMessage(m: HTMLElement, turnId: string, text: string) {
-  if (running || m.classList.contains('editing')) return;
+  if ((running && !asking()) || m.classList.contains('editing')) return; // (a questionnaire waiting is given up on relaunch)
   m.classList.add('editing');
   const editor = div('msg-editor');
   editor.innerHTML = `<textarea rows="3"></textarea>
@@ -920,7 +920,7 @@ function startEditMessage(m: HTMLElement, turnId: string, text: string) {
   const close = () => { editor.remove(); m.classList.remove('editing'); };
   const relaunch = async () => {
     const newText = area.value.trim();
-    if (!newText || running) return;
+    if (!newText || !(await stopAsking())) return;
     try {
       const { events } = await window.api.rewind(turnId);
       replayTranscript(events);
@@ -961,9 +961,18 @@ async function retryTurn() {
   await sendMessage(await window.api.retryText());
 }
 
-async function resumeFromAction(id: number) {
-  if (running) return;
-  if (!confirm('Reprendre à partir de cette action ?\n\nElle sera relancée, et tout ce qui la suit sera retiré de la conversation. Les fichiers déjà modifiés ne sont pas restaurés.')) return;
+async function resumeFromAction(id: number, { ask = true } = {}) {
+  if (running && !asking()) return;
+  if (ask && !confirm('Reprendre à partir de cette action ?\n\nElle sera relancée, et tout ce qui la suit sera retiré de la conversation. Les fichiers déjà modifiés ne sont pas restaurés.')) return;
+  if (!(await stopAsking())) return;
+  // A questionnaire asked again starts from the answers given: they can be changed.
+  const card = cards.get(id);
+  const given = askAnswers.get(id);
+  if (card?.dataset.tool === 'ask' && given) {
+    const draft = { key: askKey(parseQuestions(card.dataset.body)), answers: given, step: 0 };
+    askDrafts.set(draft.key, draft);
+    saveAskDraft(draft);
+  }
   try {
     const { events } = await window.api.resumeFrom(id);
     replayTranscript(events);
@@ -1629,6 +1638,7 @@ function onEvent(ev: SessionEvent) {
       }
       card.dataset.tool = ev.tool;
       card.dataset.path = ev.args?.path || '';
+      if (ev.tool === 'ask') card.dataset.body = ev.args?.body || '';
       addResumeButton(card, ev);
       cards.set(ev.id, card);
       if (ev.tool === 'plan' && !target) startPlanBlock(card);
@@ -1653,6 +1663,7 @@ function onEvent(ev: SessionEvent) {
       card.querySelector<HTMLElement>('.status')!.textContent = ev.ok ? '✓' : '✗';
       card.querySelector<HTMLElement>('.approval, .ask-wait')?.remove();
       closeQuestionnaire(ev.id);
+      if (card.dataset.tool === 'ask' && ev.meta?.answers) askAnswers.set(ev.id, cleanAnswers(parseQuestions(card.dataset.body), ev.meta.answers));
       if (card.dataset.tool === 'agent') {
         // The report in its view; its first line on the card; the figures.
         const view = agentViews.get(ev.id);
@@ -1896,7 +1907,18 @@ function onApproval(req: SessionApproval) {
 // take the place of the message field (its draft is kept); the card says it waits.
 // One question at a time, with a stepper: going back keeps the answers, and so does
 // drawing the conversation again (another one shown, then this one).
-const askDrafts = new Map<number, { answers: QuestionAnswer[]; step: number }>();
+// (by its questions: a questionnaire asked again, resumed or after a restart, has another id)
+const askDrafts = new Map<string, { answers: QuestionAnswer[]; step: number }>();
+const askKey = (questions: Question[]) => JSON.stringify(questions);
+const askAnswers = new Map<number, QuestionAnswer[]>(); // the answers given, by card (resuming from it starts from them)
+let askSaveTimer: ReturnType<typeof setTimeout> | undefined;
+
+/** The questionnaire's state, kept with the conversation (soon, not at each key). */
+function saveAskDraft(draft: AskDraft | null) {
+  clearTimeout(askSaveTimer);
+  if (!draft) return void window.api.setAskDraft(null);
+  askSaveTimer = setTimeout(() => window.api.setAskDraft(draft), 300);
+}
 
 function showQuestionnaire(card: HTMLElement, id: number, questions: Question[]) {
   closeQuestionnaire();
@@ -1905,35 +1927,45 @@ function showQuestionnaire(card: HTMLElement, id: number, questions: Question[])
   form.className = 'questionnaire';
   form.dataset.id = String(id);
   const n = questions.length;
-  form.innerHTML =     questions.map((q, i) => `<fieldset class="q" data-step="${i}"><legend>${esc(q.question)}${q.multiple ? ' <span class="muted">(plusieurs choix possibles)</span>' : ''}</legend>${
-      q.options.map((o) => `<label class="q-opt"><input type="${q.multiple ? 'checkbox' : 'radio'}" name="q${i}" value="${esc(o)}"><span>${esc(o)}</span></label>`).join('')
-    }<input type="text" class="q-other" name="other${i}" placeholder="${q.options.length ? 'Autre réponse ou précision…' : 'Votre réponse…'}"></fieldset>`).join('') +
-    `<div class="q-actions"><button type="button" class="ghost q-skip">Ignorer</button><span class="spacer-row"></span><div class="q-steps" role="group">${questions.map((q, i) => `<button type="button" class="q-step" data-step="${i}" title="${esc(q.question)}">${i + 1}</button>`).join('<span class="q-link"></span>')}</div><button type="button" class="ghost q-prev">${CHEV_LEFT}<span>Précédent</span></button><button type="submit" class="primary q-next"></button></div>`;
+  const key = askKey(questions);
+  form.innerHTML = questions.map((q, i) => `<fieldset class="q" data-step="${i}"><legend>${esc(q.question)}${q.multiple ? ' <span class="muted">(plusieurs choix possibles)</span>' : ''}</legend>${
+    q.options.map((o) => `<label class="q-opt"><input type="${q.multiple ? 'checkbox' : 'radio'}" name="q${i}" value="${esc(o)}"><span>${esc(o)}</span></label>`).join('')
+  }<input type="text" class="q-other" name="other${i}" placeholder="${q.options.length ? 'Autre réponse ou précision…' : 'Votre réponse…'}"></fieldset>`).join('') +
+    `<div class="q-actions"><button type="button" class="ghost q-skip">Ignorer</button><div class="q-steps" role="group">${questions.map((q, i) => `<button type="button" class="q-step" data-step="${i}" title="${esc(q.question)}">${i + 1}</button>`).join('<span class="q-link"></span>')}</div><div class="q-nav"><button type="button" class="ghost q-prev">${CHEV_LEFT}<span>Précédent</span></button><button type="submit" class="primary q-next"></button></div></div>`;
   const field = (i: number) => form.querySelector<HTMLInputElement>(`input[name="other${i}"]`)!;
   const answers = (): QuestionAnswer[] => questions.map((_, i) => ({
     choices: [...form.querySelectorAll<HTMLInputElement>(`input[name="q${i}"]:checked`)].map((x) => x.value),
     other: field(i).value.trim(),
   }));
-  // (what was answered before this questionnaire was drawn again)
-  const kept = askDrafts.get(id);
-  kept?.answers.forEach((a, i) => {
+  const answered = (a: QuestionAnswer) => Boolean(a.choices.length || a.other);
+  // (what was answered before: drawn again, resumed from its card, or before a restart)
+  const kept = askDrafts.get(key);
+  kept?.answers.slice(0, n).forEach((a, i) => {
     form.querySelectorAll<HTMLInputElement>(`input[name="q${i}"]`).forEach((x) => { x.checked = a.choices.includes(x.value); });
-    if (field(i)) field(i).value = a.other;
+    field(i).value = a.other;
   });
   let step = Math.min(kept?.step ?? 0, n - 1);
   let shownStep = step; // (the question shown before: going back, the next one slides the other way)
-  const keep = () => askDrafts.set(id, { answers: answers(), step });
+  let reached = Math.max(step, ...answers().map((a, i) => (answered(a) ? i : 0))); // the furthest question seen
+  const keep = () => {
+    const draft = { key, answers: answers(), step };
+    askDrafts.set(key, draft);
+    saveAskDraft(draft);
+  };
   const go = (to: number) => {
     step = Math.max(0, Math.min(n - 1, to));
+    reached = Math.max(reached, step);
     const given = answers();
     form.querySelectorAll<HTMLElement>('.q').forEach((f, i) => {
       f.classList.toggle('hidden', i !== step);
       f.classList.toggle('back', i === step && i < shownStep);
     });
     shownStep = step;
-    form.querySelectorAll<HTMLElement>('.q-step').forEach((b, i) => {
+    // (a question already seen or answered can be gone back to; the next ones, through Next)
+    form.querySelectorAll<HTMLButtonElement>('.q-step').forEach((b, i) => {
       b.classList.toggle('current', i === step);
-      b.classList.toggle('done', i !== step && Boolean(given[i].choices.length || given[i].other));
+      b.classList.toggle('done', i !== step && answered(given[i]));
+      b.disabled = i === step || (i > reached && !answered(given[i]));
     });
     form.querySelector<HTMLElement>('.q-steps')!.ariaLabel = `Question ${step + 1} sur ${n}`;
     form.querySelector<HTMLButtonElement>('.q-prev')!.disabled = step === 0;
@@ -1959,7 +1991,12 @@ function showQuestionnaire(card: HTMLElement, id: number, questions: Question[])
   });
   form.oninput = keep;
   form.onchange = keep;
-  const send = (given: QuestionAnswer[] | null) => { askDrafts.delete(id); closeQuestionnaire(); window.api.answer(id, given); };
+  const send = (given: QuestionAnswer[] | null) => {
+    askDrafts.delete(key);
+    saveAskDraft(null);
+    closeQuestionnaire();
+    window.api.answer(id, given);
+  };
   // (Enter, or the button: the next question, then sending on the last one)
   form.onsubmit = (e) => {
     e.preventDefault();
@@ -1977,6 +2014,21 @@ function showQuestionnaire(card: HTMLElement, id: number, questions: Question[])
   document.querySelector<HTMLElement>('.composer-box')!.classList.add('asking');
   go(step);
   scrollDown(true);
+}
+
+/** A questionnaire waiting is given up (its turn stops), so that the conversation can be rewound or resumed. */
+const asking = () => Boolean(document.querySelector('.composer .questionnaire'));
+
+async function stopAsking(): Promise<boolean> {
+  if (!running) return true;
+  if (!asking()) return false;
+  // (its answers go with it: what follows a rewind starts clean)
+  askDrafts.clear();
+  saveAskDraft(null);
+  closeQuestionnaire();
+  await window.api.stop();
+  for (let i = 0; i < 100 && running; i++) await new Promise((r) => setTimeout(r, 50));
+  return !running;
 }
 
 /** The message field back (answered, or another conversation shown). */
@@ -3073,7 +3125,13 @@ function showSession(view: SessionView) {
     if (p.text) onEvent({ type: 'delta', id: p.id, kind: 'text', text: p.text });
   }
   setRunning(Boolean(view.running));
+  if (view.askDraft) askDrafts.set(view.askDraft.key, view.askDraft);
   for (const req of view.approvals || []) onApproval(req);
+  // A questionnaire left unanswered when the app was closed: asked again, where it was left.
+  const lastAsk = view.events.findLast((e): e is EventOf<'action_start'> => e.type === 'action_start' && !e.agentId);
+  if (!view.running && !view.approvals?.length && lastAsk?.tool === 'ask' && !view.events.some((e) => e.type === 'action_end' && e.id === lastAsk.id && !e.agentId)) {
+    void resumeFromAction(lastAsk.id, { ask: false });
+  }
   setInput(view.draft || '');
   fitComposer(); // (its plan may be there or not: the position is that of the page at its final height)
   const pos = scrollPos.get(view.session);

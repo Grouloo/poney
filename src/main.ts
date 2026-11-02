@@ -21,7 +21,7 @@ import { migrateLegacy, rebuildHistory, rebuildForAction } from './agent/rebuild
 import { checkTor, torStatus, newCircuits, findTorProxy, requireTor, proxyEnv } from './agent/tor.ts';
 import { errorMessage, isBoolean, isNumber, isRecord, isString, isStringArray, list, parseJson, rec, str } from './unknown.ts';
 import type { AppAlert, Args, Channel, ClaudeAccount, ClaudeUsage, Reply, SessionView } from './ipc.ts';
-import type { AgentEvent, ApprovalAnswer, ApprovalRequest, Choice, ConversationFile, ProjectIcon, Provider, PublicSettings, Settings } from './types.ts';
+import type { AgentEvent, ApprovalAnswer, ApprovalRequest, AskDraft, Choice, ConversationFile, ProjectIcon, Provider, PublicSettings, Settings } from './types.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -176,6 +176,7 @@ class Session {
   finished: boolean;
   failed: boolean;
   draft: string;
+  askDraft: AskDraft | null; // a questionnaire being answered (kept across restarts)
   choice: Choice;
   draftTimer?: NodeJS.Timeout;
   workingSince: number | null;
@@ -196,6 +197,7 @@ class Session {
     this.finished = false; // finished while shown: stays with the finished ones until the user leaves it
     this.failed = conv?.failed ?? false; // its last turn ended on an error: until it is taken up again
     this.draft = conv?.draft ?? ''; // what is typed in the input, not sent
+    this.askDraft = conv?.askDraft ?? null;
     // The model of this conversation: { engine: 'local' | 'claude', model, effort, mode }.
     this.choice = conv ? conv.choice ?? { engine: 'local', model: null } : { ...(settings.lastChoice ?? { engine: 'local', model: null }) };
     this.workingSince = null; // when the turn under way started
@@ -324,6 +326,8 @@ class Session {
     }
     if (this.draft.trim()) conv.draft = this.draft;
     else delete conv.draft;
+    if (this.askDraft) conv.askDraft = this.askDraft;
+    else delete conv.askDraft;
     conv.unread = this.unread;
     store.save(conv, { touch });
     send('conversations:changed', conv.id);
@@ -519,6 +523,7 @@ function sessionView(s: Session): SessionView {
     // (from the agent, not the transcript: notes added before the first message left no event there)
     memory: s.agent?.memory ?? s.conv?.memory ?? [],
     draft: s.draft,
+    askDraft: s.askDraft,
     session: s.key,
     settings: publicSettings(),
   };
@@ -912,6 +917,17 @@ handle('skills:list', [], () => loadSkills(skillDirs(activeCwd(), userSkills()))
 handle('session:setDraft', [isString], (text) => {
   current().noteDraft(String(text ?? ''));
 });
+// The questionnaire being answered in the conversation shown (null: answered, or given up).
+handle('session:setAskDraft', [(v): v is AskDraft | null => v === null || isRecord(v)], (draft) => {
+  const s = current();
+  const d = rec(draft);
+  s.askDraft = draft === null ? null : {
+    key: str(d.key).slice(0, 20000),
+    answers: list(d.answers).map(rec).map((a) => ({ choices: list(a.choices).filter(isString), other: str(a.other).slice(0, 2000) })),
+    step: Math.max(0, Math.floor(isNumber(d.step) ? d.step : 0)),
+  };
+  if (s.conv) s.save({ touch: false });
+});
 handle('conversations:open', [isString], (id) => {
   // Already open (maybe still working): shown as it is now.
   const open = sessions.get(id);
@@ -941,7 +957,10 @@ handle('conversations:open', [isString], (id) => {
   if (loaded.inProgress) {
     // The app stopped during a turn (crash, forced quit): say so, and how to go on.
     loaded.inProgress = false;
-    store.record(loaded, { type: 'notice', text: 'L’app s’est arrêtée pendant ce tour. Le travail est sauvegardé jusqu’ici : « ↻ Reprendre d’ici » sur la dernière action pour continuer, ou envoyez un message.' });
+    // (a questionnaire left waiting is asked again by the window, where it was left)
+    const last = loaded.events.findLast((e) => e.type === 'action_start' && !e.agentId);
+    const asking = last?.type === 'action_start' && last.tool === 'ask' && !loaded.events.some((e) => e.type === 'action_end' && e.id === last.id && !e.agentId);
+    if (!asking) store.record(loaded, { type: 'notice', text: 'L’app s’est arrêtée pendant ce tour. Le travail est sauvegardé jusqu’ici : « ↻ Reprendre d’ici » sur la dernière action pour continuer, ou envoyez un message.' });
     store.save(loaded, { touch: false });
   }
   return sessionView(activate(s));
@@ -1206,6 +1225,7 @@ handle('agent:approve', [isObject], ({ id, ok, always, reason, answers }) => {
     const p = s.approvals.get(id);
     if (!p) continue;
     // (a questionnaire's answers are narrowed by the agent, against its questions)
+    if (p.req.questions) s.askDraft = null;
     if (p.req.questions) p.resolve(ok ? { ok: true, answers: list(answers).map(rec).map((a) => ({ choices: list(a.choices).filter(isString), other: str(a.other) })) } : false);
     else p.resolve(!ok && reason?.trim() ? { ok: false, reason: String(reason).slice(0, 2000) } : ok);
     s.approvals.delete(id);

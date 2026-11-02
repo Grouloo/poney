@@ -7,7 +7,7 @@ import type { TorStatus } from './agent/tor.ts';
 import type { ModelEngine } from './engine/engine.ts';
 import type { listDir, ViewedFile } from './files.ts';
 import type { GitBranches, GitRepoStatus, gitFileStates } from './git.ts';
-import type { AgentEvent, ApprovalRequest, Choice, Config, ContextStats, ConversationSummary, EngineSettings, ProjectIcon, Provider, ProviderType, PublicSettings, QuestionAnswer, Steps } from './types.ts';
+import type { AgentEvent, ApprovalRequest, Choice, Config, ContextStats, ConversationSummary, EngineSettings, ProjectIcon, Provider, ProviderType, PublicSettings, QuestionAnswer, Steps, AskDraft } from './types.ts';
 
 /** An event of the agent, with the conversation it comes from. */
 export type SessionEvent = AgentEvent & { session?: string };
@@ -28,6 +28,7 @@ export interface SessionView {
   approvals: SessionApproval[];
   memory: string[];
   draft: string;
+  askDraft: AskDraft | null;
   session: string;
   settings: PublicSettings;
 }
@@ -154,6 +155,7 @@ export interface Channels {
   'session:current': [[], SessionView];
   'session:setChoice': [[patch: Choice], PublicSettings];
   'session:setDraft': [[text: string], void];
+  'session:setAskDraft': [[draft: AskDraft | null], void];
   'claude:status': [[], ClaudeStatus];
   'claude:usage': [[], ClaudeUsage];
   'claude:addAccount': [[], { settings: PublicSettings; id: string }];

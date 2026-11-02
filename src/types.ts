@@ -93,6 +93,13 @@ export interface QuestionAnswer {
   other: string;
 }
 
+/** A questionnaire being answered: its questions (as a key), the answers so far, the question shown. */
+export interface AskDraft {
+  key: string;
+  answers: QuestionAnswer[];
+  step: number;
+}
+
 export interface ApprovalRequest {
   id: number;
   tool: string;
@@ -285,6 +292,7 @@ export interface ConversationFile {
   unread?: number;
   failed?: boolean;
   draft?: string;
+  askDraft?: AskDraft;
   choice?: Choice;
   inProgress?: boolean;
   plan?: Plan | null;
