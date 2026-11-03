@@ -1071,6 +1071,9 @@ const EDIT_FIELDS: Record<string, [key: string, label: string, multiline?: boole
   web_search: [['query', 'Recherche']],
   fetch: [['url', 'Adresse']],
   agent: [['title', 'Titre'], ['task', 'Tâche', true]],
+  remember: [['note', 'Note', true]],
+  forget: [['id', 'Numéro de la note']],
+  recall: [['query', 'Recherche']],
 };
 
 /** Inline editor on a past tool call: "Relancer" runs it as edited and the conversation goes on from it. */

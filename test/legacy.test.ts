@@ -129,6 +129,17 @@ test('the resume state of an old action is rebuilt from the transcript', () => {
   assert.equal(rebuildForAction(events, 999), null);
 });
 
+test('memory actions are rebuilt with their argument', () => {
+  assert.equal(actionTag('remember', { note: 'Python 3.9' }), '<remember>Python 3.9</remember>');
+  assert.equal(actionTag('forget', { id: '2' }), '<forget>2</forget>');
+  assert.equal(actionTag('recall', { query: 'port' }), '<recall>port</recall>');
+  for (const tool of ['remember', 'forget', 'recall']) {
+    const tag = actionTag(tool, tool === 'remember' ? { note: 'n' } : tool === 'forget' ? { id: '1' } : { query: 'q' });
+    const parsed = parseActions(tag).actions[0];
+    assert.equal(parsed.tool, tool);
+  }
+});
+
 test('an old action edited before it runs again: the history shows the edited call', () => {
   const events = ([
     { type: 'user_message', text: 'Lis le fichier' },

@@ -19,6 +19,9 @@ export function actionTag(tool: string, a: ToolArgs = {}): string {
     case 'agent': return `<agent${attr('title', a.title)}>\n${a.task ?? ''}\n</agent>`;
     case 'plan': return `<plan>\n${a.body ?? ''}\n</plan>`;
     case 'ask': return `<ask>\n${a.body ?? ''}\n</ask>`;
+    case 'remember': return `<remember>${a.note ?? ''}</remember>`;
+    case 'forget': return `<forget>${a.id ?? ''}</forget>`;
+    case 'recall': return `<recall>${a.query ?? ''}</recall>`;
     default: return `<${tool}${attr('path', a.path)}${attr('depth', a.depth)} />`;
   }
 }

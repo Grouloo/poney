@@ -81,6 +81,23 @@ test('a call edited before resuming runs as edited, and the model sees the edite
   assert.doesNotMatch(sent, /bad\.txt/);
 });
 
+test('a <remember> edited before resuming keeps the edited note only', async () => {
+  const cwd = await tmp();
+  const m = await fake((messages) => (lastResult(messages).includes('<result') || messages.some((x) => x.role === 'assistant') ? 'Noted.' : '<remember>The user likes tea.</remember>'));
+  const agent = new Agent({ cwd, config: cfg({ baseUrl: m.url, model: 'm' }) });
+  const events: AgentEvent[] = [];
+  agent.on('event', (e) => events.push(e));
+  await agent.send('Remember that I like coffee', { turnId: 't1' });
+  const note = actionsOf(events).find((e) => e.tool === 'remember')!;
+  const first = [...agent.memory];
+  await agent.resumeFrom(note.id, { note: 'The user likes coffee.' });
+  m.server.close();
+  const own = (notes: string[]) => notes.filter((n) => !n.startsWith('The user asked:')); // (the app notes the request itself)
+  assert.deepEqual(own(first), ['The user likes tea.']);
+  assert.deepEqual(own(agent.memory), ['The user likes coffee.']);
+  assert.doesNotMatch(JSON.stringify(agent.messages), /tea/);
+});
+
 test('in a batch, resuming from a later action keeps the earlier results and does not re-run them', async () => {
   const cwd = await tmp();
   let reads = 0;
