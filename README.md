@@ -249,7 +249,11 @@ node src/cli.ts --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
 - **Sub-agents**: the agent can delegate independent tasks (`<agent title="…">task</agent>`, several in a row, or a
   `tasks` list in one native call); they run at the same time (2 by default, adjustable), each with its own history,
   then the agent gets all the reports. No sub-sub-agents. Writing to a file modified by another agent since it was
-  read is refused (it must be read again), and writes to the same file are serialized. One card per sub-agent in the
+  read is refused (it must be read again), and writes to the same file are serialized. Each sub-agent works in its own
+  copy of the project (dependencies linked), merged back by the app when it stops, three ways, file by file (see
+  `src/agent/isolate.ts`): changes on one side are taken, changes in different lines of the same file merged. A deleted
+  file, a file cut to less than half its lines, or changes in the same lines are held for the main agent, told in the
+  sub-agent's result, with the sub-agent's version in `.poney/agents/<id>/`. One card per sub-agent in the
   transcript (task, live log, report); "Sous-agents" switch.
 
 ![A plan whose first three tasks run at the same time in sub-agents](docs/screenshots/plan.png)

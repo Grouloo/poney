@@ -5,13 +5,14 @@ import path from 'node:path';
 import os from 'node:os';
 import { streamChat, complete, serverContextLength } from './llm.ts';
 import { callOrigins, calledAs, liveAction, partialEditPairs, TOOLS, buildSystemPrompt, parseActions, splitThinking, formatResult, isToolEnabled, withReasoning, findRepetition, normalizeToolCalls, stripReasoning, legacyReasoningToNotes, stripChannelMarkers, toolSchemas, answerInReasoning } from './protocol.ts';
-import { executeAction, runShell, truncateMiddle, checkOldBlock, resolveInside, type SharedFiles } from './tools.ts';
+import { executeAction, runShell, truncateMiddle, checkOldBlock, resolveInside, SCRATCH, type SharedFiles } from './tools.ts';
 import { changesNote, citedLines, projectSnapshot, type Snapshot } from './hints.ts';
 import { KEEP_SCHEMA, addProjectNote, fileTask, keepInstruction, messageStart, noteHeadings, parseKeep } from './keep.ts';
 import { remember, forget, memoryBlock, standingInstructions, instructionNote, replacedAutoNote } from './memory.ts';
 import { loadSkills, skillDirs, mentionedSkills, matchingSkills, skillBlock, type Skill } from './skills.ts';
 import { recall, autoRecall, recalledBlock, keywordsOf, outOfContext } from './history.ts';
 import { linksToRead, readLinks } from './autofetch.ts';
+import { copyProject, mergeCopy, mergeReport, dropCopy, type ProjectCopy } from './isolate.ts';
 import { TRIAGE_SCHEMA, TRIAGE_ATTEMPTS, TRIAGE_RETRY, TRIAGE_RETRY_CUT, fallbackTriage, ROUTE_SOURCES, SOURCE_TOOLS, MAX_REFUSALS, triageRequest, triageInstruction, triageUpdateInstruction, needsUpdate, parseTriage, triageBlock, triageReminder, triageRefusal, askNudge, asksInProse } from './triage.ts';
 import { parseQuestions, askResult, answersText, cleanAnswers, ASK_FORMAT } from './ask.ts';
 import { parsePlan, taskParts, mergePlan, carryPlan, nextGroup, setStatus, formatPlan, subAgentTask, turnDigest, conversationDigest, stoppedPlanText, isConversationPart, partsInView, notedSince, dropParts, partWaits } from './plan.ts';
@@ -180,6 +181,7 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
   approve: Approve;
   shared: SharedFiles;
   subWork: Map<number, string[]>;
+  merges: Promise<unknown>;
   readVersions: Map<string, number>;
   /** The project as the last answer left it: what changed without the agent is said with the next message. */
   snapshot: Snapshot | null;
@@ -233,6 +235,7 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
     // write (to refuse writing over another agent's changes) and per-file locks.
     this.shared = shared || { versions: new Map(), locks: new Map() };
     this.subWork = new Map(); // sub-agent id -> what it changed (see runSubAgent)
+    this.merges = Promise.resolve(); // sub-agents' changes, merged one at a time (see mergeBack)
     this.readVersions = new Map(); // file -> version this agent last read or wrote
     this.snapshot = null;
     this.lastViewed = null;
@@ -773,13 +776,15 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
       this.emit('event', { type: 'action_end', id, ok: false, output: 'Tâche vide.', meta: { title } });
       return formatResult('agent', { title }, 'Empty task: write the task between <agent> and </agent>.');
     }
+    // Its own copy of the project, merged back when it stops (see isolate.ts).
+    const copy = this.offProject ? null : await copyProject(this.cwd);
     const child = new Agent({
-      cwd: this.cwd,
+      cwd: copy?.dir ?? this.cwd,
       offProject: this.offProject,
       scratch: this.scratch, // the same private folder: notes go both ways
       config: this.config,
       role: 'sub',
-      shared: this.shared,
+      shared: copy ? { versions: new Map(), locks: new Map() } : this.shared,
       triage: this.steps?.triage ?? this.triageByDefault, // its own assessment, as its parent's conversation says
       approve: (req) => this.approve({ ...req, agentTitle: title }),
     });
@@ -812,16 +817,51 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
     });
     const onAbort = () => child.stop();
     signal.addEventListener('abort', onAbort);
+    let merged = '';
     try {
       await child.send(task);
     } finally {
       signal.removeEventListener('abort', onAbort);
+      if (copy) merged = await this.mergeBack(copy, id, title, work).catch((e: unknown) => `Its changes, made in a copy of the project, could not be merged: ${errorMessage(e)}.`);
     }
     const { report, error, stats, reason, context } = end;
     const ok = Boolean(report) && reason === 'done';
     const text = report || (error ? `Error: ${error}` : reason === 'max_steps' ? 'Stopped: step limit reached before the end.' : '(no report)');
     this.emit('event', { type: 'action_end', id, ok, output: text, meta: { title, steps: stats?.steps, tokens: stats?.tokens, ms: stats?.totalMs, context } });
-    return formatResult('agent', { title, status: ok ? 'done' : reason || 'failed' }, truncateMiddle(text, Math.max(1000, maxReportChars)));
+    const body = truncateMiddle(text, Math.max(1000, maxReportChars));
+    return formatResult('agent', { title, status: ok ? 'done' : reason || 'failed' }, merged ? `${body}\n\n${merged}` : body);
+  }
+
+  /**
+   * Brings a sub-agent's changes into the project (see isolate.ts), one sub-agent
+   * at a time. What is held is kept in .poney/agents/<id>/ for the main agent.
+   * Returns what it is told.
+   */
+  mergeBack(copy: ProjectCopy, id: number, title: string, work: string[]): Promise<string> {
+    const run = this.merges.then(async () => {
+      try {
+        const r = await mergeCopy(copy, this.cwd);
+        for (const a of r.applied) this.shared.versions.set(a.path, (this.shared.versions.get(a.path) ?? 0) + 1); // (read before: to read again)
+        const kept = new Map<string, string>();
+        for (const h of r.held) {
+          work.push(`not merged: ${h.path} (${h.why})`);
+          if (!h.content || !this.scratch) continue;
+          const to = path.join(this.scratch, 'agents', String(id), h.path);
+          await fs.mkdir(path.dirname(to), { recursive: true });
+          await fs.writeFile(to, h.content);
+          kept.set(h.path, `${SCRATCH}/agents/${id}/${h.path}`);
+        }
+        if (r.held.length) {
+          const why = { deleted: 'supprimé', shrunk: 'raccourci de plus de moitié', conflict: 'modifié entre-temps aux mêmes lignes' };
+          this.emit('event', { type: 'notice', text: `Sous-agent « ${title} » : ${r.applied.length ? `${r.applied.length} fichier(s) intégré(s) ; ` : ''}non intégré(s), l’agent principal décide : ${r.held.map((h) => `${h.path} (${why[h.why]})`).join(', ')}.` });
+        }
+        return mergeReport(r, kept);
+      } finally {
+        await dropCopy(copy);
+      }
+    });
+    this.merges = run.catch(() => {});
+    return run;
   }
 
   // ----- memory -----
