@@ -204,6 +204,8 @@ export interface TurnStats {
   exact: boolean;
   steps: number;
   tps?: number;
+  /** A Claude model's answer: the share of the plan's session it used, in points of percentage. */
+  session?: number;
 }
 
 export interface ContextStats {

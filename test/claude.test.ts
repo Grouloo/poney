@@ -309,3 +309,37 @@ test('a conversation goes on with another account: its session follows, the late
   // (a session found nowhere: nothing to do)
   bringSession('inconnue', a, [a, b]);
 });
+
+test('the share of the plan\'s session an answer used goes with its figures', async () => {
+  const call = 'usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET';
+  const run = (values: (number | null)[]) => {
+    const a = new ClaudeAgent({
+      cwd: '/project',
+      executable: '/bin/claude',
+      approve: async () => true,
+      query: () => {
+        const left = [...values];
+        const q: ClaudeQuery = {
+          async* [Symbol.asyncIterator]() { for (const m of [init, start, text('Fini.'), stop, done]) yield m; },
+          [call]: async () => { const v = left.shift(); return v === null || v === undefined ? { rate_limits_available: false } : { rate_limits_available: true, rate_limits: { five_hour: { utilization: v, resets_at: 'r' } } }; },
+        };
+        return q;
+      },
+    });
+    a.choice = { engine: 'claude', model: 'opus' };
+    const events: AgentEvent[] = [];
+    a.on('event', (e) => events.push(e));
+    return { a, events };
+  };
+  const paid = run([22, 25.5]);
+  await paid.a.send('bonjour');
+  assert.equal((paid.events.at(-1) as EventOf<'turn_end'>).stats!.session, 3.5);
+  // (an API key: no plan limits, nothing said)
+  const key = run([null, null]);
+  await key.a.send('bonjour');
+  assert.equal((key.events.at(-1) as EventOf<'turn_end'>).stats!.session, undefined);
+  // (a new window started meanwhile: what it used)
+  const reset = run([98, 1]);
+  await reset.a.send('bonjour');
+  assert.equal((reset.events.at(-1) as EventOf<'turn_end'>).stats!.session, 1);
+});

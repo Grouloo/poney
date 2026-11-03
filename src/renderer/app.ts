@@ -1257,8 +1257,11 @@ function quote(range: Range) {
 
 // ---------- generation timing ----------
 
+/** A share of the plan's session: "+2 %", "+0,4 %", "< 0,1 %" (tenths only below 10, when there are some). */
+const fmtSession = (p: number) => (p < 0.05 ? '< 0,1 %' : `+${fmtNum(p, Number.isInteger(p) || p >= 10 ? 0 : 1)} %`);
+
 function formatStats(s: TurnStats) {
-  return [fmtDuration(s.totalMs), `${s.exact ? '' : '≈'}${s.tokens} tokens`, `${fmtNum(s.tps ?? 0)} tok/s`].join(' · ');
+  return [fmtDuration(s.totalMs), `${s.exact ? '' : '≈'}${s.tokens} tokens`, s.session === undefined ? '' : `${fmtSession(s.session)} de session`, `${fmtNum(s.tps ?? 0)} tok/s`].filter(Boolean).join(' · ');
 }
 
 function statsDetails(s: TurnStats) {
@@ -1267,6 +1270,7 @@ function statsDetails(s: TurnStats) {
     `Génération : ${fmtDuration(s.genMs)} pour ${s.tokens} tokens${s.exact ? '' : ' (en partie estimés : le flux est arrêté après chaque action)'}`,
     `Vitesse moyenne de génération : ${fmtNum(s.tps ?? 0)} tokens/s`,
     `Lecture du prompt : ${fmtDuration(s.promptMs)}`,
+    ...(s.session === undefined ? [] : [`Session de l’abonnement utilisée par cette réponse : ${fmtSession(s.session)} (fenêtre de 5 heures)`]),
   ].join('\n');
 }
 

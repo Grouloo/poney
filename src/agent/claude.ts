@@ -234,13 +234,18 @@ export async function claudeUsage(executable: string, { query, configDir = null 
   const idle = (async function* () { await new Promise(() => {}); })(); // (no message: only the numbers)
   const q = run({ prompt: idle, options: { pathToClaudeCodeExecutable: executable, env: claudeEnv(process.env, configDir) } });
   try {
-    const r = rec(await q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?.({ skipBehaviors: true }));
-    if (!r.rate_limits_available) return null;
-    const session = rec(rec(r.rate_limits).five_hour);
-    return typeof session.utilization === 'number' ? { utilization: session.utilization, resetsAt: isString(session.resets_at) || isNumber(session.resets_at) ? session.resets_at : null } : null;
+    return await sessionUsage(q);
   } finally {
     q.close?.();
   }
+}
+
+/** The session usage, asked to a query (a running one too: before and after a message). */
+async function sessionUsage(q: ClaudeQuery) {
+  const r = rec(await q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?.({ skipBehaviors: true }));
+  if (!r.rate_limits_available) return null;
+  const session = rec(rec(r.rate_limits).five_hour);
+  return typeof session.utilization === 'number' ? { utilization: session.utilization, resetsAt: isString(session.resets_at) || isNumber(session.resets_at) ? session.resets_at : null } : null;
 }
 
 const inside = (cwd: string, file: unknown) => {
@@ -391,10 +396,20 @@ export class ClaudeAgent extends EventEmitter<{ event: [AgentEvent] }> {
           ...(this.sessionId ? { resume: this.sessionId } : {}),
       };
       const q = run({ prompt: content, options });
+      // The plan's session used before and after: what this answer cost of it (0 to 100).
+      const used = () => sessionUsage(q).then((u) => u?.utilization ?? null, () => null);
+      let before: number | null = null;
       for await (const message of q) {
-        if (rec(message).type === 'system' && rec(message).subtype === 'init') await this.readContext(q);
+        if (rec(message).type === 'system' && rec(message).subtype === 'init') {
+          await this.readContext(q);
+          before = await used();
+        }
         const end = this.onMessage(state, message);
-        if (end) ({ stats, reason } = end);
+        if (end) {
+          ({ stats, reason } = end);
+          const after = before === null ? null : await used();
+          if (stats && before !== null && after !== null) stats = { ...stats, session: after >= before ? after - before : after }; // (lower: a new window started meanwhile)
+        }
       }
     } catch (e) {
       if (controller.signal.aborted) {
