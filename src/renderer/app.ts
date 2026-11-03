@@ -1276,6 +1276,7 @@ quoteBtn.textContent = '❝ Citer';
 quoteBtn.title = 'Citer ce passage dans votre message';
 document.body.appendChild(quoteBtn);
 let quoteRange: Range | null = null;
+let quoteFile = false; // (the passage is of the file in the viewer)
 
 /** The selected text; formulas give back their LaTeX source instead of their rendering. */
 function selectionText(range: Range) {
@@ -1299,18 +1300,30 @@ function hideQuoteBtn() {
   quoteRange = null;
 }
 
+/** The "Citer" button under a selection of the conversation or of the viewer. */
+function showQuoteBtn(range: Range, file: boolean) {
+  quoteRange = range.cloneRange();
+  quoteFile = file;
+  const rects = range.getClientRects();
+  const r = rects[rects.length - 1] || range.getBoundingClientRect();
+  quoteBtn.classList.remove('hidden');
+  const w = quoteBtn.offsetWidth;
+  quoteBtn.style.left = `${Math.max(8, Math.min(window.innerWidth - w - 8, r.right - w / 2))}px`;
+  quoteBtn.style.top = `${Math.min(window.innerHeight - 40, r.bottom + 6)}px`;
+}
+
 document.addEventListener('mousedown', (e) => { if (e.target !== quoteBtn) hideQuoteBtn(); });
 for (const p of panes) p.transcript.addEventListener('scroll', hideQuoteBtn);
 quoteBtn.addEventListener('mousedown', (e) => e.preventDefault()); // keep the selection
-quoteBtn.onclick = () => quoteRange && quote(quoteRange);
+quoteBtn.onclick = () => quoteRange && (quoteFile ? quoteViewer(quoteRange) : quote(quoteRange));
 
-/** The passage (a range of the conversation) goes into the input, as a quote. */
-function quote(range: Range) {
+/** The passage (a range of the conversation) goes into the input, as a quote; `from`: the file it comes from, first. */
+function quote(range: Range, from = '') {
   const text = selectionText(range);
   hideQuoteBtn();
   window.getSelection()?.removeAllRanges();
   if (!text) return;
-  const quote = text.split('\n').map((l) => `> ${l}`.trimEnd()).join('\n');
+  const quote = [...(from ? [from] : []), ...text.split('\n')].map((l) => `> ${l}`.trimEnd()).join('\n');
   const cur = input.value;
   const sep = !cur ? '' : cur.endsWith('\n\n') ? '' : cur.endsWith('\n') ? '\n' : '\n\n';
   input.value = `${cur}${sep}${quote}\n\n`;
@@ -2305,11 +2318,15 @@ window.api.onContextMenu((p) => {
   const sel = window.getSelection();
   const range = sel?.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
   const where = range && panes.find((x) => x.transcript.contains(range.commonAncestorContainer));
+  const inViewer = Boolean(range && $('viewerBody').contains(range.commonAncestorContainer));
   hideQuoteBtn();
   showContextMenu(p.x, p.y, null, [
     ...editing,
     '-',
-    { glyph: 'quote', label: 'Citer dans le message', kbd: '❝', disabled: !where, run: () => { if (range && where) { focusPane(where); quote(range); } } },
+    { glyph: 'quote', label: 'Citer dans le message', kbd: '❝', disabled: !where && !inViewer, run: () => {
+      if (range && inViewer) quoteViewer(range);
+      else if (range && where) { focusPane(where); quote(range); }
+    } },
   ]);
 });
 
@@ -4322,14 +4339,38 @@ document.addEventListener('selectionchange', () => {
   if (!body.contains(range.commonAncestorContainer)) return; // (elsewhere: the viewer's is kept)
   const text = sel.toString();
   if (!text.trim()) { viewerSelection = null; return; }
-  const code = body.querySelector('code');
-  if (!code?.contains(range.startContainer)) { viewerSelection = { text }; return; }
+  const lines = selectedLines(range, text);
+  viewerSelection = lines ? { text, ...lines } : { text };
+});
+/** The lines of the file a selection of its code covers (none in a formatted view). */
+function selectedLines(range: Range, text: string) {
+  const code = $('viewerBody').querySelector('code');
+  if (!code?.contains(range.startContainer)) return null;
   const before = document.createRange();
   before.setStart(code, 0);
   before.setEnd(range.startContainer, range.startOffset);
   const start = before.toString().split('\n').length;
-  viewerSelection = { text, start, end: start + text.replace(/\n$/, '').split('\n').length - 1 };
-});
+  return { start, end: start + text.replace(/\n$/, '').split('\n').length - 1 };
+}
+/** A passage of the file in the viewer, quoted in the input of the conversation it is beside: its path and lines first. */
+function quoteViewer(range: Range) {
+  const path = openPath;
+  if (!path) return;
+  const lines = selectedLines(range, range.toString());
+  const where = `\`${path}${lines ? `:${lines.start}${lines.end > lines.start ? `-${lines.end}` : ''}` : ''}\``;
+  const p = viewerPane ?? focused;
+  focusPane(p);
+  inPane(p, () => quote(range, where));
+}
+const viewerBodyEl = $('viewerBody');
+viewerBodyEl.addEventListener('mouseup', () => setTimeout(() => {
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed || !sel.rangeCount) return hideQuoteBtn();
+  const range = sel.getRangeAt(0);
+  if (!viewerBodyEl.contains(range.commonAncestorContainer) || !sel.toString().trim()) return hideQuoteBtn();
+  showQuoteBtn(range, true);
+}, 0));
+viewerBodyEl.addEventListener('scroll', hideQuoteBtn);
 
 /** The file open in the viewer, for the agent: the lines on screen, or the selection. */
 function viewing(): Viewing | null {
@@ -4885,13 +4926,7 @@ function bindPane(p: Pane) {
     if (!sel || sel.isCollapsed || !sel.rangeCount) return hideQuoteBtn();
     const range = sel.getRangeAt(0);
     if (!transcript.contains(range.commonAncestorContainer) || !sel.toString().trim()) return hideQuoteBtn();
-    quoteRange = range.cloneRange();
-    const rects = range.getClientRects();
-    const r = rects[rects.length - 1] || range.getBoundingClientRect();
-    quoteBtn.classList.remove('hidden');
-    const w = quoteBtn.offsetWidth;
-    quoteBtn.style.left = `${Math.max(8, Math.min(window.innerWidth - w - 8, r.right - w / 2))}px`;
-    quoteBtn.style.top = `${Math.min(window.innerHeight - 40, r.bottom + 6)}px`;
+    showQuoteBtn(range, false);
   }, 0));
 
   $<HTMLButtonElement>('ctxGauge').onclick = async () => {
