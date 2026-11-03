@@ -71,8 +71,9 @@ test('a project line goes at the end of the section the model names, or under a 
   assert.match(await fs.readFile(path.join(cwd, 'AGENTS.md'), 'utf8'), /- `npm start`: run\.\n- Node 24\n/);
 });
 
-async function compactWith(keepReply: string, config: Record<string, unknown> = {}, other = (_: ModelRequest) => 'Goal: g\nNext step: s') {
+async function compactWith(keepReply: string | ((n: number) => string), config: Record<string, unknown> = {}, other = (_: ModelRequest) => 'Goal: g\nNext step: s') {
   const requests: ModelRequest[] = [];
+  let asked = 0;
   const server = http.createServer((req, res) => {
     let body = '';
     req.on('data', (d) => (body += d));
@@ -80,7 +81,7 @@ async function compactWith(keepReply: string, config: Record<string, unknown> = 
       const data = JSON.parse(body) as ModelRequest;
       requests.push(data);
       const keep = data.messages.at(-1)!.content.includes('BEFORE THE SUMMARY.');
-      res.end(`${JSON.stringify({ message: { content: keep ? keepReply : other(data) }, done: true, done_reason: 'stop' })}\n`);
+      res.end(`${JSON.stringify({ message: { content: keep ? (typeof keepReply === 'string' ? keepReply : keepReply(++asked)) : other(data) }, done: true, done_reason: 'stop' })}\n`);
     });
   });
   await new Promise<void>((r) => server.listen(0, r));
@@ -123,6 +124,16 @@ test('before a compaction, the model says what to keep: written to the memory an
   assert.ok(events.findIndex((e) => e.type === 'kept') < events.findIndex((e) => e.type === 'compaction_start'));
 });
 
+test('an unreadable review is asked again, and JSON in prose or a code fence is read', async () => {
+  const fact = json([{ fact: 'The export runs every night at 2.', where: 'memory' }]);
+  const r = await compactWith((n) => (n === 1 ? 'Here is what I would keep: the export.' : `Sure:\n\`\`\`json\n${fact}\n\`\`\`\nThat is all {}.`));
+  const asks = r.requests.filter((d) => d.messages.at(-1)!.content.includes('BEFORE THE SUMMARY.'));
+  assert.equal(asks.length, 2);
+  assert.match(asks[1].messages.at(-1)!.content, /could not be used/);
+  assert.ok(r.events.some((e) => e.type === 'notice' && /nouvel essai \(2\/3\)/.test(e.text)));
+  assert.deepEqual(r.agent.memory.map((m) => m.replace(/^\[[^\]]*\]\s*/, '')).filter((m) => m.includes('export')).length, 1);
+});
+
 test('no keep step without memory, and an unreadable answer only skips it', async () => {
   const off = await compactWith(json([{ fact: 'Something to keep for sure.', where: 'memory' }]), { memoryEnabled: false });
   assert.equal(off.requests.filter((d) => d.messages.at(-1)!.content.includes('BEFORE THE SUMMARY.')).length, 0);
@@ -133,6 +144,7 @@ test('no keep step without memory, and an unreadable answer only skips it', asyn
   const kept = bad.events.find((e): e is EventOf<'kept'> => e.type === 'kept')!;
   assert.deepEqual([kept.memory, kept.project], [[], []]);
   assert.equal(kept.failed, 'réponse du modèle illisible'); // (told apart from nothing to keep)
+  assert.equal(bad.requests.filter((d) => d.messages.at(-1)!.content.includes('BEFORE THE SUMMARY.')).length, 3); // (asked again first)
   const known = await compactWith(json([{ fact: 'Something to keep for sure.', where: 'memory' }, { fact: 'The user asked for help with it.', where: 'memory' }]));
   const k2 = known.events.find((e): e is EventOf<'kept'> => e.type === 'kept')!;
   assert.equal(k2.failed, undefined);

@@ -7,7 +7,7 @@ import { streamChat, complete, serverContextLength } from './llm.ts';
 import { callOrigins, calledAs, liveAction, partialEditPairs, TOOLS, buildSystemPrompt, parseActions, splitThinking, formatResult, isToolEnabled, withReasoning, findRepetition, normalizeToolCalls, stripReasoning, legacyReasoningToNotes, stripChannelMarkers, toolSchemas, answerInReasoning } from './protocol.ts';
 import { executeAction, runShell, truncateMiddle, checkOldBlock, resolveInside, SCRATCH, type SharedFiles } from './tools.ts';
 import { changesNote, citedLines, projectSnapshot, type Snapshot } from './hints.ts';
-import { KEEP_SCHEMA, addProjectNote, fileTask, keepInstruction, keepProposed, messageStart, noteHeadings, parseKeep } from './keep.ts';
+import { KEEP_ATTEMPTS, KEEP_RETRY, KEEP_SCHEMA, addProjectNote, fileTask, keepInstruction, keepProposed, messageStart, noteHeadings, parseKeep } from './keep.ts';
 import { remember, forget, memoryBlock, standingInstructions, instructionNote, replacedAutoNote } from './memory.ts';
 import { loadSkills, skillDirs, mentionedSkills, matchingSkills, skillBlock, type Skill } from './skills.ts';
 import { recall, autoRecall, recalledBlock, keywordsOf, outOfContext } from './history.ts';
@@ -638,29 +638,44 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
     const file = notesFile ?? 'AGENTS.md';
     const instruction = keepInstruction({ until: recent.length ? messageStart(stripReasoning(recent[0].content)) : '', project, file, headings: noteHeadings(projectNotes), files });
     this.emit('event', { type: 'keep_start' });
+    const read = (t: string) => parseKeep(t, { memory: this.memory, notes: projectNotes, project, files, notesFile: file });
     let text = '';
-    for (const jsonSchema of [KEEP_SCHEMA, undefined]) {
-      try {
+    let cut = false; // the previous reply ran out of room while reasoning
+    let schema: Record<string, unknown> | undefined = KEEP_SCHEMA;
+    for (const [k, attempt] of KEEP_ATTEMPTS.entries()) {
+      if (k) this.emit('event', { type: 'notice', text: `${cut ? 'Bilan avant le compactage coupé pendant la réflexion du modèle' : 'Bilan avant le compactage illisible'} : nouvel essai (${k + 1}/${KEEP_ATTEMPTS.length}).` });
+      const ask = async (jsonSchema: Record<string, unknown> | undefined) => {
+        let thinking = '';
+        let done: string | null = null;
+        text = '';
         for await (const chunk of (this.streamChat ?? streamChat)({
           ...this.cfg,
           toolSchemas: toolSchemas(this.config, { subagentRole: false }), // (the cached prompt's tools)
-          temperature: 0.2,
-          maxTokens: Math.min(files ? 1200 : 400, room - 100), // (a sub-agent's task takes room)
+          temperature: attempt.temperature,
+          maxTokens: Math.min(attempt.maxTokens, room - 100),
           noThinking: true,
-          messages: triageRequest(prompt, instruction),
+          messages: triageRequest(prompt, k ? `${instruction}\n${cut ? TRIAGE_RETRY_CUT : KEEP_RETRY}` : instruction),
           jsonSchema,
           signal,
         })) {
           if (chunk.type === 'text') text += chunk.text;
+          else if (chunk.type === 'thinking') thinking += chunk.text;
+          else if (chunk.type === 'done') done = chunk.reason;
           else if (chunk.type === 'progress') this.emit('event', { type: 'prompt_progress', id: 'keep', progress: chunk.progress });
         }
-        break;
+        cut = done === 'length' && Boolean(thinking.trim()) && !text.trim();
+      };
+      try {
+        await ask(schema);
       } catch (e) {
         if (signal.aborted) throw e;
-        text = ''; // (a server without structured output: the JSON only asked for)
+        if (!schema) continue;
+        schema = undefined; // (a server without structured output: the JSON only asked for)
+        await ask(undefined).catch((e2: unknown) => { if (signal.aborted) throw e2; text = ''; });
       }
+      if (read(text)) break;
     }
-    const parsed = parseKeep(text, { memory: this.memory, notes: projectNotes, project, files, notesFile: file });
+    const parsed = read(text);
     const items = parsed ?? [];
     const memory: string[] = [];
     for (const it of items) {
@@ -679,7 +694,7 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
     }
     const doc = items.find((it) => it.where === 'file');
     const dropped = keepProposed(text) - memory.length - lines.length - (doc?.path ? 1 : 0); // (already known, banal, or too short)
-    this.emit('event', { type: 'kept', id: `kept-${Date.now()}`, memory, project: lines, file, ...(doc?.path ? { update: doc.path } : {}), ...(dropped > 0 ? { dropped } : {}), ...(parsed ? {} : { failed: 'réponse du modèle illisible' }) });
+    this.emit('event', { type: 'kept', id: `kept-${Date.now()}`, memory, project: lines, file, ...(doc?.path ? { update: doc.path } : {}), ...(dropped > 0 ? { dropped } : {}), ...(parsed ? {} : { failed: cut ? 'réponse coupée pendant la réflexion du modèle' : 'réponse du modèle illisible' }) });
     if (!doc?.path || !doc.task) return null;
     const report = await this.runSubAgent({ tool: 'agent', args: { title: `Mise à jour de ${doc.path}`.slice(0, 60), task: fileTask(doc.path, doc.task) } }, signal, 1500, nextId++, { auto: true });
     return `${doc.path} (updated before this summary by a helper): ${truncateMiddle(report.replace(/<\/?result[^>]*>/g, '').replace(/\s+/g, ' ').trim(), 400)}`;

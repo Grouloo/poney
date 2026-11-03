@@ -26,6 +26,15 @@ export interface KeepItem {
 }
 const MAX_TASK_CHARS = 2000;
 
+// Like the assessment's: small models often answer with prose around the JSON, or
+// spend the room reasoning first, so a reply that cannot be read is asked again.
+export const KEEP_ATTEMPTS: { temperature: number; maxTokens: number; retry?: boolean }[] = [
+  { temperature: 0.2, maxTokens: 1200 },
+  { temperature: 0.4, maxTokens: 1800, retry: true },
+  { temperature: 0.6, maxTokens: 1800, retry: true },
+];
+export const KEEP_RETRY = '(Your previous reply could not be used: it was not this JSON. Reply with the JSON object ONLY, nothing before or after it; an empty list if nothing is worth keeping.)';
+
 export const KEEP_SCHEMA = {
   type: 'object',
   properties: {
@@ -87,11 +96,9 @@ const BANAL = /^(the )?(user|conversation|discussion|task|assistant|i|we)\b[^.]{
  * answer cannot be read.
  */
 export function parseKeep(text: string, { memory = [], notes = '', project = true, files = false, notesFile = 'AGENTS.md' }: { memory?: string[]; notes?: string; project?: boolean; files?: boolean; notesFile?: string } = {}): KeepItem[] | null {
-  const m = String(text ?? '').match(/\{[\s\S]*\}/);
-  if (!m) return null;
-  let raw: unknown;
-  try { raw = JSON.parse(m[0]); } catch { return null; }
-  const items = list(rec(raw).keep);
+  const raw = readJson(text);
+  if (!raw || !Array.isArray(raw.keep)) return null;
+  const items = list(raw.keep);
   const noteLines = notes.split('\n').map((l) => l.trim()).filter(Boolean);
   const out: KeepItem[] = [];
   for (const x of items) {
@@ -118,8 +125,21 @@ export function parseKeep(text: string, { memory = [], notes = '', project = tru
 
 /** How many items the model proposed to keep (its "none" not counted), to tell what the cleaning removed. */
 export function keepProposed(text: string): number {
-  const m = String(text ?? '').match(/\{[\s\S]*\}/);
-  try { return m ? list(rec(JSON.parse(m[0])).keep).filter((x) => rec(x).where !== 'none').length : 0; } catch { return 0; }
+  return list(readJson(text)?.keep).filter((x) => rec(x).where !== 'none').length;
+}
+
+/** The JSON object of a reply, even with prose or a code fence around it (the longest that parses), or null. */
+function readJson(text: unknown): Record<string, unknown> | null {
+  const s = String(text ?? '');
+  const start = s.indexOf('{');
+  if (start < 0) return null;
+  for (let end = s.lastIndexOf('}'); end > start; end = s.lastIndexOf('}', end - 1)) {
+    try {
+      const data: unknown = JSON.parse(s.slice(start, end + 1));
+      return data && typeof data === 'object' && !Array.isArray(data) ? rec(data) : null;
+    } catch {}
+  }
+  return null;
 }
 
 /** A path given by the model, if it stays inside the project: relative, cleaned. */
