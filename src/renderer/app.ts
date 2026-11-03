@@ -346,7 +346,6 @@ const usesClaude = () => choice().engine === 'claude';
 /** Another harness than Poney's (Claude, Antigravity): no steps, prompt, memory or compaction of Poney's. */
 const external = (c: Choice = choice()) => (c.engine ?? 'local') !== 'local';
 const agyModel = () => antigravity.models.find((m) => m.value === choice().model) ?? antigravity.models[0];
-const AGY_EFFORTS = ['low', 'medium', 'high'];
 /** The Claude account a choice names (the machine's when none). */
 const accountId = (c: Choice) => (c.provider === 'claude' || c.provider?.startsWith('claude-') ? c.provider : 'claude');
 const claudeAccount = () => claude.accounts.find((a) => a.id === accountId(choice()));
@@ -409,7 +408,9 @@ function renderChoice() {
   $('claudeControls').classList.toggle('hidden', !other);
   chat.querySelector<HTMLElement>('.toggles')!.classList.toggle('hidden', other);
   if (!other) return;
-  const levels = isAgy ? AGY_EFFORTS : claudeModel()?.efforts ?? [];
+  // (a model agy no longer lists, kept from before: its first one, which is the one shown)
+  if (isAgy && c.model && antigravity.models.length && !antigravity.models.some((m) => m.value === c.model)) void setChoice({ model: antigravity.models[0].value });
+  const levels = isAgy ? [] : claudeModel()?.efforts ?? []; // (Antigravity's models carry their level in their name)
   $<HTMLSelectElement>('effortSelect').innerHTML = levels.map((l) => `<option value="${l}">${EFFORT_LABEL[l] ?? l}</option>`).join('');
   $<HTMLSelectElement>('effortSelect').classList.toggle('hidden', !levels.length);
   $<HTMLSelectElement>('effortSelect').value = c.effort && levels.includes(c.effort) ? c.effort : levels.includes('high') ? 'high' : levels[0] ?? '';
@@ -446,7 +447,7 @@ function openModelMenu() {
       closeModelMenu();
       const m = account?.models.find((x) => x.value === model);
       setChoice(engine === 'claude' ? { engine, model, provider: account?.id, effort: c.effort ?? (m?.efforts.includes('high') ? 'high' : m?.efforts[0]), mode: c.mode ?? 'manual' }
-        : engine === 'antigravity' ? { engine, model, provider: 'antigravity', effort: c.effort && AGY_EFFORTS.includes(c.effort) ? c.effort : 'high', mode: c.mode ?? 'manual' }
+        : engine === 'antigravity' ? { engine, model, provider: 'antigravity', mode: c.mode ?? 'manual' }
           : { engine, model, provider: group?.provider.id });
     };
   };

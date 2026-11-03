@@ -42,7 +42,9 @@ async function fakeAgy() {
   };
 }
 
-const step = (conversation: string, index: number, fields: Record<string, unknown>) => ({ type: 'step_update', conversation_id: conversation, step_index: index, ...fields });
+// (as agy 1.4 prints them: the fields under the event's name)
+const step = (conversation: string, index: number, fields: Record<string, unknown>) => ({ event: 'step_update', step_update: { conversation_id: conversation, step_index: index, ...fields } });
+const result = (fields: Record<string, unknown>) => ({ event: 'result', result: fields });
 const of = <T extends AgentEvent['type']>(events: AgentEvent[], type: T) => events.filter((e): e is EventOf<T> => e.type === type);
 
 test('a message runs agy headless, and its steps become the cards and answers of Poney', async () => {
@@ -50,7 +52,7 @@ test('a message runs agy headless, and its steps become the cards and answers of
   const image = '/tmp/brain/c1/siamese_cat_1.jpg';
   await script({
     stdout: [
-      { type: 'init', cwd: dir, tools: ['generate_image'], permission_mode: 'request-review' },
+      { event: 'init', conversation_id: 'c1', init: { cwd: dir, tools: ['generate_image'], permission_mode: 'request-review' } },
       step('c1', 0, { state: 'DONE', step_type: 'user_input' }),
       step('c1', 1, { state: 'ACTIVE', step_type: 'agent_response', text_delta: 'Je génère ' }),
       step('c1', 1, { state: 'DONE', step_type: 'agent_response', text_delta: 'l’image.' }),
@@ -60,12 +62,12 @@ test('a message runs agy headless, and its steps become the cards and answers of
       step('c9', 1, { state: 'DONE', step_type: 'agent_response', text_delta: 'unknown' }),
       step('c1', 2, { state: 'DONE', step_type: 'tool', tool_name: 'invoke_subagent', tool_info: { name: 'invoke_subagent', output: 'Created the subagent' } }),
       step('c1', 3, { state: 'DONE', step_type: 'agent_response', text_delta: `Voici :\n\n![Chat](${image})` }),
-      { type: 'result', conversation_id: 'c1', status: 'SUCCESS', response: `Voici :\n\n![Chat](${image})`, duration_seconds: 12, num_turns: 4, usage: { output_tokens: 300, thinking_tokens: 100 } },
+      result({ conversation_id: 'c1', status: 'SUCCESS', response: `Voici :\n\n![Chat](${image})`, duration_seconds: 12, num_turns: 4, usage: { output_tokens: 300, thinking_tokens: 100 } }),
     ],
   });
   agent.choice = { engine: 'antigravity', model: 'gemini-3-pro', effort: 'high', mode: 'auto' };
   await agent.send('génère un chat');
-  assert.deepEqual(await args(), ['-p', 'génère un chat', '--output-format', 'stream-json', '--print-timeout', '0s', '--model', 'gemini-3-pro', '--effort', 'high', '--dangerously-skip-permissions']);
+  assert.deepEqual(await args(), ['-p', 'génère un chat', '--output-format', 'stream-json', '--print-timeout', '0s', '--model', 'gemini-3-pro', '--dangerously-skip-permissions']);
 
   const ends = of(events, 'assistant_end');
   assert.deepEqual(ends.map((e) => e.text), ['Je génère l’image.', `Voici :\n\n![Chat](${image})`]);
@@ -82,13 +84,30 @@ test('a message runs agy headless, and its steps become the cards and answers of
   assert.equal(agent.sessionId, 'c1');
 
   // The next message goes on with the same conversation; Plan and Manual.
-  await script({ stdout: [{ type: 'result', conversation_id: 'c1', status: 'SUCCESS', response: 'ok' }] });
+  await script({ stdout: [result({ conversation_id: 'c1', status: 'SUCCESS', response: 'ok' })] });
   agent.choice = { engine: 'antigravity', mode: 'plan' };
   await agent.send('et ensuite');
   assert.deepEqual(await args(), ['-p', 'et ensuite', '--output-format', 'stream-json', '--print-timeout', '0s', '--conversation', 'c1', '--mode', 'plan']);
   agent.choice = { engine: 'antigravity', mode: 'manual' };
   await agent.send('encore');
   assert.deepEqual((await args()).slice(6), ['--conversation', 'c1']);
+});
+
+test('a turn as agy 1.4.12 prints it', async () => {
+  const { agent, events, script } = await fakeAgy();
+  // (an actual run of "Réponds juste OK", tools cut short)
+  await script({ stdout: [
+    { event: 'init', conversation_id: 'ad26b583', init: { model: 'gemini-3.8-flash-low', cwd: '/tmp/x', tools: ['generate_image', 'view_file'], permission_mode: 'request-review' } },
+    { event: 'step_update', step_update: { conversation_id: 'ad26b583', step_index: 0, state: 'DONE', step_type: 'user_input' } },
+    { event: 'step_update', step_update: { conversation_id: 'ad26b583', step_index: 1, state: 'ACTIVE', step_type: 'agent_response', text_delta: 'OK' } },
+    { event: 'step_update', step_update: { conversation_id: 'ad26b583', step_index: 1, state: 'DONE', step_type: 'agent_response', text_delta: '\n', duration_seconds: 2.024337, usage: { input_tokens: 6856, output_tokens: 1, thinking_tokens: 0, cache_read_tokens: 0, total_tokens: 6857 } } },
+    { event: 'result', result: { conversation_id: 'ad26b583', status: 'SUCCESS', response: 'OK\n', duration_seconds: 2.054322, num_turns: 1, usage: { input_tokens: 6856, output_tokens: 1, thinking_tokens: 0, cache_read_tokens: 0, total_tokens: 6857 } } },
+  ] });
+  await agent.send('Réponds juste OK');
+  assert.deepEqual(of(events, 'assistant_end').map((e) => e.text), ['OK\n']);
+  assert.deepEqual(of(events, 'final').map((e) => e.text), ['OK\n']);
+  assert.equal(of(events, 'turn_end')[0].stats?.tokens, 1);
+  assert.equal(agent.sessionId, 'ad26b583');
 });
 
 test('what goes wrong with agy is said once, in the words of the interface', async () => {
@@ -99,15 +118,22 @@ test('what goes wrong with agy is said once, in the words of the interface', asy
   assert.equal(of(events, 'turn_end')[0].reason, 'error');
 
   events.length = 0;
-  await script({ stdout: [{ type: 'result', status: 'ERROR', error: { type: 'model', message: 'Unknown model "x"' } }], code: 1 });
+  await script({ stdout: [result({ status: 'ERROR', error: { type: 'model', message: 'Unknown model "x"' } })], code: 1 });
   await agent.send('bonjour');
   assert.deepEqual(of(events, 'error').map((e) => e.message), ['Unknown model "x"']);
 
   // Tools it could not ask for: said.
   events.length = 0;
-  await script({ stdout: [{ type: 'result', status: 'SUCCESS', response: 'fait' }], stderr: 'Permission denied for run_command(npm test)\n' });
+  await script({ stdout: [result({ status: 'SUCCESS', response: 'fait' })], stderr: 'Permission denied for run_command(npm test)\n' });
   await agent.send('teste');
   assert.match(of(events, 'notice')[0].text, /Antigravity : Permission denied for run_command\(npm test\)/);
+
+  // Nothing it can read, but a clean exit: not a turn done.
+  events.length = 0;
+  await script({ stdout: [{ event: 'something_new', something_new: {} }] });
+  await agent.send('bonjour');
+  assert.deepEqual(of(events, 'error').map((e) => e.message), ['agy n’a rendu aucun résultat.']);
+  assert.equal(of(events, 'turn_end')[0].reason, 'error');
 
   const missing = new AntigravityAgent({ cwd: os.tmpdir(), executable: null });
   const said: AgentEvent[] = [];

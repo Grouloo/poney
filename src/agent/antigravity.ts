@@ -214,7 +214,7 @@ export class AntigravityAgent extends EventEmitter<{ event: [AgentEvent] }> {
     const args = ['-p', content, '--output-format', 'stream-json', '--print-timeout', '0s'];
     if (this.sessionId) args.push('--conversation', this.sessionId);
     if (this.choice.model) args.push('--model', this.choice.model);
-    if (this.choice.effort) args.push('--effort', this.choice.effort);
+    // (no --effort: agy refuses it, its models carry their level in their name, as gemini-4-argon-high)
     if (this.choice.mode === 'auto') args.push('--dangerously-skip-permissions');
     else if (this.choice.mode === 'plan') args.push('--mode', 'plan');
     return args;
@@ -255,9 +255,9 @@ export class AntigravityAgent extends EventEmitter<{ event: [AgentEvent] }> {
       }
       const code = await exited;
       if (this.stopped) reason = 'stopped';
-      else if (!stats && code !== 0) {
+      else if (!stats) { // (no result: an error, or a stream this file does not read)
         reason = 'error';
-        throw new Error(agyError(stderr.trim().split('\n').slice(-3).join('\n') || `agy s’est arrêté (code ${code}).`));
+        throw new Error(agyError(stderr.trim().split('\n').slice(-3).join('\n') || (code ? `agy s’est arrêté (code ${code}).` : 'agy n’a rendu aucun résultat.')));
       }
       // Tools it could not ask for: refused, said on stderr.
       for (const l of stderr.split('\n')) if (/permission|denied/i.test(l) && l.trim()) this.emit('event', { type: 'notice', text: `Antigravity : ${l.trim()}` });
@@ -287,9 +287,13 @@ export class AntigravityAgent extends EventEmitter<{ event: [AgentEvent] }> {
   /** One line of agy's stream. Its end (the result) gives the reason and the numbers of the turn. */
   onEvent(state: TurnState, event: unknown, started: number): { reason: string; stats: TurnStats } | null {
     const m = rec(event);
-    const kind = str(m.type) || str(m.event);
-    const p = isRecord(m.payload) ? m.payload : isRecord(m.data) ? m.data : m;
-    if (kind === 'init') return null;
+    // ({"event": "step_update", "step_update": {…}}: the fields under the event's name)
+    const kind = str(m.event) || str(m.type);
+    const p = isRecord(m[kind]) ? m[kind] : m;
+    if (kind === 'init') {
+      state.main ??= str(m.conversation_id) || str(p.conversation_id) || null;
+      return null;
+    }
     if (kind === 'step_update') {
       this.onStep(state, p);
       return null;
