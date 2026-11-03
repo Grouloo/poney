@@ -63,7 +63,8 @@ node src/cli.ts --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
 - **What to keep, before a compaction**: one constrained-JSON call on the cached conversation tells the model which
   messages are about to leave its view and asks what, in the whole conversation, must not be lost (3 items at
   most, restatements and banal items rejected). The app writes them where the model says: the conversation's
-  memory, or, for lasting facts about the project, the end of its notes file (AGENTS.md).
+  memory, or, for lasting facts about the project, its notes file (AGENTS.md), at the end of the section the model
+  names among the file's headings (a new one if none fits).
 - **Reasoning kept as a short note**: the end of the model's reasoning (~600 characters, whole sentences, each
   sentence once) is given back in a `<reasoning>` block before its messages, so it does not start over after each
   tool result. Not the whole reasoning: with Gemma, that made the model produce only invisible tokens. Not a prose

@@ -1294,7 +1294,7 @@ function keptCard(ev: EventOf<'kept'>): HTMLElement {
     r.append(div('kept-text', `« ${esc(text)} »`), div('kept-where', esc(where)));
   };
   for (const note of ev.memory) row(note, 'dans la mémoire', 'Gardé pour toute la conversation. Retirable via 🧠 sous la zone de saisie.');
-  for (const line of ev.project) row(line, `ajouté à ${ev.file}`, `Ajouté à la fin de ${ev.file}, lu au début de chaque conversation de ce projet.`);
+  for (const { fact, section } of ev.project) row(fact, `ajouté à ${ev.file} › ${section}`, `Ajouté à ${ev.file}, section « ${section} » : lu au début de chaque conversation de ce projet.`);
   return d;
 }
 

@@ -6,7 +6,7 @@ import os from 'node:os';
 import { streamChat, complete, serverContextLength } from './llm.ts';
 import { callOrigins, calledAs, liveAction, partialEditPairs, TOOLS, buildSystemPrompt, parseActions, splitThinking, formatResult, isToolEnabled, withReasoning, findRepetition, normalizeToolCalls, stripReasoning, legacyReasoningToNotes, stripChannelMarkers, toolSchemas, answerInReasoning } from './protocol.ts';
 import { executeAction, runShell, truncateMiddle, checkOldBlock, type SharedFiles } from './tools.ts';
-import { KEEP_SCHEMA, addProjectNote, keepInstruction, messageStart, parseKeep } from './keep.ts';
+import { KEEP_SCHEMA, addProjectNote, keepInstruction, messageStart, noteHeadings, parseKeep } from './keep.ts';
 import { remember, forget, memoryBlock, standingInstructions, instructionNote, replacedAutoNote } from './memory.ts';
 import { loadSkills, skillDirs, mentionedSkills, matchingSkills, skillBlock, type Skill } from './skills.ts';
 import { recall, autoRecall, recalledBlock, keywordsOf, outOfContext } from './history.ts';
@@ -595,7 +595,7 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
     const { projectNotes, notesFile } = await this.loadProjectNotes();
     const project = !this.offProject;
     const file = notesFile ?? 'AGENTS.md';
-    const instruction = keepInstruction({ until: recent.length ? messageStart(stripReasoning(recent[0].content)) : '', project, file });
+    const instruction = keepInstruction({ until: recent.length ? messageStart(stripReasoning(recent[0].content)) : '', project, file, headings: noteHeadings(projectNotes) });
     this.emit('event', { type: 'keep_start' });
     let text = '';
     for (const jsonSchema of [KEEP_SCHEMA, undefined]) {
@@ -628,12 +628,11 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
       if (r.ok && r.notes !== this.memory) { this.memory = r.notes; memory.push(it.fact); }
     }
     if (memory.length) this.emit('event', { type: 'memory', notes: this.memory });
-    const lines: string[] = [];
+    const lines: { fact: string; section: string }[] = [];
     for (const it of items) {
       if (it.where !== 'project') continue;
       try {
-        await addProjectNote(this.cwd, file, it.fact);
-        lines.push(it.fact);
+        lines.push({ fact: it.fact, section: await addProjectNote(this.cwd, file, it.fact, it.section) });
       } catch {} // (a read-only project: that line is lost, not the compaction)
     }
     this.emit('event', { type: 'kept', id: `kept-${Date.now()}`, memory, project: lines, file });

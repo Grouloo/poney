@@ -15,6 +15,8 @@ export type KeepWhere = 'memory' | 'project';
 export interface KeepItem {
   fact: string;
   where: KeepWhere;
+  /** For the project: the heading of the notes file to put it under (empty: the model gave none). */
+  section: string;
 }
 
 export const KEEP_SCHEMA = {
@@ -28,6 +30,7 @@ export const KEEP_SCHEMA = {
         properties: {
           fact: { type: 'string', maxLength: 200 },
           where: { type: 'string', enum: ['memory', 'project', 'none'] },
+          section: { type: 'string', maxLength: 60 },
         },
         required: ['fact', 'where'],
       },
@@ -37,7 +40,7 @@ export const KEEP_SCHEMA = {
 };
 
 /** The instruction: which messages leave the view, and what may be kept where. */
-export function keepInstruction({ until, project, file }: { until: string; project: boolean; file: string }): string {
+export function keepInstruction({ until, project, file, headings = [] }: { until: string; project: boolean; file: string; headings?: string[] }): string {
   const part = until
     ? `Everything above the message that starts with « ${until} » is about to be summarized: its details will leave your view.`
     : 'The conversation above is about to be summarized: its details will leave your view.';
@@ -45,6 +48,7 @@ export function keepInstruction({ until, project, file }: { until: string; proje
     `BEFORE THE SUMMARY. ${part}`,
     `Before that: what in the WHOLE conversation must not be lost? At most ${MAX_KEPT} items, one short sentence each, that are NOT already in your MEMORY${project ? ` or in ${file}` : ''}: a decision, a preference or constraint of the user, a result found, a name or value needed later.`,
     `"where": "memory" to keep it for this conversation${project ? `; "project" for a lasting fact about working on this project, needed in the next conversations too (how to run or test it, a convention, a pitfall): it will be added to ${file}` : ''}; "none" if it is not worth it.`,
+    ...(project ? [`"section", for "project": ${headings.length ? `the heading of ${file} it belongs under (${headings.map((h) => `"${h}"`).join(', ')}), or a new short heading if none fits` : `a short heading for it in ${file}`}.`] : []),
     'Nothing new or important: an empty list. Answer with the JSON only.',
   ].join('\n');
 }
@@ -85,7 +89,7 @@ export function parseKeep(text: string, { memory = [], notes = '', project = tru
     const where = r.where === 'project' && project ? 'project' : r.where === 'memory' || r.where === 'project' ? 'memory' : null;
     if (!where || fact.length < MIN_CHARS || BANAL.test(fact)) continue;
     if (restates(fact, [...memory, ...noteLines, ...out.map((o) => o.fact)])) continue;
-    out.push({ fact, where });
+    out.push({ fact, where, section: where === 'project' ? String(r.section ?? '').replace(/^#+\s*/, '').replace(/\s+/g, ' ').trim().slice(0, 60) : '' });
     if (out.length >= MAX_KEPT) break;
   }
   return out;
@@ -94,11 +98,59 @@ export function parseKeep(text: string, { memory = [], notes = '', project = tru
 /** The start of a message, to point at it in the instruction (without its date stamp). */
 export const messageStart = (content: string) => content.replace(/^\[[^\]]+\]\s*/, '').replace(/\s+/g, ' ').trim().slice(0, 60);
 
-/** Adds a line to the project's notes file (created if missing), at its end. */
-export async function addProjectNote(cwd: string, file: string, line: string): Promise<void> {
-  const name = path.basename(file); // (only at the root of the project)
-  const at = path.join(cwd, name);
-  const text = await fs.readFile(at, 'utf8').catch(() => '');
-  const note = `- ${line.replace(/\s+/g, ' ').trim()}\n`;
-  await fs.writeFile(at, !text ? note : `${text}${text.endsWith('\n') ? '' : '\n'}${note}`);
+// ---------- the project's notes file ----------
+
+const HEADING = /^(#{1,6})\s+(.+?)\s*#*\s*$/;
+const FENCE = /^\s*(```|~~~)/;
+const norm = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+
+/** The headings of a Markdown text, outside code blocks: { at (line index), level, title }. */
+function headingsOf(lines: string[]) {
+  const out: { at: number; level: number; title: string }[] = [];
+  let fenced = false;
+  lines.forEach((l, at) => {
+    if (FENCE.test(l)) fenced = !fenced;
+    const m = fenced ? null : l.match(HEADING);
+    if (m) out.push({ at, level: m[1].length, title: m[2] });
+  });
+  return out;
+}
+
+/** The headings the model may pick from: the sections (not the title of the file, when it has sections). */
+export function noteHeadings(text: string): string[] {
+  const all = headingsOf(text.split('\n'));
+  const sections = all.some((h) => h.level > 1) ? all.filter((h) => h.level > 1) : all;
+  return sections.map((h) => h.title).slice(0, 15);
+}
+
+/**
+ * The notes file with a line added at the end of the section named (its last
+ * line, before the blank lines), or under a new heading when none has that name
+ * (at the end of the file). Returns the text and the heading used.
+ */
+export function insertNote(text: string, line: string, section: string): { text: string; section: string } {
+  const note = `- ${line.replace(/\s+/g, ' ').trim()}`;
+  const lines = text.replace(/\n+$/, '').split('\n');
+  const all = headingsOf(lines);
+  const h = section ? all.find((x) => norm(x.title) === norm(section)) : undefined;
+  if (h) {
+    const next = all.find((x) => x.at > h.at && x.level <= h.level);
+    let k = next ? next.at : lines.length;
+    while (k - 1 > h.at && !lines[k - 1].trim()) k--;
+    lines.splice(k, 0, note);
+    return { text: `${lines.join('\n')}\n`, section: h.title };
+  }
+  const title = section || 'Notes';
+  const levels = all.filter((x) => x.level > 1).map((x) => x.level);
+  const level = levels.length ? Math.min(...levels) : 2; // (like the other sections)
+  const head = text.trim() ? `${lines.join('\n')}\n\n` : '';
+  return { text: `${head}${'#'.repeat(level)} ${title}\n\n${note}\n`, section: title };
+}
+
+/** Adds a line to the project's notes file (created if missing), in its section. Returns the heading used. */
+export async function addProjectNote(cwd: string, file: string, line: string, section = ''): Promise<string> {
+  const at = path.join(cwd, path.basename(file)); // (only at the root of the project)
+  const r = insertNote(await fs.readFile(at, 'utf8').catch(() => ''), line, section);
+  await fs.writeFile(at, r.text);
+  return r.section;
 }
