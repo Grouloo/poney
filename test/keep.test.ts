@@ -74,8 +74,8 @@ async function compactWith(keepReply: string, config: Record<string, unknown> = 
   return { agent, events, requests, r, cwd };
 }
 
-test('before a compaction, the model says what to keep: memory notes written, project lines proposed', async () => {
-  const { agent, events, requests, r } = await compactWith(json([
+test('before a compaction, the model says what to keep: written to the memory and to the project notes', async () => {
+  const { agent, events, requests, r, cwd } = await compactWith(json([
     { fact: 'Files p0 to p11 hold the parser, p3 is the entry point.', where: 'memory' },
     { fact: 'The fixtures of the project are in p11.py.', where: 'project' },
   ]));
@@ -85,12 +85,13 @@ test('before a compaction, the model says what to keep: memory notes written, pr
   assert.equal(keep, 0);
   assert.ok(requests[keep].format, 'constrained JSON');
   assert.match(requests[keep].messages.at(-1)!.content, /Everything above the message that starts with « <\w+ / );
-  assert.match(requests[keep].messages.at(-1)!.content, /proposed for AGENTS\.md/);
+  assert.match(requests[keep].messages.at(-1)!.content, /added to AGENTS\.md/);
   assert.deepEqual(agent.memory, ['Files p0 to p11 hold the parser, p3 is the entry point.']);
   const kept = events.find((e): e is EventOf<'kept'> => e.type === 'kept')!;
   assert.deepEqual(kept.memory, ['Files p0 to p11 hold the parser, p3 is the entry point.']);
   assert.deepEqual(kept.project, ['The fixtures of the project are in p11.py.']);
   assert.equal(kept.file, 'AGENTS.md');
+  assert.equal(await fs.readFile(path.join(cwd, 'AGENTS.md'), 'utf8'), '- The fixtures of the project are in p11.py.\n');
   // The note is in the summary that replaces the old messages.
   const c = events.find((e): e is EventOf<'compaction'> => e.type === 'compaction')!;
   assert.match(c.summary, /MEMORY[^\n]*\n1\. Files p0 to p11 hold the parser/);

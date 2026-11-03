@@ -1,9 +1,8 @@
 // What to keep before a compaction: the oldest messages are about to be summarized
 // and leave the model's view, so it is asked once (a dedicated call on the cached
 // conversation, like the assessment) what in the whole conversation must not be
-// lost. Each item goes to the conversation's memory (written by the app) or, for a
-// lasting fact about the project, to its notes file: that one is only proposed to
-// the user, never written silently.
+// lost. The app writes each item where the model says: the conversation's memory,
+// or, for a lasting fact about the project, its notes file (AGENTS.md).
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -45,7 +44,7 @@ export function keepInstruction({ until, project, file }: { until: string; proje
   return [
     `BEFORE THE SUMMARY. ${part}`,
     `Before that: what in the WHOLE conversation must not be lost? At most ${MAX_KEPT} items, one short sentence each, that are NOT already in your MEMORY${project ? ` or in ${file}` : ''}: a decision, a preference or constraint of the user, a result found, a name or value needed later.`,
-    `"where": "memory" to keep it for this conversation${project ? `; "project" for a lasting fact about working on this project, needed in the next conversations too (how to run or test it, a convention, a pitfall): it will be proposed for ${file}` : ''}; "none" if it is not worth it.`,
+    `"where": "memory" to keep it for this conversation${project ? `; "project" for a lasting fact about working on this project, needed in the next conversations too (how to run or test it, a convention, a pitfall): it will be added to ${file}` : ''}; "none" if it is not worth it.`,
     'Nothing new or important: an empty list. Answer with the JSON only.',
   ].join('\n');
 }

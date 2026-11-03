@@ -156,7 +156,6 @@ export interface Channels {
   'session:setChoice': [[patch: Choice], PublicSettings];
   'session:setDraft': [[text: string], void];
   'session:setAskDraft': [[draft: AskDraft | null], void];
-  'session:keepAnswer': [[id: string, index: number, added: boolean], void];
   'claude:status': [[], ClaudeStatus];
   'claude:usage': [[], ClaudeUsage];
   'claude:addAccount': [[], { settings: PublicSettings; id: string }];

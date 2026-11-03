@@ -7,7 +7,6 @@ import { fileURLToPath } from 'node:url';
 import { Agent, DEFAULT_CONFIG } from './agent/agent.ts';
 import { loadSkills, skillDirs } from './agent/skills.ts';
 import { askStarted, draftTip } from './agent/ask.ts';
-import { addProjectNote } from './agent/keep.ts';
 import { ClaudeAgent, findClaude, claudeAuth, claudeEnv, machineClaudeDir, claudeLogin, claudeModels, claudeUsage, linkUserSettings } from './agent/claude.ts';
 import { listModels, lmStudioModels, setInferenceService } from './agent/llm.ts';
 import { ModelEngine } from './engine/engine.ts';
@@ -388,7 +387,7 @@ class Session {
   }
 }
 
-const SAVED_DURING_TURN = new Set<string>(['assistant_end', 'action_end', 'compaction', 'kept', 'kept_answer', 'error', 'notice']);
+const SAVED_DURING_TURN = new Set<string>(['assistant_end', 'action_end', 'compaction', 'kept', 'error', 'notice']);
 const TURN_STOPS: Record<string, string> = {
   max_steps: 'Arrêté : limite d’étapes atteinte.',
   loop: 'Arrêté : le modèle tournait en boucle.',
@@ -930,17 +929,6 @@ handle('session:setAskDraft', [(v): v is AskDraft | null => v === null || isReco
     step: Math.max(0, Math.floor(isNumber(d.step) ? d.step : 0)),
   };
   if (s.conv) s.save({ touch: false });
-});
-// A line proposed for the project's notes file before a compaction: added, or declined.
-handle('session:keepAnswer', [isString, isNumber, isBoolean], async (id, index, added) => {
-  const s = current();
-  const events = s.conv?.events ?? [];
-  const kept = events.find((e) => e.type === 'kept' && e.id === id);
-  const line = kept?.type === 'kept' ? kept.project[index] : undefined;
-  if (!kept || kept.type !== 'kept' || line === undefined) throw new Error('Proposition introuvable.');
-  if (events.some((e) => e.type === 'kept_answer' && e.id === id && e.index === index)) return; // (already answered)
-  if (added) await addProjectNote(s.cwd, kept.file, line);
-  s.onEvent({ type: 'kept_answer', id, index, added });
 });
 handle('conversations:open', [isString], (id) => {
   // Already open (maybe still working): shown as it is now.

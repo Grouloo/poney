@@ -824,9 +824,8 @@ img.proj-icon { width: 1.15em; height: 1.15em; object-fit: contain; vertical-ali
 .kept-row { display: flex; align-items: center; gap: 10px; padding: 4px 0; }
 .kept-row + .kept-row { border-top: 1px solid var(--border); }
 .kept-text { flex: 1; min-width: 0; }
-.kept-where, .kept-done { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
-.kept-actions { display: flex; gap: 6px; flex-shrink: 0; }
-.kept-actions button { font-size: 12.5px; padding: 3px 10px; }
+.kept-where { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
+
 .compaction pre { white-space: pre-wrap; font: 13px/1.5 var(--mono); color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
 
 /* ---------- generation timing ---------- */

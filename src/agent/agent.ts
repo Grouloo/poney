@@ -6,7 +6,7 @@ import os from 'node:os';
 import { streamChat, complete, serverContextLength } from './llm.ts';
 import { callOrigins, calledAs, liveAction, partialEditPairs, TOOLS, buildSystemPrompt, parseActions, splitThinking, formatResult, isToolEnabled, withReasoning, findRepetition, normalizeToolCalls, stripReasoning, legacyReasoningToNotes, stripChannelMarkers, toolSchemas, answerInReasoning } from './protocol.ts';
 import { executeAction, runShell, truncateMiddle, checkOldBlock, type SharedFiles } from './tools.ts';
-import { KEEP_SCHEMA, keepInstruction, messageStart, parseKeep } from './keep.ts';
+import { KEEP_SCHEMA, addProjectNote, keepInstruction, messageStart, parseKeep } from './keep.ts';
 import { remember, forget, memoryBlock, standingInstructions, instructionNote, replacedAutoNote } from './memory.ts';
 import { loadSkills, skillDirs, mentionedSkills, matchingSkills, skillBlock, type Skill } from './skills.ts';
 import { recall, autoRecall, recalledBlock, keywordsOf, outOfContext } from './history.ts';
@@ -585,9 +585,8 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
 
   /**
    * Before a compaction (see keep.ts): what the model wants kept from the whole
-   * conversation. Its memory notes are written here; lines for the project's notes
-   * file are only proposed (the 'kept' event, answered in the window). A failure
-   * is ignored: the compaction goes on without it.
+   * conversation: notes for its memory, and lasting facts about the project for
+   * its notes file. A failure is ignored: the compaction goes on without it.
    */
   async keepBeforeCompaction(system: string, signal: AbortSignal, recent: Message[]) {
     if (this.role !== 'main' || this.config.memoryEnabled === false) return;
@@ -629,7 +628,14 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
       if (r.ok && r.notes !== this.memory) { this.memory = r.notes; memory.push(it.fact); }
     }
     if (memory.length) this.emit('event', { type: 'memory', notes: this.memory });
-    const lines = items.filter((it) => it.where === 'project').map((it) => it.fact);
+    const lines: string[] = [];
+    for (const it of items) {
+      if (it.where !== 'project') continue;
+      try {
+        await addProjectNote(this.cwd, file, it.fact);
+        lines.push(it.fact);
+      } catch {} // (a read-only project: that line is lost, not the compaction)
+    }
     this.emit('event', { type: 'kept', id: `kept-${Date.now()}`, memory, project: lines, file });
   }
 

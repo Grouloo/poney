@@ -1284,37 +1284,17 @@ function promptProgressText() {
   return text;
 }
 
-/** What the agent kept before a compaction: its memory notes, and the lines proposed for the project's notes file. */
+/** What the agent kept before a compaction: its memory notes, and the lines added to the project's notes file. */
 function keptCard(ev: EventOf<'kept'>): HTMLElement {
   const d = div('kept');
-  d.dataset.file = ev.file;
   d.appendChild(div('kept-title', '🧠 Retenu avant le compactage'));
-  for (const note of ev.memory) {
-    const row = d.appendChild(div('kept-row'));
-    row.append(div('kept-text', `« ${esc(note)} »`), div('kept-where', 'dans la mémoire'));
-  }
-  ev.project.forEach((line, i) => {
-    const row = d.appendChild(div('kept-row'));
-    row.dataset.kept = `${ev.id}:${i}`;
-    row.title = `Proposé pour ${ev.file}, lu au début de chaque conversation de ce projet.`;
-    const actions = div('kept-actions');
-    const button = (label: string, added: boolean, cls: string) => {
-      const b = actions.appendChild(document.createElement('button'));
-      b.type = 'button';
-      b.className = cls;
-      b.textContent = label;
-      b.onclick = () => {
-        actions.querySelectorAll('button').forEach((x) => { x.disabled = true; });
-        window.api.keepAnswer(ev.id, i, added).catch((e: unknown) => {
-          actions.querySelectorAll('button').forEach((x) => { x.disabled = false; });
-          add(div('error', esc(e instanceof Error ? e.message : String(e))));
-        });
-      };
-    };
-    button(`Ajouter à ${ev.file}`, true, 'kept-add');
-    button('Ignorer', false, 'ghost');
-    row.append(div('kept-text', `« ${esc(line)} »`), actions);
-  });
+  const row = (text: string, where: string, title: string) => {
+    const r = d.appendChild(div('kept-row'));
+    r.title = title;
+    r.append(div('kept-text', `« ${esc(text)} »`), div('kept-where', esc(where)));
+  };
+  for (const note of ev.memory) row(note, 'dans la mémoire', 'Gardé pour toute la conversation. Retirable via 🧠 sous la zone de saisie.');
+  for (const line of ev.project) row(line, `ajouté à ${ev.file}`, `Ajouté à la fin de ${ev.file}, lu au début de chaque conversation de ce projet.`);
   return d;
 }
 
@@ -1860,13 +1840,6 @@ function onEvent(ev: SessionEvent) {
       document.querySelector<HTMLElement>('.compaction.pending')?.remove();
       if (ev.memory.length || ev.project.length) add(keptCard(ev));
       break;
-    case 'kept_answer': {
-      // A line proposed for the project's notes file, answered: its buttons give way to the answer.
-      const row = document.querySelector<HTMLElement>(`.kept-row[data-kept="${CSS.escape(`${ev.id}:${ev.index}`)}"]`);
-      const file = row?.closest<HTMLElement>('.kept')?.dataset.file ?? 'AGENTS.md';
-      row?.querySelector('.kept-actions')?.replaceChildren(div('kept-done', ev.added ? `✓ ajouté à ${esc(file)}` : 'ignoré'));
-      break;
-    }
     case 'compaction_start':
       document.querySelector<HTMLElement>('.compaction.pending')?.remove();
       add(div('compaction pending', '<span class="spin">◌</span> Compactage du contexte : résumé des anciens messages…'));
