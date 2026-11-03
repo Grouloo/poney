@@ -1,0 +1,98 @@
+# On every pushed tag: builds the desktop app for macOS (arm64 and x64), Windows
+# (x64) and Linux (x64), then attaches the files to a GitHub Release for that tag.
+# Unsigned unless the signing secrets exist (see "Releases" in the README).
+name: Release
+
+on:
+  push:
+    tags: ['*']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: --mac --arm64 --x64
+          - os: windows-latest
+            target: --win --x64
+          - os: ubuntu-latest
+            target: --linux --x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+
+      # Signing: each variable is set only when its secret exists, so that an
+      # empty value does not make electron-builder try to sign.
+      - name: Signing secrets
+        shell: bash
+        env:
+          MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+        run: |
+          set_env() { if [ -n "$2" ]; then echo "$1<<__END__" >> "$GITHUB_ENV"; echo "$2" >> "$GITHUB_ENV"; echo "__END__" >> "$GITHUB_ENV"; fi; }
+          if [ "$RUNNER_OS" = macOS ] && [ -n "$MAC_CSC_LINK" ]; then
+            set_env CSC_LINK "$MAC_CSC_LINK"
+            set_env CSC_KEY_PASSWORD "$MAC_CSC_KEY_PASSWORD"
+            # Notarization runs when these three are set.
+            set_env APPLE_ID "$APPLE_ID"
+            set_env APPLE_APP_SPECIFIC_PASSWORD "$APPLE_APP_SPECIFIC_PASSWORD"
+            set_env APPLE_TEAM_ID "$APPLE_TEAM_ID"
+          elif [ "$RUNNER_OS" = Windows ] && [ -n "$WIN_CSC_LINK" ]; then
+            set_env CSC_LINK "$WIN_CSC_LINK"
+            set_env CSC_KEY_PASSWORD "$WIN_CSC_KEY_PASSWORD"
+          else
+            echo "CSC_IDENTITY_AUTO_DISCOVERY=false" >> "$GITHUB_ENV"
+            echo "No signing secrets: the build is unsigned."
+          fi
+
+      - name: Package
+        shell: bash
+        run: npx electron-builder ${{ matrix.target }} --publish never -c.extraMetadata.version="${GITHUB_REF_NAME#v}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: poney-${{ runner.os }}
+          if-no-files-found: error
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.exe
+            release/*.AppImage
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: files
+          merge-multiple: true
+      - name: GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          # A tag with a "-" (v0.2.0-beta.1) is a prerelease.
+          pre=""; case "$TAG" in *-*) pre="--prerelease" ;; esac
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$TAG" files/* --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" files/* --title "Poney $TAG" --generate-notes $pre --repo "$GITHUB_REPOSITORY"
+          fi

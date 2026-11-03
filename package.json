@@ -11,7 +11,8 @@
     "cli": "node src/cli.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "test": "node --test test/*.test.ts"
+    "test": "node --test test/*.test.ts",
+    "dist": "npm run build && electron-builder --publish never"
   },
   "engines": {
     "node": ">=24"
@@ -20,6 +21,7 @@
     "@types/katex": "^0.16.8",
     "@types/node": "^20.19.43",
     "electron": "^33.2.1",
+    "electron-builder": "^26.0.12",
     "eslint": "^10.14.0",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.72.1"
@@ -35,5 +37,49 @@
     "katex": "^0.16.11",
     "marked": "^12.0.2",
     "socks-proxy-agent": "^8.0.5"
+  },
+  "author": {
+    "name": "Elliott Lépine"
+  },
+  "homepage": "https://github.com/Grouloo/poney",
+  "build": {
+    "appId": "fr.grouloo.poney",
+    "productName": "Poney",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "assets/**",
+      "package.json",
+      "!node_modules/@anthropic-ai/claude-agent-sdk-*/**"
+    ],
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "assets/icon.icns",
+      "category": "public.app-category.developer-tools"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "assets/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "icon": "assets/icon.png",
+      "category": "Development"
+    },
+    "afterPack": "./scripts/after-pack.ts"
   }
 }

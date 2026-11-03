@@ -322,6 +322,42 @@ in `cmd.exe` (the model is told so), a stopped command kills its whole process t
 Windows line endings (CRLF) can be edited and keep them, paths are shown with `/`, and the Python syntax check uses
 `py -3` or `python`. Linux should work like macOS.
 
+## Releases
+
+Pushing a tag builds the app and publishes it as a GitHub Release (`.github/workflows/release.yml`):
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+The tag is a version (`v` + semver): it becomes the app's version and the file names, and a tag with a `-`
+(`v0.2.0-beta.1`) makes a prerelease. The workflow builds macOS arm64 and x64 (`.dmg`, `.zip`), Windows x64 (NSIS
+installer `.exe`) and Linux x64 (`.AppImage`). If a build fails, the others still finish, but nothing is published.
+Locally, `npm run dist` packages for the current system into `release/`, and `npx electron-builder --mac --dir`
+gives just the `.app`. The configuration is the `build` field of `package.json`.
+
+What a release does not contain:
+
+- **The engine.** llama-server is fetched on first use and checked against the pinned digest (`src/engine/install.ts`),
+  and only for macOS arm64 so far. On the other builds, the Poney models are unavailable, and providers (Ollama,
+  LM Studio, llama.cpp server…) still work.
+- **Claude.** The Agent SDK's own `claude` binary (about 250 MB) is left out. Claude models use the `claude` installed
+  on the machine, as in development. They use that machine's own Claude login, for personal use only. A public release
+  must switch to an API key or get Anthropic's approval first.
+
+**Signing.** Without secrets, the builds are unsigned. On macOS they are signed ad hoc (`scripts/after-pack.ts`): Apple
+Silicon refuses an app whose signature does not match. A downloaded build is then blocked by Gatekeeper. To open it, allow
+it in System Settings › Privacy & Security after the first try, or run `xattr -dr com.apple.quarantine /Applications/Poney.app`. Windows SmartScreen
+warns before the first run. Signing turns on when these repository secrets exist (Settings › Secrets and variables ›
+Actions):
+
+| Secret | For |
+|---|---|
+| `MAC_CSC_LINK`, `MAC_CSC_KEY_PASSWORD` | Developer ID Application certificate (`.p12`, base64) and its password |
+| `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` | notarization, with the macOS certificate |
+| `WIN_CSC_LINK`, `WIN_CSC_KEY_PASSWORD` | Windows code-signing certificate (`.pfx`, base64) and its password |
+
 ## Driving Poney from a program
 
 `src/cli.ts` lets another program run the engine and the harness, as the app does, without touching the app's data
@@ -377,6 +413,7 @@ the status dot is red.
 - `scripts/compare-engine.ts` — compares the engine with LM Studio on the same prompts
 - `docs/instances.md` — where Poney instances talking to each other would fit
 - `scripts/brand-electron.ts` — macOS, development: renames the Electron bundle to `Poney.app` and gives it the app's icon, so the Dock shows them (run by `npm start`)
+- `scripts/after-pack.ts`, `.github/workflows/release.yml` — packaging and releases (see Releases)
 - `assets/` — app icon (`icon.svg` source; `icon.png` for the macOS Dock, `icon.icns` for the bundle, `icon-square.png` for the Windows/Linux taskbar)
 
 ## Tor on a network that blocks Tor
