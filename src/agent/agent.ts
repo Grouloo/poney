@@ -1,4 +1,4 @@
-// (the sessions of the app hold either agent: see `isClaude`)
+// (the sessions of the app hold any of the agents: see `harness`)
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -172,7 +172,7 @@ export function messageStamp(d: Date): string {
 let nextId = Date.now(); // unique across restarts, since saved conversations are replayed by id
 
 export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTurnEvent] }> {
-  readonly isClaude = false;
+  readonly harness = 'local';
   triageByDefault: boolean;
   cwd: string;
   offProject: boolean;

@@ -2,6 +2,7 @@
 import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { IGNORED_DIRS, SCRATCH, resolveInside } from './agent/tools.ts';
 import { isRecord, isString, list, parseJson } from './unknown.ts';
@@ -61,6 +62,31 @@ export async function readFileForViewer(cwd: string, rel: string, scratch: strin
     return { ...base, kind: 'text', content: buf.toString('utf8'), truncated: st.size > MAX_TEXT };
   } finally {
     await handle.close();
+  }
+}
+
+/**
+ * An image the agent shows in its answer (![…](path)): an absolute path, a file:// URL, or a
+ * path in the project. Only images, as a data URL (null: none there, or too large).
+ */
+export async function readImage(cwd: string | null, src: string): Promise<string | null> {
+  let file = src.trim();
+  if (/^file:\/\//i.test(file)) {
+    try { file = fileURLToPath(file); } catch { return null; }
+  } else if (/^[a-z][\w+.-]*:/i.test(file) && !/^[a-z]:[\\/]/i.test(file)) return null; // (web addresses, data URLs: not this)
+  try { file = decodeURI(file); } catch {}
+  if (!path.isAbsolute(file)) {
+    if (!cwd) return null;
+    file = path.resolve(cwd, file);
+  }
+  const type = IMAGE_TYPES[path.extname(file).toLowerCase()];
+  if (!type) return null;
+  try {
+    const st = await fs.stat(file);
+    if (!st.isFile() || st.size > MAX_IMAGE) return null;
+    return `data:${type};base64,${(await fs.readFile(file)).toString('base64')}`;
+  } catch {
+    return null;
   }
 }
 

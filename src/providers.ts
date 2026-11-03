@@ -1,4 +1,4 @@
-// Where models come from: Poney's own engine, servers, Claude accounts. A provider has a
+// Where models come from: Poney's own engine, servers, Claude accounts, Antigravity. A provider has a
 // stable id and a type, so that a conversation can name its own and that new
 // types can come. See docs/instances.md.
 import { randomUUID } from 'node:crypto';
@@ -9,14 +9,19 @@ export const SERVER_TYPES: ProviderType[] = ['openai', 'ollama'];
 /** The machine's Claude account (in ~/.claude); those added in Poney follow it. */
 export const CLAUDE = 'claude';
 const isClaudeId = (id: string) => id === CLAUDE || id.startsWith(`${CLAUDE}-`);
+/** The machine's Antigravity login (agy's). */
+export const ANTIGRAVITY = 'antigravity';
+const ANTIGRAVITY_PROVIDER: Provider = { id: ANTIGRAVITY, type: 'antigravity', name: 'Antigravity', enabled: true };
 
 /** The list saved in the settings; from a configuration of before, its server becomes the first entry. */
 export function loadProviders(saved: Provider[] | undefined, config: Pick<Config, 'provider' | 'baseUrl' | 'apiKey'>): Provider[] {
-  if (Array.isArray(saved) && saved.length) return saved;
+  // (a list saved before Antigravity came gets it, last)
+  if (Array.isArray(saved) && saved.length) return saved.some((p) => p.id === ANTIGRAVITY) ? saved : [...saved, ANTIGRAVITY_PROVIDER];
   return [
     { id: 'poney', type: 'poney', name: 'Poney', enabled: false }, // (on once scripts/compare-engine.ts has passed: until then the server stays the default)
     { id: 'server-1', type: config.provider === 'ollama' ? 'ollama' : 'openai', name: '', baseUrl: config.baseUrl, apiKey: config.apiKey ?? '', enabled: true },
     { id: 'claude', type: 'claude', name: 'Claude', enabled: true },
+    ANTIGRAVITY_PROVIDER,
   ];
 }
 
@@ -35,8 +40,8 @@ export function addClaudeAccount(providers: Provider[]): { providers: Provider[]
   return { providers: [...providers.slice(0, at || providers.length), added, ...(at ? providers.slice(at) : [])], id: added.id };
 }
 
-/** Poney and the machine's Claude account can be turned off, not removed. */
-export const removeProvider = (providers: Provider[], id: string) => providers.filter((p) => p.id !== id || p.id === 'poney' || p.id === CLAUDE);
+/** Poney, the machine's Claude account and Antigravity can be turned off, not removed. */
+export const removeProvider = (providers: Provider[], id: string) => providers.filter((p) => p.id !== id || p.id === 'poney' || p.id === CLAUDE || p.id === ANTIGRAVITY);
 
 export const updateProvider = (providers: Provider[], id: string, patch: Partial<Provider>) => providers.map((p): Provider => {
   if (p.id !== id) return p;
@@ -50,6 +55,7 @@ export const updateProvider = (providers: Provider[], id: string, patch: Partial
  */
 export function providerOf(providers: Provider[], choice?: Choice | null): Provider | undefined {
   if (choice?.engine === 'claude') return providers.find((p) => p.id === claudeAccountOf(choice));
+  if (choice?.engine === 'antigravity') return providers.find((p) => p.id === ANTIGRAVITY);
   return choice?.provider ? providers.find((p) => p.id === choice.provider) : providers.find(isServer);
 }
 

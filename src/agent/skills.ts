@@ -104,3 +104,18 @@ export function matchingSkills(text: string, skills: Skill[], { max = 1 } = {}):
 
 /** A skill as added to the user's message. */
 export const skillBlock = (skill: Skill, maxChars: number) => `(Skill "${skill.name}", for this request. Follow it:\n${skill.body.length > maxChars ? `${skill.body.slice(0, maxChars)}…` : skill.body}\n)`;
+
+/**
+ * A message for another harness (Claude, Antigravity): the skills it names or that match
+ * it, added as for the local models, and what to show of them. (/name would be read as a
+ * command of that harness: the name goes without its slash.)
+ */
+export function withSkills(text: string, skills: Skill[], { auto = true, inView = () => false }: { auto?: boolean; inView?: (s: Skill) => boolean } = {}) {
+  const named = mentionedSkills(text, skills);
+  const found = auto ? matchingSkills(text, skills).filter((s) => !named.includes(s) && !inView(s)) : [];
+  let out = text;
+  for (const s of named) out = out.replace(new RegExp(`(^|\\s)/${s.name}(?=$|[\\s.,:;!?)])`), `$1${s.name}`);
+  for (const s of [...named, ...found]) out += `\n\n${skillBlock(s, 8000)}`;
+  const shown = (isAuto: boolean) => (s: Skill) => ({ name: s.name, description: s.description, author: s.author, source: s.source, auto: isAuto });
+  return { text: out, shown: [...named.map(shown(false)), ...found.map(shown(true))] };
+}

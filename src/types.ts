@@ -41,7 +41,7 @@ export interface Config {
   notifications?: boolean;
 }
 
-export type EngineName = 'local' | 'claude';
+export type EngineName = 'local' | 'claude' | 'antigravity';
 
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
@@ -329,6 +329,7 @@ export interface ConversationFile {
   archives?: (Message[] | null)[];
   claudeSession?: string | null;
   claudeContext?: ContextStats | null;
+  agySession?: string | null;
 }
 
 /** A conversation in the lists. */
@@ -352,7 +353,7 @@ export interface ConversationSummary {
   workingSince?: number | null;
 }
 
-export type ProviderType = 'poney' | 'openai' | 'ollama' | 'claude';
+export type ProviderType = 'poney' | 'openai' | 'ollama' | 'claude' | 'antigravity';
 
 export interface Provider {
   id: string;

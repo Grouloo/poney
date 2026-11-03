@@ -15,7 +15,7 @@ import DOMPurify from '../../node_modules/dompurify/dist/purify.es.mjs';
 import type { Api } from '../preload.cts';
 import { isGithub, repoName } from '../remote-url.ts';
 import type { RemotesStatus } from '../ipc.ts';
-import type { AppAlert, ClaudeAccount, ClaudeStatus, FileStates, ListedSkill, ModelGroup, OpeningApps, SessionApproval, SessionEvent, SessionView, SystemPromptView } from '../ipc.ts';
+import type { AntigravityStatus, AppAlert, ClaudeAccount, ClaudeStatus, FileStates, ListedSkill, ModelGroup, OpeningApps, SessionApproval, SessionEvent, SessionView, SystemPromptView } from '../ipc.ts';
 import type { TorStatus } from '../agent/tor.ts';
 import type { GitFile, GitRepoStatus } from '../git.ts';
 import type { ViewedFile } from '../files.ts';
@@ -332,15 +332,21 @@ const renderChoices = () => forPanes(renderChoice);
 // ---------- the model of the conversation ----------
 const LOCAL_ICON = '<svg class="engine-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="3" width="12" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M5.5 13.5h5M8 11v2.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
 const CLAUDE_ICON = `<svg class="engine-icon" viewBox="0 0 16 16" aria-hidden="true"><g stroke="#d97757" stroke-width="1.5" stroke-linecap="round">${[0, 30, 60, 90, 120, 150].map((a) => `<path d="M8 1.5v13" transform="rotate(${a} 8 8)"/>`).join('')}</g></svg>`;
-const engineIcon = (engine?: string) => (engine === 'claude' ? CLAUDE_ICON : LOCAL_ICON);
+const AGY_ICON = '<svg class="engine-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.2c.5 3.6 3.2 6.3 6.8 6.8-3.6.5-6.3 3.2-6.8 6.8-.5-3.6-3.2-6.3-6.8-6.8 3.6-.5 6.3-3.2 6.8-6.8z" fill="#4c8df6"/></svg>';
+const engineIcon = (engine?: string) => (engine === 'claude' ? CLAUDE_ICON : engine === 'antigravity' ? AGY_ICON : LOCAL_ICON);
 const SERVER_ICON = '<svg class="engine-icon" viewBox="0 0 16 16" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><rect x="2.5" y="2.5" width="11" height="4.5" rx="1.2"/><rect x="2.5" y="9" width="11" height="4.5" rx="1.2"/><path d="M5 4.75h.01M5 11.25h.01"/></g></svg>';
 /** A server's app when it is known, else a server; Poney's models keep the computer. */
 const groupIcon = (g?: ModelGroup) => (g?.icon ? `<img class="engine-img" src="${esc(g.icon)}" alt="">` : g && g.provider.type !== 'poney' ? SERVER_ICON : LOCAL_ICON);
 const EFFORT_LABEL: Record<string, string> = { low: 'Faible', medium: 'Moyen', high: 'Élevé', xhigh: 'Très élevé', max: 'Maximum' };
 let modelGroups: ModelGroup[] = []; // the models by provider
 let claude: ClaudeStatus = { installed: false, accounts: [] };
+let antigravity: AntigravityStatus = { installed: false, enabled: false, models: [], error: null };
 const choice = () => settings.active?.choice ?? { engine: 'local', model: null };
 const usesClaude = () => choice().engine === 'claude';
+/** Another harness than Poney's (Claude, Antigravity): no steps, prompt, memory or compaction of Poney's. */
+const external = (c: Choice = choice()) => (c.engine ?? 'local') !== 'local';
+const agyModel = () => antigravity.models.find((m) => m.value === choice().model) ?? antigravity.models[0];
+const AGY_EFFORTS = ['low', 'medium', 'high'];
 /** The Claude account a choice names (the machine's when none). */
 const accountId = (c: Choice) => (c.provider === 'claude' || c.provider?.startsWith('claude-') ? c.provider : 'claude');
 const claudeAccount = () => claude.accounts.find((a) => a.id === accountId(choice()));
@@ -357,7 +363,7 @@ async function setChoice(patch: Choice) {
 }
 
 /** The provider of the conversation shown (one from before providers: the first server). */
-const firstServer = () => settings.providers?.find((p) => p.type !== 'poney' && p.type !== 'claude')?.id;
+const firstServer = () => settings.providers?.find((p) => p.type !== 'poney' && p.type !== 'claude' && p.type !== 'antigravity')?.id;
 const choiceProvider = () => choice().provider ?? firstServer();
 
 async function refreshModels() {
@@ -367,7 +373,7 @@ async function refreshModels() {
   const first = modelGroups.find((g) => g.provider.type !== 'poney' && g.models.length);
   if (!settings.config.model && first) settings = await window.api.setConfig({ model: first.models[0].id });
   renderChoices();
-  claude = await window.api.claudeStatus().catch(() => claude);
+  [claude, antigravity] = await Promise.all([window.api.claudeStatus().catch(() => claude), window.api.antigravityStatus().catch(() => antigravity)]);
   renderChoices();
   refreshConversations(); // (the cards show their provider's icon)
   if ($<HTMLDialogElement>('settingsDialog').open) renderProviders();
@@ -379,31 +385,38 @@ window.api.onModelsChanged(refreshModels);
 function renderChoice() {
   const c = choice();
   const isClaude = c.engine === 'claude';
+  const isAgy = c.engine === 'antigravity';
+  const other = external(c);
   if (pane === focused) {
     // (steps and system prompt belong to Poney's harness)
-    $<HTMLButtonElement>('convSettingsBtn').disabled = isClaude;
-    $<HTMLButtonElement>('convSettingsBtn').title = isClaude ? 'Les modèles Claude n’utilisent ni les étapes ni le prompt système de Poney' : 'Étapes et prompt système de cette conversation';
-    document.body.classList.toggle('claude-focus', isClaude);
+    $<HTMLButtonElement>('convSettingsBtn').disabled = other;
+    $<HTMLButtonElement>('convSettingsBtn').title = other ? `Les modèles ${isAgy ? 'Antigravity' : 'Claude'} n’utilisent ni les étapes ni le prompt système de Poney` : 'Étapes et prompt système de cette conversation';
+    document.body.classList.toggle('claude-focus', other);
   }
-  headOf(pane)?.classList.toggle('claude', isClaude); // (its own settings button, in a split view)
+  headOf(pane)?.classList.toggle('claude', other); // (its own settings button, in a split view)
   const picker = $<HTMLButtonElement>('modelPicker');
   const group = modelGroups.find((g) => g.provider.id === choiceProvider());
-  picker.querySelector<HTMLElement>('.model-icon')!.innerHTML = isClaude ? CLAUDE_ICON : groupIcon(group);
+  picker.querySelector<HTMLElement>('.model-icon')!.innerHTML = other ? engineIcon(c.engine) : groupIcon(group);
   const local = c.model || settings.config.model;
   // (with several Claude accounts, the conversation's is said beside its model)
   const account = isClaude && claude.accounts.length > 1 ? claudeAccount() : undefined;
-  const modelName = isClaude ? claudeModel()?.name ?? c.model ?? 'Claude' : group?.models.find((m) => m.id === local)?.name ?? local ?? 'aucun modèle';
+  const modelName = isClaude ? claudeModel()?.name ?? c.model ?? 'Claude'
+    : isAgy ? agyModel()?.name ?? c.model ?? 'Antigravity'
+      : group?.models.find((m) => m.id === local)?.name ?? local ?? 'aucun modèle';
   picker.querySelector<HTMLElement>('.model-name')!.textContent = account ? `${modelName} · ${accountShort(account)}` : modelName;
   picker.dataset.tip = account ? `Modèle · ${accountLabel(account)}` : 'Modèle';
-  chat.classList.toggle('claude-mode', isClaude);
-  $('claudeControls').classList.toggle('hidden', !isClaude);
-  chat.querySelector<HTMLElement>('.toggles')!.classList.toggle('hidden', isClaude);
-  if (!isClaude) return;
-  const levels = claudeModel()?.efforts ?? [];
+  chat.classList.toggle('claude-mode', other);
+  $('claudeControls').classList.toggle('hidden', !other);
+  chat.querySelector<HTMLElement>('.toggles')!.classList.toggle('hidden', other);
+  if (!other) return;
+  const levels = isAgy ? AGY_EFFORTS : claudeModel()?.efforts ?? [];
   $<HTMLSelectElement>('effortSelect').innerHTML = levels.map((l) => `<option value="${l}">${EFFORT_LABEL[l] ?? l}</option>`).join('');
   $<HTMLSelectElement>('effortSelect').classList.toggle('hidden', !levels.length);
   $<HTMLSelectElement>('effortSelect').value = c.effort && levels.includes(c.effort) ? c.effort : levels.includes('high') ? 'high' : levels[0] ?? '';
-  $<HTMLSelectElement>('modeSelect').querySelector<HTMLOptionElement>('[value="auto"]')!.disabled = claudeModel()?.auto === false;
+  $<HTMLSelectElement>('modeSelect').querySelector<HTMLOptionElement>('[value="auto"]')!.disabled = isClaude && claudeModel()?.auto === false;
+  // (headless, Antigravity cannot ask: Manual keeps its own rules, edits in the project and no command without one)
+  $<HTMLSelectElement>('modeSelect').dataset.tip = isAgy ? 'Mode : Auto agit seul, Manuel modifie les fichiers du projet mais ne lance pas de commande (Antigravity ne peut pas demander ici), Plan propose avant d’agir'
+    : 'Mode : Auto agit seul, Manuel demande avant chaque action sensible, Plan propose avant d’agir';
   $<HTMLSelectElement>('modeSelect').value = c.mode ?? 'manual';
 }
 
@@ -423,15 +436,18 @@ function openModelMenu() {
   const row = (engine: EngineName, model: string, name: string, off: boolean, group?: ModelGroup, account?: ClaudeAccount) => {
     const r = into.appendChild(document.createElement('button'));
     r.type = 'button';
-    const same = engine === 'claude' ? account?.id === accountId(c) : group?.provider.id === choiceProvider();
-    r.className = `pm-row model-row${engine === c.engine && same && model === (c.model ?? (engine === 'local' ? settings.config.model : claudeModel()?.value)) ? ' selected' : ''}`;
+    const same = engine === 'claude' ? account?.id === accountId(c) : engine === 'antigravity' ? true : group?.provider.id === choiceProvider();
+    const current = c.model ?? (engine === 'local' ? settings.config.model : engine === 'antigravity' ? agyModel()?.value : claudeModel()?.value);
+    r.className = `pm-row model-row${engine === c.engine && same && model === current ? ' selected' : ''}`;
     r.innerHTML = `<span class="pm-icon">${group ? groupIcon(group) : engineIcon(engine)}</span><span class="pm-name">${esc(name)}</span>`;
     r.disabled = off;
     if (off) r.title = 'Une conversation commencée garde son type de modèle';
     r.onclick = () => {
       closeModelMenu();
       const m = account?.models.find((x) => x.value === model);
-      setChoice(engine === 'claude' ? { engine, model, provider: account?.id, effort: c.effort ?? (m?.efforts.includes('high') ? 'high' : m?.efforts[0]), mode: c.mode ?? 'manual' } : { engine, model, provider: group?.provider.id });
+      setChoice(engine === 'claude' ? { engine, model, provider: account?.id, effort: c.effort ?? (m?.efforts.includes('high') ? 'high' : m?.efforts[0]), mode: c.mode ?? 'manual' }
+        : engine === 'antigravity' ? { engine, model, provider: 'antigravity', effort: c.effort && AGY_EFFORTS.includes(c.effort) ? c.effort : 'high', mode: c.mode ?? 'manual' }
+          : { engine, model, provider: group?.provider.id });
     };
   };
   const started = settings.active?.started;
@@ -450,7 +466,8 @@ function openModelMenu() {
       group.classList.toggle('hidden', foldedModels.has(key));
     };
   };
-  const several = modelGroups.filter((g) => g.models.length || g.error).length + claude.accounts.length > 1;
+  const agyShown = antigravity.installed && antigravity.enabled;
+  const several = modelGroups.filter((g) => g.models.length || g.error).length + claude.accounts.length + Number(agyShown) > 1;
   for (const g of modelGroups) {
     if (several && (g.models.length || g.error)) label(g.name ?? (g.provider.type === 'poney' ? 'Poney' : ''), g.provider.id);
     for (const m of g.models) row('local', m.id, m.name, started && c.engine !== 'local', g);
@@ -469,6 +486,12 @@ function openModelMenu() {
       hint.innerHTML = `<span class="pm-icon">${CLAUDE_ICON}</span><span class="pm-name">Se connecter…</span>`;
       hint.onclick = () => { closeModelMenu(); loginClaude(a.id); };
     }
+  }
+  if (agyShown) {
+    if (several) label('Antigravity', 'antigravity');
+    for (const m of antigravity.models) row('antigravity', m.value, m.name, Boolean(started) && c.engine !== 'antigravity');
+    if (antigravity.error) into.appendChild(div('pm-row muted', `<span class="pm-icon">${AGY_ICON}</span><span class="pm-name">${esc(antigravity.error)}</span>`));
+    into = menu;
   }
   fitBelowBar(menu, $<HTMLButtonElement>('modelPicker'));
   menu.classList.remove('hidden');
@@ -515,7 +538,7 @@ function providerCard(p: Provider) {
   const card = div(`provider-card${p.enabled ? '' : ' off'}${openProviders.has(p.id) ? '' : ' folded'}`);
   const group = modelGroups.find((g) => g.provider.id === p.id);
   const head = card.appendChild(div('provider-head'));
-  head.innerHTML = `<span class="provider-chev">${CHEVRON}</span><span class="pm-icon">${p.type === 'claude' ? CLAUDE_ICON : groupIcon(group)}</span><span class="provider-name"></span><div class="spacer"></div><label><input type="checkbox"> Activé</label>`;
+  head.innerHTML = `<span class="provider-chev">${CHEVRON}</span><span class="pm-icon">${p.type === 'claude' || p.type === 'antigravity' ? engineIcon(p.type) : groupIcon(group)}</span><span class="provider-name"></span><div class="spacer"></div><label><input type="checkbox"> Activé</label>`;
   head.onclick = (e) => {
     if (e.target instanceof Element && e.target.closest('label, button, input')) return;
     if (openProviders.has(p.id)) openProviders.delete(p.id); else openProviders.add(p.id);
@@ -601,6 +624,15 @@ function claudeCard(p: Provider) {
   return card;
 }
 
+function antigravityCard(p: Provider) {
+  const card = providerCard(p);
+  card.querySelector<HTMLElement>('.provider-name')!.textContent = 'Antigravity';
+  const state = card.appendChild(div('muted'));
+  state.textContent = !antigravity.installed ? 'Antigravity n’est pas installé sur cette machine : installez sa ligne de commande (agy), puis lancez « agy » une fois dans un terminal pour vous connecter.'
+    : !p.enabled ? '' : antigravity.error ?? `${antigravity.models.length} modèle${antigravity.models.length > 1 ? 's' : ''}, avec la connexion de cette machine.`;
+  return card;
+}
+
 // ---------- Claude login ----------
 // Claude's page opens in the browser; the login comes back by itself, or with a code the page shows.
 const loginDialog = $<HTMLDialogElement>('claudeLoginDialog');
@@ -633,7 +665,7 @@ $<HTMLButtonElement>('claudeLoginCancel').onclick = () => {
 loginDialog.addEventListener('cancel', () => window.api.claudeLoginCancel()); // (Escape)
 
 async function renderProviders() {
-  const cards = await Promise.all((settings.providers ?? []).map((p) => (p.type === 'poney' ? poneyCard(p) : p.type === 'claude' ? claudeCard(p) : serverCard(p))));
+  const cards = await Promise.all((settings.providers ?? []).map((p) => (p.type === 'poney' ? poneyCard(p) : p.type === 'claude' ? claudeCard(p) : p.type === 'antigravity' ? antigravityCard(p) : serverCard(p))));
   $('providersList').replaceChildren(...cards);
 }
 $<HTMLButtonElement>('addProvider').onclick = async () => {
@@ -1219,7 +1251,7 @@ async function submit() {
     setTimeout(openModelMenu); // (after this click, which closes menus)
     return;
   }
-  if (!usesClaude() && !choice().model && !settings.config.model) {
+  if (!external() && !choice().model && !settings.config.model) {
     openSettings('providers');
     $('status').textContent = 'Choisissez un modèle.';
     return;
@@ -1574,7 +1606,7 @@ function summarize(tool: string, args: ToolArgs = {}) {
   }
 }
 
-const TOOL_LABEL: Record<string, string> = { list: 'Lister', read: 'Lire', search: 'Chercher', write: 'Écrire', edit: 'Modifier', run: 'Exécuter', web_search: 'Web', fetch: 'Page web', agent: 'Sous-agent', plan: 'Plan', remember: 'Mémoriser', forget: 'Oublier', recall: 'Retrouver', ask: 'Questions' };
+const TOOL_LABEL: Record<string, string> = { list: 'Lister', read: 'Lire', search: 'Chercher', write: 'Écrire', edit: 'Modifier', run: 'Exécuter', web_search: 'Web', fetch: 'Page web', agent: 'Sous-agent', plan: 'Plan', remember: 'Mémoriser', forget: 'Oublier', recall: 'Retrouver', ask: 'Questions', image: 'Image' };
 
 function renderDiff(diff: string) {
   const lines = diff.split('\n');
@@ -1651,11 +1683,55 @@ function drawStreaming() {
     b.live = liveAction(normalizeToolCalls(splitThinking(b.raw).text));
     const live = b.live ? liveCard(b) : '';
     b.bubble.innerHTML = markdown(text) + (live || (pending || b.toolPending ? `<p class="muted"><span class="spin">◌</span> prépare une action${tool}…</p>` : ''));
+    showImages(b.bubble);
     if (liveBubble === b) renderLivePanel();
   }
   dirty.clear();
   drawCost = performance.now() - t0;
   forPanes(() => scrollDown());
+}
+
+// ---------- images the agent shows ----------
+// ![…](path) in an answer: the file is read by the app (an absolute path, file://, or a path
+// in the project), never by the page; web addresses stay links. Read once: an answer being
+// written is drawn again at each piece.
+const images = new Map<string, string | null>();
+const imagesAsked = new Map<string, Promise<string | null>>();
+function showImages(root: HTMLElement) {
+  for (const img of root.querySelectorAll<HTMLImageElement>('img[data-src]')) {
+    const src = img.dataset.src ?? '';
+    const known = images.get(src);
+    if (known) img.src = known;
+    else if (known === null) missingImage(img);
+    else {
+      if (!imagesAsked.has(src)) imagesAsked.set(src, window.api.readImage(src).catch(() => null).then((data) => { images.set(src, data); return data; }));
+      imagesAsked.get(src)!.then((data) => { if (data) img.src = data; else missingImage(img); });
+    }
+    img.onclick = () => { if (img.src) openLightbox(img.src, img.alt); };
+  }
+}
+/** An image that cannot be shown: its name and where it was said to be. */
+function missingImage(img: HTMLImageElement) {
+  if (!img.isConnected) return;
+  const src = img.dataset.src ?? '';
+  const link = /^https?:/i.test(src);
+  const el = document.createElement(link ? 'a' : 'span');
+  el.className = 'missing-img';
+  el.textContent = `🖼 ${img.alt || src.split('/').pop() || 'image'}`;
+  el.title = link ? src : `Image introuvable : ${src}`;
+  if (el instanceof HTMLAnchorElement) el.href = src;
+  img.replaceWith(el);
+}
+/** An image at full size, over the window; a click or Escape closes it. */
+function openLightbox(src: string, alt: string) {
+  const box = document.body.appendChild(div('lightbox'));
+  const img = box.appendChild(document.createElement('img'));
+  img.src = src;
+  img.alt = alt;
+  const close = () => { box.remove(); document.removeEventListener('keydown', onKey, true); };
+  const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+  box.onclick = close;
+  document.addEventListener('keydown', onKey, true);
 }
 
 // ---------- a file being written or edited, followed live in the side panel ----------
@@ -1853,8 +1929,10 @@ function onEvent(ev: SessionEvent) {
         b.thinkingEl.querySelector<HTMLElement>('summary')!.textContent = b.thinkPieces ? `Réflexion (${b.thinkPieces} tokens)` : 'Réflexion';
         b.thinkingEl.querySelector<HTMLElement>('div')!.textContent = thinking; // (a reasoning that ends at once was never drawn; written in the answer: as kept)
       }
-      if (ev.text) b.bubble.innerHTML = markdown(ev.text);
-      else if (!thinking) b.el.remove();
+      if (ev.text) {
+        b.bubble.innerHTML = markdown(ev.text);
+        showImages(b.bubble);
+      } else if (!thinking) b.el.remove();
       else b.bubble.remove();
       break;
     }
@@ -1928,7 +2006,7 @@ function onEvent(ev: SessionEvent) {
         const view = agentViews.get(ev.id);
         // (the report is usually its last message, already in the log: not shown twice)
         const last = view && [...view.querySelectorAll<HTMLElement>('.sub-log > .msg.assistant .bubble')].pop()?.textContent.trim();
-        if (view && (ev.output || '').trim() && last !== (ev.output || '').trim()) view.querySelector<HTMLElement>('.sub-report')!.innerHTML = markdown(ev.output || '');
+        if (view && (ev.output || '').trim() && last !== (ev.output || '').trim()) showImages(Object.assign(view.querySelector<HTMLElement>('.sub-report')!, { innerHTML: markdown(ev.output || '') }));
         card.querySelector<HTMLElement>('.sub-line')!.textContent = (ev.output || '').replace(/\s+/g, ' ').trim().slice(0, 160) || (ev.ok ? 'terminé' : 'échec');
         const m = ev.meta || {};
         const parts = [m.ms ? fmtDuration(num(m.ms)) : '', m.steps ? `${m.steps} étapes` : ''].filter(Boolean);
@@ -3353,8 +3431,8 @@ function conversationItem(c: ConversationSummary, current: string | null) {
   project.innerHTML = `${projectGlyph(projectOf(c))} ${esc(projectLabel(projectOf(c) || ''))}`;
   project.title = c.offProject ? 'Conversation sans dossier de projet' : c.workspace || '';
   const group = modelGroups.find((g) => g.provider.id === (c.provider ?? firstServer()));
-  li.querySelector<HTMLElement>('.card-engine')!.innerHTML = c.engine === 'claude' ? CLAUDE_ICON : groupIcon(group);
-  li.querySelector<HTMLElement>('.card-engine')!.title = c.engine === 'claude' ? 'Modèle Claude' : group?.name ? `Modèle ${group.name}` : 'Modèle local';
+  li.querySelector<HTMLElement>('.card-engine')!.innerHTML = c.engine === 'claude' || c.engine === 'antigravity' ? engineIcon(c.engine) : groupIcon(group);
+  li.querySelector<HTMLElement>('.card-engine')!.title = c.engine === 'claude' ? 'Modèle Claude' : c.engine === 'antigravity' ? 'Modèle Antigravity' : group?.name ? `Modèle ${group.name}` : 'Modèle local';
   const when = li.querySelector<HTMLElement>('.when')!;
   if (category(c) === 'busy' && c.workingSince) {
     when.dataset.since = String(c.workingSince);
@@ -5088,7 +5166,7 @@ function bindPane(p: Pane) {
   }, 0));
 
   $<HTMLButtonElement>('ctxGauge').onclick = async () => {
-    if (running || usesClaude()) return; // (the Claude harness compacts by itself)
+    if (running || external()) return; // (the Claude and Antigravity harnesses compact by themselves)
     if (!confirm('Compacter maintenant ? Les anciens messages seront remplacés par un résumé (le fil affiché reste intact).')) return;
     const p = pane;
     setRunning(true);

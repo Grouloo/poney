@@ -8,7 +8,7 @@ const config = cfg({ provider: 'openai', baseUrl: 'http://localhost:1234/v1', ap
 
 test('the server of before becomes the first entry, between Poney and Claude', () => {
   const list = loadProviders(undefined, config);
-  assert.deepEqual(list.map((p) => p.type), ['poney', 'openai', 'claude']);
+  assert.deepEqual(list.map((p) => p.type), ['poney', 'openai', 'claude', 'antigravity']);
   assert.equal(list[1].baseUrl, config.baseUrl);
   assert.equal(list[0].enabled, false); // (the engine is not the default yet)
   assert.equal(loadProviders(list, config), list);
@@ -23,11 +23,11 @@ test('a conversation from before keeps its server', () => {
 
 test('servers are added before Claude; Poney and Claude cannot be removed', () => {
   let list = addServer(loadProviders(undefined, config), { type: 'ollama', baseUrl: 'http://x' });
-  assert.deepEqual(list.map((p) => p.type), ['poney', 'openai', 'ollama', 'claude']);
+  assert.deepEqual(list.map((p) => p.type), ['poney', 'openai', 'ollama', 'claude', 'antigravity']);
   const added = list[2].id;
   assert.ok(added.length > 10);
   list = removeProvider(removeProvider(removeProvider(list, added), 'poney'), 'claude');
-  assert.deepEqual(list.map((p) => p.id), ['poney', 'server-1', 'claude']);
+  assert.deepEqual(list.map((p) => p.id), ['poney', 'server-1', 'claude', 'antigravity']);
 });
 
 test('an update cannot change an id, nor the type of Poney', () => {
@@ -63,8 +63,8 @@ test('Claude accounts: added after the others, chosen by a conversation, removed
   const first = addClaudeAccount(loadProviders(undefined, config));
   const second = addClaudeAccount(first.providers);
   let list = addServer(second.providers);
-  assert.deepEqual(list.map((p) => p.type), ['poney', 'openai', 'openai', 'claude', 'claude', 'claude']);
-  assert.deepEqual(list.slice(3).map((p) => p.id), ['claude', first.id, second.id]);
+  assert.deepEqual(list.map((p) => p.type), ['poney', 'openai', 'openai', 'claude', 'claude', 'claude', 'antigravity']);
+  assert.deepEqual(list.slice(3, 6).map((p) => p.id), ['claude', first.id, second.id]);
   assert.equal((providerOf(list, { engine: 'claude', provider: second.id }))!.id, second.id);
   // (none named, or a server's left from a model chosen before: the machine's)
   assert.equal((providerOf(list, { engine: 'claude' }))!.id, 'claude');
@@ -73,4 +73,14 @@ test('Claude accounts: added after the others, chosen by a conversation, removed
   assert.deepEqual(list.filter((p) => p.type === 'claude').map((p) => p.id), ['claude', second.id]);
   // (a conversation of a removed account says so, it does not move to another)
   assert.match(unavailable(providerOf(list, { engine: 'claude', provider: first.id }))!, /supprimé/);
+});
+
+test('a list saved before Antigravity gets it, which can be turned off but not removed', () => {
+  const saved: Provider[] = [{ id: 'poney', type: 'poney', name: 'Poney', enabled: true }, { id: 'claude', type: 'claude', name: 'Claude', enabled: true }];
+  const list = loadProviders(saved, config);
+  assert.deepEqual(list.map((p) => p.id), ['poney', 'claude', 'antigravity']);
+  assert.equal(loadProviders(list, config), list);
+  assert.equal(removeProvider(list, 'antigravity').length, 3);
+  assert.equal(providerOf(list, { engine: 'antigravity', model: 'gemini-3-pro' })!.id, 'antigravity');
+  assert.match(unavailable(providerOf(updateProvider(list, 'antigravity', { enabled: false }), { engine: 'antigravity' }))!, /désactivé/);
 });

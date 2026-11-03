@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { unifiedDiff } from './diff.ts';
-import { loadSkills, skillDirs, mentionedSkills, matchingSkills, skillBlock, type Skill } from './skills.ts';
+import { loadSkills, skillDirs, withSkills, type Skill } from './skills.ts';
 import { errorMessage, isNumber, isString, list, num, parseJson, rec, str } from '../unknown.ts';
 import type { Options, PermissionMode, PermissionResult, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import type { AgentEvent, Approve, Checkpoint, Choice, Config, ContextStats, Effort, Message, Plan, Steps, TaskStatus, TurnStats, ToolArgs } from '../types.ts';
@@ -281,7 +281,7 @@ const textOf = (content: unknown) => (typeof content === 'string' ? content
 let nextId = Date.now();
 
 export class ClaudeAgent extends EventEmitter<{ event: [AgentEvent] }> {
-  readonly isClaude = true;
+  readonly harness = 'claude';
   cwd: string;
   executable: string | null;
   configDir: string | null;
@@ -346,18 +346,9 @@ export class ClaudeAgent extends EventEmitter<{ event: [AgentEvent] }> {
 
   /** The message with its skills: Poney's, called like its local models do. */
   prompt(text: string, turnId?: string): string {
-    const skills = loadSkills(skillDirs(this.cwd, this.skillsDir));
-    const named = mentionedSkills(text, skills);
     const inView = (s: Skill) => this.messages.some((m) => m.content.includes(`(Skill "${s.name}"`));
-    const found = this.autoSkills === false ? [] : matchingSkills(text, skills).filter((s) => !named.includes(s) && !inView(s));
-    let out = text;
-    // (/name would be read as a command of the Claude harness)
-    for (const s of named) out = out.replace(new RegExp(`(^|\\s)/${s.name}(?=$|[\\s.,:;!?)])`), `$1${s.name}`);
-    for (const s of [...named, ...found]) out += `\n\n${skillBlock(s, 8000)}`;
-    if (named.length || found.length) {
-      const shown = (auto: boolean) => (s: Skill) => ({ name: s.name, description: s.description, author: s.author, source: s.source, auto });
-      this.emit('event', { type: 'skill', turnId, skills: [...named.map(shown(false)), ...found.map(shown(true))] });
-    }
+    const { text: out, shown } = withSkills(text, loadSkills(skillDirs(this.cwd, this.skillsDir)), { auto: this.autoSkills !== false, inView });
+    if (shown.length) this.emit('event', { type: 'skill', turnId, skills: shown });
     return out;
   }
 

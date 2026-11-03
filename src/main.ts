@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { Agent, DEFAULT_CONFIG } from './agent/agent.ts';
 import { loadSkills, skillDirs } from './agent/skills.ts';
 import { askStarted, draftTip } from './agent/ask.ts';
+import { AntigravityAgent, agyModels, findAgy } from './agent/antigravity.ts';
 import { ClaudeAgent, findClaude, claudeAuth, claudeEnv, machineClaudeDir, claudeLogin, claudeModels, claudeUsage, linkUserSettings } from './agent/claude.ts';
 import { listModels, lmStudioModels, setInferenceService } from './agent/llm.ts';
 import { ModelEngine } from './engine/engine.ts';
@@ -16,13 +17,13 @@ import type { LocalModel } from './types.ts';
 import { addClaudeAccount, addServer, CLAUDE, claudeAccountOf, loadProviders, modelConfig, providerOf, removeProvider, savedConfig, unavailable, updateProvider } from './providers.ts';
 import { ConversationStore, moveAppData } from './conversations.ts';
 import { isGithub, tokenUrl } from './remote-url.ts';
-import { appsToOpen, listDir, openWith, readFileForViewer, type OpeningApp } from './files.ts';
+import { appsToOpen, listDir, openWith, readFileForViewer, readImage, type OpeningApp } from './files.ts';
 import { resolveInside } from './agent/tools.ts';
 import { credentialEnv, gitClone, type RemoteToken, gitFileStates, gitBranches, gitSwitch, gitCreateBranch, createGithubRepo, findGh, GITHUB_TOKEN_PAGE, gitChangeRemote, githubAccount, gitStatus, gitConnect, gitDiff, gitFetch, gitRemote, gitRemoveRemote, gitSync, readyGh } from './git.ts';
 import { migrateLegacy, rebuildHistory, rebuildForAction } from './agent/rebuild.ts';
 import { checkTor, torStatus, newCircuits, findTorProxy, requireTor, proxyEnv } from './agent/tor.ts';
 import { errorMessage, isBoolean, isNumber, isRecord, isString, isStringArray, list, parseJson, rec, str } from './unknown.ts';
-import type { AppAlert, Args, Channel, ClaudeAccount, ClaudeUsage, Reply, SessionView } from './ipc.ts';
+import type { AntigravityStatus, AppAlert, Args, Channel, ClaudeAccount, ClaudeUsage, Reply, SessionView } from './ipc.ts';
 import type { AgentEvent, ApprovalAnswer, ApprovalRequest, AskDraft, Choice, ConversationFile, ConversationPair, ProjectIcon, Provider, PublicSettings, Settings, ToolArgs, Viewing } from './types.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -164,7 +165,7 @@ const offProjectRoot = () => path.join(app.getPath('userData'), 'off-project');
 const scratchRoot = () => path.join(app.getPath('userData'), 'scratch');
 const scratchOf = (id: string) => path.join(scratchRoot(), id);
 
-const LOCAL_ONLY = 'Cette action n’existe pas pour les modèles Claude.';
+const LOCAL_ONLY = 'Cette action n’existe que pour les modèles de Poney.';
 
 /** The folder of a Claude account added in Poney (its login, its sessions); null: the machine's, ~/.claude. */
 const claudeDirOf = (id: string | undefined) => (id && id !== CLAUDE ? path.join(app.getPath('userData'), 'claude-accounts', id) : null);
@@ -174,7 +175,7 @@ class Session {
   cwd: string;
   offProject: boolean;
   conv: ConversationFile | null;
-  agent: Agent | ClaudeAgent | null;
+  agent: Agent | ClaudeAgent | AntigravityAgent | null;
   approvals: Map<number, { req: ApprovalRequest; resolve: (answer: ApprovalAnswer) => void }>;
   saveTimer?: NodeJS.Timeout;
   partial: SessionView['partial'];
@@ -204,7 +205,7 @@ class Session {
     this.failed = conv?.failed ?? false; // its last turn ended on an error: until it is taken up again
     this.draft = conv?.draft ?? ''; // what is typed in the input, not sent
     this.askDraft = conv?.askDraft ?? null;
-    // The model of this conversation: { engine: 'local' | 'claude', model, effort, mode }.
+    // The model of this conversation: { engine: 'local' | 'claude' | 'antigravity', model, effort, mode }.
     this.choice = conv ? conv.choice ?? { engine: 'local', model: null } : { ...(settings.lastChoice ?? { engine: 'local', model: null }) };
     this.workingSince = null; // when the turn under way started
     this.sleeping = false; // its turn under way waits for a background task
@@ -216,10 +217,10 @@ class Session {
   get running() { return Boolean(this.agent?.running); }
   get started() { return Boolean((this.agent?.messages ?? this.conv?.messages)?.length); }
 
-  getAgent(): Agent | ClaudeAgent {
+  getAgent(): Agent | ClaudeAgent | AntigravityAgent {
     if (!this.cwd) throw new Error('Choisissez d’abord un dossier de projet.');
-    const claude = this.choice.engine === 'claude';
-    if (!this.agent || this.agent.cwd !== this.cwd || Boolean(this.agent.isClaude) !== claude) {
+    const harness = this.choice.engine ?? 'local';
+    if (!this.agent || this.agent.cwd !== this.cwd || this.agent.harness !== harness) {
       this.agent?.reset();
       const approve = (req: ApprovalRequest) => new Promise<ApprovalAnswer>((resolve) => {
         this.approvals.set(req.id, { req, resolve });
@@ -230,7 +231,8 @@ class Session {
         else alertUser(this, 'approval', `Autorisation demandée${req.agentTitle ? ` (${req.agentTitle})` : ''} : ${req.command ?? req.tool}`);
       });
       const onEvent = (ev: AgentEvent) => this.onEvent(ev);
-      if (claude) this.agent = new ClaudeAgent({ cwd: this.cwd, executable: findClaude(), configDir: claudeDirOf(claudeAccountOf(this.choice)), approve, skillsDir: userSkills() }).on('event', onEvent);
+      if (harness === 'antigravity') this.agent = new AntigravityAgent({ cwd: this.cwd, executable: findAgy(), skillsDir: userSkills() }).on('event', onEvent);
+      else if (harness === 'claude') this.agent = new ClaudeAgent({ cwd: this.cwd, executable: findClaude(), configDir: claudeDirOf(claudeAccountOf(this.choice)), approve, skillsDir: userSkills() }).on('event', onEvent);
       else {
         this.agent = new Agent({
           cwd: this.cwd,
@@ -251,7 +253,7 @@ class Session {
   /** For what only the local agent does. */
   localAgent(): Agent {
     const agent = this.getAgent();
-    if (agent.isClaude) throw new Error(LOCAL_ONLY);
+    if (agent.harness !== 'local') throw new Error(LOCAL_ONLY);
     return agent;
   }
 
@@ -260,7 +262,12 @@ class Session {
     if (!this.agent) return;
     const local = this.choice.engine === 'local';
     this.agent.config = { ...DEFAULT_CONFIG, ...modelConfig(settings.config, local ? providerOf(settings.providers, this.choice) : null, local ? this.choice.model : null, settings.modelContexts) };
-    if (this.agent.isClaude) {
+    if (this.agent.harness === 'antigravity') {
+      this.agent.choice = this.choice;
+      this.agent.executable = findAgy();
+      this.agent.autoSkills = settings.config.autoSkills;
+    }
+    if (this.agent.harness === 'claude') {
       this.agent.choice = this.choice;
       this.agent.configDir = claudeDirOf(claudeAccountOf(this.choice));
       this.agent.accountDirs = settings.providers.filter((p) => p.type === 'claude').map((p) => claudeDirOf(p.id) ?? machineClaudeDir());
@@ -326,10 +333,11 @@ class Session {
     }
     conv.choice = this.choice;
     conv.failed = this.failed;
-    if (agent?.isClaude) {
+    if (agent?.harness === 'claude') {
       conv.claudeSession = agent.sessionId;
       conv.claudeContext = agent.context;
     }
+    if (agent?.harness === 'antigravity') conv.agySession = agent.sessionId;
     if (this.draft.trim()) conv.draft = this.draft;
     else delete conv.draft;
     if (this.askDraft) conv.askDraft = this.askDraft;
@@ -504,7 +512,7 @@ const activeCwd = () => active?.cwd ?? settings.workspace;
 let observed: string | null = null;
 const viewCwd = () => observed ?? activeCwd();
 /** The private folder shown with the files: the conversation's, local models only. */
-const viewScratch = () => (!observed && active && active.choice.engine !== 'claude' ? scratchOf(active.key) : null);
+const viewScratch = () => (!observed && active && (active.choice.engine ?? 'local') === 'local' ? scratchOf(active.key) : null);
 /** The active session, a new one in the current project if there is none. */
 const current = () => active ?? activate(new Session({ cwd: settings.workspace }));
 const saveAll = () => { for (const s of sessions.values()) s.keepDraft(); };
@@ -671,7 +679,7 @@ async function serverModels(p: Provider) {
 }
 // The models by provider, Poney first. Claude's come through claude:status.
 handle('providers:models', [], async () => {
-  const groups = await Promise.all(settings.providers.filter((p) => p.enabled && p.type !== 'claude').map(async (p) => {
+  const groups = await Promise.all(settings.providers.filter((p) => p.enabled && p.type !== 'claude' && p.type !== 'antigravity').map(async (p) => {
     const provider = { id: p.id, type: p.type };
     if (p.type === 'poney') {
       const models = engineSupported() ? await poneyModels({ fresh: true }) : [];
@@ -819,12 +827,12 @@ handle('agent:reset', [], () => {
   return publicSettings();
 });
 
-// What to send to take up a turn that failed. A Claude conversation that failed before
+// What to send to take up a turn that failed. A Claude or Antigravity conversation that failed before
 // it had a session has nothing to go on from: its request again.
 handle('agent:retryText', [], () => {
   const s = current();
   const a = s.getAgent();
-  const asked = a.isClaude && !a.sessionId ? s.conv?.events.findLast((e) => e.type === 'user_message')?.text : null;
+  const asked = a.harness !== 'local' && !a.sessionId ? s.conv?.events.findLast((e) => e.type === 'user_message')?.text : null;
   return asked ?? 'Reprends là où tu t’es arrêté.';
 });
 // Resume the conversation from a past action: everything after it is removed,
@@ -918,6 +926,19 @@ handle('claude:status', [], async () => {
   };
 });
 // The plan's limits of the conversation's account, asked at most once a minute (it starts a process).
+// Antigravity: installed or not, and its models (asked once: it starts a process; again after a failure).
+let agyInfo: Promise<AntigravityStatus> | null = null;
+handle('antigravity:status', [], async () => {
+  const executable = findAgy();
+  const provider = settings.providers.find((p) => p.type === 'antigravity');
+  if (!executable || !provider?.enabled) return { installed: Boolean(executable), enabled: Boolean(provider?.enabled), models: [], error: null };
+  agyInfo ??= agyModels(executable).then((r) => {
+    if (r.error) agyInfo = null;
+    return { installed: true, enabled: true, ...r };
+  });
+  return agyInfo;
+});
+
 const claudeUsageInfo = new Map<string, { at: number; usage: ClaudeUsage }>();
 handle('claude:usage', [], async () => {
   const executable = findClaude();
@@ -960,7 +981,7 @@ handle('session:setChoice', [isObject], (patch) => {
   s.choice = { ...s.choice, ...patch };
   settings.lastChoice = s.choice;
   saveSettings();
-  if (s.agent && Boolean(s.agent.isClaude) === (s.choice.engine === 'claude')) s.applyConfig();
+  if (s.agent && s.agent.harness === (s.choice.engine ?? 'local')) s.applyConfig();
   if (s.conv) s.save({ touch: false });
   return publicSettings();
 });
@@ -1016,10 +1037,11 @@ handle('conversations:open', [isString], (id) => {
   a.systemPrompt = loaded.systemPrompt ?? null;
   a.checkpoints = loaded.checkpoints ?? [];
   a.archives = loaded.archives ?? [];
-  if (a.isClaude) {
+  if (a.harness === 'claude') {
     a.sessionId = loaded.claudeSession ?? null;
     a.context = loaded.claudeContext ?? null;
   }
+  if (a.harness === 'antigravity') a.sessionId = loaded.agySession ?? null;
   a.upgradeReasoning(); // older reasoning blocks -> short notes
   if (loaded.inProgress) {
     // The app stopped during a turn (crash, forced quit): say so, and how to go on.
@@ -1169,7 +1191,7 @@ handle('steps:set', [isObject], (steps) => {
 
 handle('prompt:get', [], async () => {
   const a = current().getAgent();
-  if (a.isClaude) return null; // (the Claude harness has its own)
+  if (a.harness !== 'local') return null; // (the Claude and Antigravity harnesses have their own)
   return { default: await a.defaultSystemPrompt(), custom: a.systemPrompt, running: a.running };
 });
 handle('prompt:set', [orNull(isString)], async (text) => {
@@ -1205,7 +1227,7 @@ handle('context:compact', [], async () => {
   const a = s.getAgent();
   if (a.running) throw new Error('L’agent est en cours d’exécution.');
   if (!a.messages.length) return { compacted: false, reason: 'La conversation est vide.' };
-  if (a.isClaude) throw new Error(LOCAL_ONLY);
+  if (a.harness !== 'local') throw new Error(LOCAL_ONLY);
   const r = await a.compact();
   s.save();
   return r;
@@ -1218,6 +1240,7 @@ handle('files:observe', [(v: unknown): v is string | null => v === null || isStr
 });
 handle('files:list', [optional(isString)], (rel) => listDir(viewCwd(), rel, viewScratch()));
 handle('files:read', [isString], (rel) => readFileForViewer(viewCwd(), rel, viewScratch()));
+handle('files:image', [isString], (src) => readImage(current().cwd || null, src));
 handle('files:openExternal', [isString], (rel) => shell.openPath(resolveInside(viewCwd(), rel, viewScratch()).abs));
 handle('files:reveal', [isString], (rel) => shell.showItemInFolder(resolveInside(viewCwd(), rel, viewScratch()).abs));
 // A file renamed in its folder, or put in the trash; busy: an agent works in the project meanwhile.

@@ -44,9 +44,14 @@ export function renderMarkdown(src: unknown, { forAnswer = true } = {}): string 
     .replace(/MATHPH(\d+)X/g, (_, i: string) => math[+i]);
 }
 
-/** An answer of the agent: tables in a scrolling frame (wide tables do not stretch the column). */
+/**
+ * An answer of the agent: tables in a scrolling frame (wide tables do not stretch the column).
+ * Its images are not loaded by the page: their address waits in data-src, for the app to read
+ * them (local files only, see showImages).
+ */
 export function markdown(src: unknown): string {
   return renderMarkdown(src, { forAnswer: true })
     .replace(/<table>/g, '<div class="table-wrap"><table>')
-    .replace(/<\/table>/g, '</table></div>');
+    .replace(/<\/table>/g, '</table></div>')
+    .replace(/<img src="/g, '<img class="answer-img" data-src="');
 }

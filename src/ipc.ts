@@ -1,6 +1,7 @@
 // What the main process and the window say to each other: for each channel, its
 // arguments and its reply. Types only. `src/main.ts` checks the arguments it
 // receives against these, `src/preload.cts` builds `window.api` from them.
+import type { AgyModel } from './agent/antigravity.ts';
 import type { claudeModels, claudeUsage } from './agent/claude.ts';
 import type { Skill } from './agent/skills.ts';
 import type { TorStatus } from './agent/tor.ts';
@@ -65,6 +66,14 @@ export interface ClaudeAccount {
   plan: string | null;
   loggedIn: boolean;
   models: ClaudeModel[];
+}
+
+/** Antigravity (agy): its models, or why there are none. */
+export interface AntigravityStatus {
+  installed: boolean;
+  enabled: boolean;
+  models: AgyModel[];
+  error: string | null;
 }
 
 export interface ClaudeStatus {
@@ -165,6 +174,7 @@ export interface Channels {
   'session:setDraft': [[text: string], void];
   'session:setAskDraft': [[draft: AskDraft | null], void];
   'claude:status': [[], ClaudeStatus];
+  'antigravity:status': [[], AntigravityStatus];
   'claude:usage': [[], ClaudeUsage];
   'claude:addAccount': [[], { settings: PublicSettings; id: string }];
   'claude:login': [[id: string], boolean];
@@ -185,6 +195,7 @@ export interface Channels {
   'files:observe': [[dir: string | null], void];
   'files:list': [[rel?: string], FileEntries];
   'files:read': [[rel: string], ViewedFile];
+  'files:image': [[src: string], string | null];
   'files:openExternal': [[rel: string], string];
   'files:reveal': [[rel: string], void];
   'files:apps': [[rel: string], OpeningApps];
