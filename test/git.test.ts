@@ -4,7 +4,8 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseStatus, parseLog, fileStates, gitFileStates, gitStatus, gitDiff, gitSync, gitConnect, gitRemote, gitChangeRemote, gitRemoveRemote, gitBranches, gitSwitch, gitCreateBranch, createGithubRepo, githubAccount, readyGh, GITHUB_TOKEN_PAGE } from '../src/git.ts';
+import { parseStatus, parseLog, fileStates, gitFileStates, gitStatus, gitDiff, gitSync, gitConnect, gitRemote, gitChangeRemote, gitRemoveRemote, gitBranches, gitSwitch, gitCreateBranch, createGithubRepo, githubAccount, readyGh, GITHUB_TOKEN_PAGE, credentialEnv, gitClone } from '../src/git.ts';
+import { repoName, tokenUrl } from '../src/remote-url.ts';
 import { errorMessage } from '../src/unknown.ts';
 
 const run = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
@@ -385,4 +386,48 @@ test('a switch that would lose changes is refused, and the changes stay', async 
   await assert.rejects(gitSwitch(dir, 'other'), /Impossible de passer sur other/);
   assert.equal(fs.readFileSync(path.join(dir, 'a.txt'), 'utf8'), 'mine\n');
   assert.equal((await status(dir)).branch, 'main');
+});
+
+/** What git would send to a remote at this address, with these tokens. */
+function credentials(url: string, env: Record<string, string | undefined>) {
+  const out = execFileSync('git', ['credential', 'fill'], {
+    input: `url=${url}\n\n`, encoding: 'utf8',
+    env: { ...process.env, ...env, GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_NOSYSTEM: '1', HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'poney-home-')) },
+  });
+  return Object.fromEntries(out.trim().split('\n').map((l): [string, string] => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
+}
+
+test('the saved tokens answer git for their addresses, the most precise one first', () => {
+  const env = credentialEnv([
+    { url: 'https://github.com', user: 'x-access-token', token: 'general' },
+    { url: 'https://github.com/mon-org', user: 'x-access-token', token: 'org' },
+    { url: 'https://gitlab.example.com', user: 'moi', token: 'lab' },
+  ]);
+  assert.equal(credentials('https://github.com/quelquun/projet.git', env).password, 'general');
+  assert.equal(credentials('https://github.com/mon-org/projet.git', env).password, 'org');
+  const lab = credentials('https://gitlab.example.com/groupe/projet.git', env);
+  assert.deepEqual([lab.username, lab.password], ['moi', 'lab']);
+  assert.throws(() => credentials('https://ailleurs.example.com/projet.git', env)); // (nothing answers, and nothing prompts)
+});
+
+test('a token address is https without a trailing slash; a clone goes to a folder named after the repository', async () => {
+  assert.equal(tokenUrl('GitLab.example.com/'), 'https://gitlab.example.com');
+  assert.equal(tokenUrl('https://github.com/mon-org/'), 'https://github.com/mon-org');
+  assert.equal(tokenUrl('https://moi:secret@github.com'), null);
+  assert.equal(tokenUrl('ftp://example.com'), null);
+  assert.equal(repoName('git@github.com:moi/projet.git'), 'projet');
+  assert.equal(repoName('https://gitlab.example.com/groupe/sous/outil/'), 'outil');
+  assert.equal(repoName('/chemin/local/depot.git'), 'depot');
+
+  const source = repo();
+  write(source, 'a.txt', 'a\n');
+  run(source, 'add', '.');
+  run(source, 'commit', '-q', '-m', 'a');
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'poney-clone-'));
+  const dest = await gitClone(parent, source);
+  assert.equal(dest, path.join(parent, path.basename(source)));
+  assert.equal(fs.readFileSync(path.join(dest, 'a.txt'), 'utf8'), 'a\n');
+  await assert.rejects(gitClone(parent, source), /existe déjà/);
+  await assert.rejects(gitClone(parent, path.join(parent, 'absent.git')), /Échec du clonage/);
+  assert.ok(!fs.existsSync(path.join(parent, 'absent')));
 });

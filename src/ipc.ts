@@ -72,11 +72,11 @@ export interface ClaudeStatus {
   accounts: ClaudeAccount[];
 }
 
-export interface GithubStatus {
+/** gh's login, and the tokens saved for remote repositories (never the tokens themselves). */
+export interface RemotesStatus {
   ghInstalled: boolean;
   gh: string | null;
-  tokenSaved: boolean;
-  token: string | null;
+  tokens: { id: string; url: string; user: string; account: string | null }[];
   canSave: boolean;
 }
 
@@ -201,10 +201,12 @@ export interface Channels {
   'git:setRemote': [[dir: string, url: string], void];
   'git:removeRemote': [[dir: string], void];
   'git:createGithub': [[repo: { name: string; isPrivate: boolean; token: string }], void];
-  'github:status': [[], GithubStatus];
+  'remotes:status': [[], RemotesStatus];
   'github:openTokenPage': [[], void];
-  'github:setToken': [[token: string], GithubStatus];
-  'github:removeToken': [[], GithubStatus];
+  'remotes:addToken': [[token: { url: string; token: string; user?: string }], RemotesStatus];
+  'remotes:removeToken': [[id: string], RemotesStatus];
+  'git:clone': [[url: string, parent: string], string];
+  'dialog:folder': [[from: string | null], string | null];
 }
 
 export type Channel = keyof Channels;

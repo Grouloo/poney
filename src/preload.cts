@@ -113,10 +113,12 @@ const api = {
   gitRemote: call('git:remote'),
   gitSetRemote: call('git:setRemote'),
   gitRemoveRemote: call('git:removeRemote'),
-  githubStatus: call('github:status'),
+  remotesStatus: call('remotes:status'),
   githubOpenTokenPage: call('github:openTokenPage'),
-  githubSetToken: call('github:setToken'),
-  githubRemoveToken: call('github:removeToken'),
+  addRemoteToken: call('remotes:addToken'),
+  removeRemoteToken: call('remotes:removeToken'),
+  gitClone: call('git:clone'),
+  chooseFolder: call('dialog:folder'),
   gitCreateGithub: call('git:createGithub'),
 };
 

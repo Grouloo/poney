@@ -10,7 +10,9 @@ import { EMOJIS, ICONS, ICON_COLORS, iconSvg } from './project-icons.ts';
 import { fileIconSvg, folderIconSvg, privateFolderIconSvg } from './file-icons.ts';
 import DOMPurify from '../../node_modules/dompurify/dist/purify.es.mjs';
 import type { Api } from '../preload.cts';
-import type { AppAlert, ClaudeAccount, ClaudeStatus, FileStates, GithubStatus, ListedSkill, ModelGroup, OpeningApps, SessionApproval, SessionEvent, SessionView, SystemPromptView } from '../ipc.ts';
+import { isGithub, repoName } from '../remote-url.ts';
+import type { RemotesStatus } from '../ipc.ts';
+import type { AppAlert, ClaudeAccount, ClaudeStatus, FileStates, ListedSkill, ModelGroup, OpeningApps, SessionApproval, SessionEvent, SessionView, SystemPromptView } from '../ipc.ts';
 import type { TorStatus } from '../agent/tor.ts';
 import type { GitFile, GitRepoStatus } from '../git.ts';
 import type { ViewedFile } from '../files.ts';
@@ -719,7 +721,7 @@ closeOnOutside(settingsDialog);
 closeOnOutside($<HTMLDialogElement>('projectDialog'));
 const showSettingsPage = navDialog(settingsDialog);
 function openSettings(page?: string) {
-  changeGithub(window.api.githubStatus);
+  changeRemotes(window.api.remotesStatus);
   if (page) showSettingsPage(page);
   renderProviders();
   refreshModels(); // (a server started or stopped since)
@@ -941,7 +943,9 @@ function openWelcomeMenu() {
     row(projectGlyph(key), projectLabel(key), key === OFF_KEY ? '' : key,
       () => key !== activeProject() && newConversationIn(key === OFF_KEY ? null : key, { keepText: true }), key === activeProject());
   }
+  menu.appendChild(div('pm-sep'));
   row('＋', 'Ajouter un projet…', 'Choisir un dossier', addProject);
+  row(CLONE_ICON, 'Ajouter depuis un dépôt distant…', 'Cloner un dépôt Git dans un nouveau dossier', openCloneDialog);
   menu.classList.remove('hidden');
   $('welcomePicker').classList.add('open');
 }
@@ -2832,9 +2836,16 @@ function openProjectMenu() {
   add.innerHTML = '<span class="pm-icon">＋</span><span class="pm-name">Ajouter un projet…</span>';
   add.dataset.tip = `Choisir un dossier (${shortcutText(SHORTCUTS.addProject)})`;
   add.onclick = () => { closeProjectMenu(); addProject(); };
-  menu.appendChild(add);
+  menu.append(div('pm-sep'), add, cloneRow(closeProjectMenu));
   menu.classList.remove('hidden');
   $<HTMLButtonElement>('projectPicker').classList.add('open');
+}
+/** The row of a project menu that clones a remote repository. */
+function cloneRow(close: () => void) {
+  const row = div('pm-row', `<span class="pm-icon">${CLONE_ICON}</span><span class="pm-name">Ajouter depuis un dépôt distant…</span>`);
+  row.dataset.tip = 'Cloner un dépôt Git dans un nouveau dossier';
+  row.onclick = () => { close(); openCloneDialog(); };
+  return row;
 }
 function closeProjectMenu() {
   $('projectMenu').classList.add('hidden');
@@ -2865,7 +2876,7 @@ function openViewMenu() {
   add.innerHTML = '<span class="pm-icon">＋</span><span class="pm-name">Ajouter un projet…</span>';
   add.dataset.tip = `Choisir un dossier (${shortcutText(SHORTCUTS.addProject)})`;
   add.onclick = () => { closeViewMenu(); addProject(); };
-  menu.appendChild(add);
+  menu.append(div('pm-sep'), add, cloneRow(closeViewMenu));
   menu.classList.remove('hidden');
   $<HTMLButtonElement>('viewPicker').classList.add('open');
 }
@@ -3708,6 +3719,8 @@ async function refreshTree() {
     return;
   }
   treeStates = viewOff() ? {} : await window.api.gitFileStates().catch(() => ({}));
+  for (const t of viewerTabs) if (t.dir === listedDir) t.state = treeStates[t.path];
+  renderTabs();
   await renderDir('.', $('fileTree'));
 }
 $<HTMLButtonElement>('refreshFiles').onclick = () => filesSection === 'git' ? refreshGit({ force: true }) : refreshTree();
@@ -3983,6 +3996,55 @@ async function syncGit() {
 }
 
 // A remote for a repository without one: an existing one, or a new one on GitHub.
+// ---------- a project from a remote repository: cloned into a folder named after it ----------
+const CLONE_ICON = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 11.5a3 3 0 0 1-.4-6A4 4 0 0 1 11.8 5a2.8 2.8 0 0 1 .2 6.5"/><path d="M8 7.5v6M5.8 11.3 8 13.5l2.2-2.2"/></svg>';
+const cloneDialog = $<HTMLDialogElement>('cloneDialog');
+closeOnOutside(cloneDialog, () => Boolean($<HTMLInputElement>('cloneUrl').value));
+const cloneTarget = () => {
+  const place = $<HTMLInputElement>('clonePlace').value.trim().replace(/[\\/]+$/, '');
+  const name = repoName($<HTMLInputElement>('cloneUrl').value);
+  return place && name ? `${place}/${name}` : '';
+};
+const showCloneTarget = () => {
+  const target = cloneTarget();
+  $('cloneTarget').textContent = target || ($<HTMLInputElement>('clonePlace').value.trim() ? 'l’adresse du dépôt manque' : 'l’emplacement manque');
+  $('cloneTarget').classList.toggle('muted', !target);
+};
+function openCloneDialog() {
+  const here = activeDir();
+  $<HTMLInputElement>('cloneUrl').value = '';
+  if (!$<HTMLInputElement>('clonePlace').value) $<HTMLInputElement>('clonePlace').value = here ? here.replace(/[\\/][^\\/]+[\\/]?$/, '') : '';
+  $('cloneError').textContent = '';
+  $<HTMLButtonElement>('cloneSubmit').disabled = false;
+  showCloneTarget();
+  cloneDialog.showModal();
+  $('cloneUrl').focus();
+}
+for (const id of ['cloneUrl', 'clonePlace']) $(id).addEventListener('input', showCloneTarget);
+$<HTMLButtonElement>('cloneChoose').onclick = async () => {
+  const dir = await window.api.chooseFolder($<HTMLInputElement>('clonePlace').value.trim() || null);
+  if (dir) $<HTMLInputElement>('clonePlace').value = dir;
+  showCloneTarget();
+};
+for (const id of ['cloneCancel', 'cloneClose']) $(id).onclick = () => cloneDialog.close();
+$<HTMLFormElement>('cloneForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (!cloneTarget()) { $('cloneError').textContent = 'Indiquez l’adresse du dépôt et son emplacement.'; return; }
+  $<HTMLButtonElement>('cloneSubmit').disabled = true;
+  $<HTMLButtonElement>('cloneSubmit').textContent = 'Clonage…';
+  $('cloneError').textContent = '';
+  try {
+    const dir = await window.api.gitClone($<HTMLInputElement>('cloneUrl').value, $<HTMLInputElement>('clonePlace').value.trim());
+    cloneDialog.close();
+    await newConversationIn(dir);
+  } catch (err) {
+    $('cloneError').textContent = errorText(err);
+  } finally {
+    $<HTMLButtonElement>('cloneSubmit').disabled = false;
+    $<HTMLButtonElement>('cloneSubmit').textContent = 'Cloner';
+  }
+});
+
 const remoteDialog = $<HTMLDialogElement>('remoteDialog');
 closeOnOutside(remoteDialog, () => Boolean($<HTMLInputElement>('remoteUrl').value || $<HTMLInputElement>('remoteToken').value));
 const remoteKind = () => remoteDialog.querySelector<HTMLInputElement>('[name=remoteKind]:checked')!.value;
@@ -4007,11 +4069,12 @@ async function openRemoteDialog() {
   $<HTMLButtonElement>('remoteSubmit').disabled = false;
   remoteDialog.showModal();
   showRemoteKind();
-  const gh = await window.api.githubStatus().catch(() => null);
-  $('remoteTokenRow').classList.toggle('hidden', Boolean(gh?.gh || gh?.tokenSaved));
+  const gh = await window.api.remotesStatus().catch(() => null);
+  const tokenSaved = Boolean(gh?.tokens.some((t) => isGithub(t.url)));
+  $('remoteTokenRow').classList.toggle('hidden', Boolean(gh?.gh || tokenSaved));
   $('remoteNote').textContent = gh?.gh
     ? 'Le dépôt est créé avec le compte connecté à gh, puis la branche y est envoyée.'
-    : gh?.tokenSaved
+    : tokenSaved
       ? 'Le dépôt est créé avec le jeton des réglages, puis la branche y est envoyée avec votre connexion Git habituelle.'
       : 'gh n’est pas disponible : il faut un jeton GitHub (à enregistrer dans Réglages › GitHub, ou pour cette fois ici). Le formulaire de GitHub s’ouvre pré-rempli : choisissez seulement « All repositories ». La branche est ensuite envoyée avec votre connexion Git habituelle.';
 }
@@ -4045,33 +4108,53 @@ $<HTMLFormElement>('remoteForm').addEventListener('submit', async (e) => {
   onFilesChanged();
 });
 
-// The GitHub page of the settings.
-function showGithub(st: GithubStatus) {
-  $('githubGh').textContent = st.gh ? `gh : connecté${st.gh === '?' ? '' : ` en tant que ${st.gh}`} (utilisé en premier).`
+// The page of the settings for remote repositories: gh's login, and the tokens by address.
+function showRemotes(st: RemotesStatus) {
+  $('remotesGh').textContent = st.gh ? `gh : connecté${st.gh === '?' ? '' : ` en tant que ${st.gh}`} (utilisé en premier pour GitHub).`
     : st.ghInstalled ? 'gh : installé, mais pas connecté. Lancez « gh auth login » dans un terminal.' : 'gh : pas installé.';
-  $('githubSaved').textContent = !st.tokenSaved ? 'Jeton : aucun.' : st.token ? `Jeton : enregistré, compte ${st.token}.` : 'Jeton : enregistré, mais son compte n’a pas pu être vérifié.';
-  $<HTMLButtonElement>('githubRemove').disabled = !st.tokenSaved;
-  $<HTMLButtonElement>('githubSave').disabled = !st.canSave;
+  const rows = st.tokens.map((t) => {
+    const row = div('token-row');
+    row.innerHTML = '<span class="token-url"></span><span class="token-who muted"></span><button type="button" class="ghost">Retirer</button>';
+    row.querySelector<HTMLElement>('.token-url')!.textContent = t.url.replace(/^https:\/\//, '');
+    row.querySelector<HTMLElement>('.token-who')!.textContent = t.account ? `compte ${t.account}` : isGithub(t.url) ? 'compte non vérifié' : t.user;
+    row.querySelector('button')!.onclick = () => {
+      if (confirm(`Retirer le jeton de ${t.url} ? Il reste valide sur le service tant que vous ne l’y révoquez pas.`)) changeRemotes(() => window.api.removeRemoteToken(t.id));
+    };
+    return row;
+  });
+  $('remoteTokens').replaceChildren(...(rows.length ? rows : [div('token-row muted', 'Aucun jeton : Git utilise votre connexion habituelle.')]));
+  $<HTMLButtonElement>('tokenAdd').disabled = !st.canSave;
 }
-async function changeGithub(change: () => Promise<GithubStatus>) {
-  $('githubError').textContent = '';
+async function changeRemotes(change: () => Promise<RemotesStatus>) {
+  $('remotesError').textContent = '';
   try {
-    showGithub(await change());
-    $<HTMLInputElement>('githubToken').value = '';
+    showRemotes(await change());
+    return true;
   } catch (e) {
-    $('githubError').textContent = errorText(e);
+    $('remotesError').textContent = errorText(e);
+    return false;
   }
 }
-const saveGithubToken = () => changeGithub(() => window.api.githubSetToken($<HTMLInputElement>('githubToken').value));
-$<HTMLButtonElement>('githubSave').onclick = saveGithubToken;
+async function addToken() {
+  const field = (id: string) => $<HTMLInputElement>(id).value;
+  if (await changeRemotes(() => window.api.addRemoteToken({ url: field('tokenUrl'), token: field('tokenValue'), user: field('tokenUser') }))) {
+    for (const id of ['tokenValue', 'tokenUser']) $<HTMLInputElement>(id).value = '';
+  }
+}
+$<HTMLButtonElement>('tokenAdd').onclick = addToken;
+const showTokenKind = () => {
+  const github = /^(https?:\/\/)?github\.com(\/|$)/i.test($<HTMLInputElement>('tokenUrl').value.trim());
+  $('githubCreateToken').classList.toggle('hidden', !github);
+  $<HTMLInputElement>('tokenValue').placeholder = github ? 'github_pat_…' : 'le jeton d’accès';
+};
+$('tokenUrl').addEventListener('input', showTokenKind);
 for (const id of ['githubCreateToken', 'remoteCreateToken']) $(id).onclick = () => window.api.githubOpenTokenPage();
-$<HTMLButtonElement>('githubRemove').onclick = () => { if (confirm('Retirer le jeton GitHub de Poney ? Il reste valide chez GitHub tant que vous ne l’y révoquez pas.')) changeGithub(window.api.githubRemoveToken); };
-$<HTMLInputElement>('githubToken').addEventListener('keydown', (e) => {
+for (const id of ['tokenUrl', 'tokenValue', 'tokenUser']) $<HTMLInputElement>(id).addEventListener('keydown', (e) => {
   if (e.key !== 'Enter') return;
   e.preventDefault(); // (not the settings' form)
-  saveGithubToken();
+  addToken();
 });
-settingsDialog.addEventListener('close', () => { $<HTMLInputElement>('githubToken').value = ''; });
+settingsDialog.addEventListener('close', () => { $<HTMLInputElement>('tokenValue').value = ''; });
 
 // The diff of a file, in its own side panel.
 function closeDiffPanel() {
@@ -4178,7 +4261,7 @@ function viewing(): Viewing | null {
 
 // ---------- the viewer's tabs: a middle click opens a file beside the one shown ----------
 /** The files open in the viewer (a bar shows from two), each read through its pane. */
-let viewerTabs: { path: string; pane: Pane | null; scroll: number }[] = [];
+let viewerTabs: { path: string; pane: Pane | null; scroll: number; dir: string | null; state?: string }[] = [];
 
 function renderTabs() {
   const bar = $('viewerTabs');
@@ -4186,7 +4269,7 @@ function renderTabs() {
   bar.innerHTML = '';
   for (const t of viewerTabs) {
     const tab = document.createElement('div');
-    tab.className = 'viewer-tab' + (t.path === openPath ? ' active' : '');
+    tab.className = 'viewer-tab' + (t.path === openPath ? ' active' : '') + (t.state ? ` gs-${t.state}` : ''); // (its Git state, as in the tree)
     tab.title = t.path;
     const name = t.path.split('/').pop() ?? t.path;
     tab.innerHTML = `${fileIconSvg(name)}<span class="name">${esc(name)}</span><button class="ghost icon" title="Fermer">✕</button>`;
@@ -4251,7 +4334,8 @@ async function openFile(rel: string, { keepScroll = false, over, tab = false }: 
   const f = read;
   if (f.path !== openPath) viewerSelection = null;
   openPath = f.path;
-  const entry = { path: f.path, pane: viewerPane, scroll };
+  const dir = inPane(viewerPane ?? focused, activeDir);
+  const entry = { path: f.path, pane: viewerPane, scroll, dir, state: dir === listedDir ? treeStates[f.path] : undefined };
   const at = viewerTabs.findIndex((t) => t.path === f.path);
   const from = viewerTabs.findIndex((t) => t.path === shown);
   if (at >= 0) viewerTabs[at].pane = viewerPane;
@@ -4269,13 +4353,15 @@ async function openFile(rel: string, { keepScroll = false, over, tab = false }: 
   document.querySelectorAll<HTMLElement>('.tree .node').forEach((n) => n.classList.toggle('active', n.dataset.path === f.path));
 
   const markdownFile = f.kind === 'text' && /\.(md|markdown|mdx)$/i.test(f.path);
-  $<HTMLButtonElement>('viewerMode').classList.toggle('hidden', !markdownFile);
-  if (markdownFile && mdView === 'preview') {
+  const proseFile = f.kind === 'text' && /\.txt$/i.test(f.path);
+  $<HTMLButtonElement>('viewerMode').classList.toggle('hidden', !markdownFile && !proseFile);
+  if ((markdownFile || proseFile) && f.kind === 'text' && mdView === 'preview') {
     $<HTMLButtonElement>('viewerMode').textContent = 'Code';
     $('viewerInfo').textContent = `${f.content.split('\n').length} lignes · ${formatSize(f.size)}${f.truncated ? ' · tronqué' : ''}`;
-    showDocument(body, f);
+    if (markdownFile) showDocument(body, f);
+    else showProse(body, f.content);
   } else if (f.kind === 'text') {
-    if (markdownFile) $<HTMLButtonElement>('viewerMode').textContent = 'Aperçu';
+    if (markdownFile || proseFile) $<HTMLButtonElement>('viewerMode').textContent = 'Aperçu';
     const lines = f.content.split('\n');
     if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
     $('viewerInfo').textContent = `${lines.length} lignes · ${formatSize(f.size)}${f.truncated ? ' · tronqué' : ''}`;
@@ -4321,6 +4407,22 @@ function resolveLink(from: string, href: string) {
     if (seg === '..') { if (!parts.length) return null; parts.pop(); } else if (seg && seg !== '.') parts.push(seg);
   }
   return parts.join('/') || null;
+}
+
+/** A text file as a page: its paragraphs wrapped, its web addresses as links. */
+function showProse(body: HTMLElement, text: string) {
+  const doc = document.createElement('article');
+  doc.className = 'md-doc prose-doc';
+  const linked = (s: string) => esc(s).replace(/\bhttps?:\/\/[^\s<>"']+[^\s<>"'.,;:!?)\]]/g, (url) => `<a href="${url}">${url}</a>`);
+  doc.innerHTML = text.replace(/\r\n?/g, '\n').split(/\n[ \t]*\n+/).filter((p) => p.trim())
+    .map((p) => `<p>${p.replace(/^\n+|\n+$/g, '').split('\n').map(linked).join('<br>')}</p>`).join('');
+  doc.addEventListener('click', (e) => {
+    const a = (e.target as HTMLElement).closest<HTMLAnchorElement>('a[href]');
+    if (!a) return;
+    e.preventDefault();
+    window.open(a.getAttribute('href') ?? '');
+  });
+  body.replaceChildren(doc);
 }
 
 function showDocument(body: HTMLElement, f: ViewedFile & { kind: 'text' }) {

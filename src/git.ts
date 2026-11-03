@@ -1,11 +1,12 @@
 // Git for the sidebar: the state of the repository, a file's diff, and the sync.
 // No Electron here. Nothing prompts, no credential is read here (GitHub goes through
-// gh's own login, or a token the caller gives), and reading a repository runs none of the
+// gh's own login, or tokens the caller gives), and reading a repository runs none of the
 // programs its config can name (fsmonitor, external diff, textconv).
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { errorMessage, list, parseJson, rec, str } from './unknown.ts';
+import { repoName } from './remote-url.ts';
 
 type Env = Record<string, string | undefined>;
 
@@ -406,4 +407,43 @@ function githubMessage(text: unknown): string {
   } catch {
     return String(text ?? '').trim().split('\n')[0];
   }
+}
+
+/** A token for the remotes whose address begins with its url. */
+export type RemoteToken = { url: string; user: string; token: string };
+
+/**
+ * The environment that gives git the saved tokens, through a credential helper
+ * of its command line: for each address, the helpers set before are dropped
+ * (the more precise address comes last, so it wins), and the token answers.
+ */
+export function credentialEnv(tokens: RemoteToken[]): Env {
+  const env: Env = {};
+  let n = 0;
+  const set = (key: string, value: string) => { env[`GIT_CONFIG_KEY_${n}`] = key; env[`GIT_CONFIG_VALUE_${n++}`] = value; };
+  [...tokens].sort((a, b) => a.url.length - b.url.length).forEach((t, i) => {
+    env[`PONEY_GIT_USER_${i}`] = t.user;
+    env[`PONEY_GIT_TOKEN_${i}`] = t.token;
+    set(`credential.${t.url}.helper`, '');
+    set(`credential.${t.url}.helper`, `!f() { test "$1" = get && printf 'username=%s\\npassword=%s\\n' "$PONEY_GIT_USER_${i}" "$PONEY_GIT_TOKEN_${i}"; }; f`);
+  });
+  if (n) env.GIT_CONFIG_COUNT = String(n);
+  return env;
+}
+
+/** Clones a repository into a new folder of parent, named after it; returns that folder. */
+export async function gitClone(parent: string, url: unknown, env?: Env): Promise<string> {
+  const target = String(url ?? '').trim();
+  if (!target || target.startsWith('-')) throw plain('Indiquez l’adresse du dépôt distant.');
+  const name = repoName(target);
+  if (!name) throw plain('Cette adresse ne donne pas de nom de dossier.');
+  const dest = path.join(parent, name);
+  if (fs.existsSync(dest)) throw plain(`Le dossier ${dest} existe déjà.`);
+  try {
+    await git(parent, ['clone', '--quiet', '--', target, dest], { timeout: 600000, env });
+  } catch (e) {
+    fs.rmSync(dest, { recursive: true, force: true }); // (what a failed clone left)
+    throw plain(`Échec du clonage : ${reason(e)}`);
+  }
+  return dest;
 }

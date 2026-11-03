@@ -15,9 +15,10 @@ import { scanModels, sameModelFile } from './engine/models.ts';
 import type { LocalModel } from './types.ts';
 import { addClaudeAccount, addServer, CLAUDE, claudeAccountOf, loadProviders, modelConfig, providerOf, removeProvider, savedConfig, unavailable, updateProvider } from './providers.ts';
 import { ConversationStore, moveAppData } from './conversations.ts';
+import { isGithub, tokenUrl } from './remote-url.ts';
 import { appsToOpen, listDir, openWith, readFileForViewer, type OpeningApp } from './files.ts';
 import { resolveInside } from './agent/tools.ts';
-import { gitFileStates, gitBranches, gitSwitch, gitCreateBranch, createGithubRepo, findGh, GITHUB_TOKEN_PAGE, gitChangeRemote, githubAccount, gitStatus, gitConnect, gitDiff, gitFetch, gitRemote, gitRemoveRemote, gitSync, readyGh } from './git.ts';
+import { credentialEnv, gitClone, type RemoteToken, gitFileStates, gitBranches, gitSwitch, gitCreateBranch, createGithubRepo, findGh, GITHUB_TOKEN_PAGE, gitChangeRemote, githubAccount, gitStatus, gitConnect, gitDiff, gitFetch, gitRemote, gitRemoveRemote, gitSync, readyGh } from './git.ts';
 import { migrateLegacy, rebuildHistory, rebuildForAction } from './agent/rebuild.ts';
 import { checkTor, torStatus, newCircuits, findTorProxy, requireTor, proxyEnv } from './agent/tor.ts';
 import { errorMessage, isBoolean, isNumber, isRecord, isString, isStringArray, list, parseJson, rec, str } from './unknown.ts';
@@ -1230,8 +1231,11 @@ handle('files:openWith', [isString, orNull(isString)], async (rel, chosen) => {
   }
   await openWith(abs, appPath);
 });
-// (git goes through the network like a terminal command: the same Tor setting)
-const gitEnv = async () => settings.config.torEnabled && settings.config.torShell ? proxyEnv(await requireTor(settings.config.torProxy)) : {};
+// (git goes through the network like a terminal command: the same Tor setting; the saved tokens answer it)
+const gitEnv = async () => ({
+  ...settings.config.torEnabled && settings.config.torShell ? proxyEnv(await requireTor(settings.config.torProxy)) : {},
+  ...credentialEnv(savedTokens()),
+});
 handle('git:status', [], () => gitStatus(viewCwd()));
 handle('git:fileStates', [], () => gitFileStates(viewCwd()));
 handle('git:diff', [isString, optional(isObject)], (file, opts) => gitDiff(viewCwd(), file, opts));
@@ -1244,53 +1248,83 @@ handle('git:connect', [isString], async (url) => gitConnect(viewCwd(), url, awai
 handle('git:remote', [nullable(isString)], (dir) => gitRemote(dir));
 handle('git:setRemote', [isString, isString], async (dir, url) => gitChangeRemote(dir, url, await gitEnv()));
 handle('git:removeRemote', [isString], (dir) => gitRemoveRemote(dir));
+handle('git:clone', [isString, isString], async (url, parent) => {
+  if (!path.isAbsolute(parent) || !fs.statSync(parent, { throwIfNoEntry: false })?.isDirectory()) throw new Error('Choisissez un emplacement existant.');
+  return gitClone(parent, url, await gitEnv());
+});
+handle('dialog:folder', [orNull(isString)], async (from) => {
+  const r = await pickFrom({ properties: ['openDirectory', 'createDirectory'], defaultPath: from || os.homedir() });
+  return r.canceled ? null : r.filePaths[0] ?? null;
+});
 
-// ---------- GitHub ----------
-// The token is encrypted by the system, in a file of its own: the settings go to the
-// interface, it never does.
-const githubTokenFile = () => path.join(app.getPath('userData'), 'github-token');
-const savedGithubToken = () => {
+// ---------- remote repositories: tokens ----------
+// The tokens are encrypted by the system, in a file of their own: the settings go to the
+// interface, they never do. Git gets them for the addresses they were given for.
+type SavedToken = RemoteToken & { id: string };
+const tokensFile = () => path.join(app.getPath('userData'), 'remote-tokens');
+const legacyGithubFile = () => path.join(app.getPath('userData'), 'github-token');
+const decrypt = (file: string) => {
   try {
-    return safeStorage.decryptString(fs.readFileSync(githubTokenFile()));
+    return safeStorage.decryptString(fs.readFileSync(file));
   } catch {
-    return '';
+    return null;
   }
 };
-// (a token goes through this process, which no proxy covers)
+const writeTokens = (tokens: SavedToken[]) => fs.writeFileSync(tokensFile(), safeStorage.encryptString(JSON.stringify(tokens)), { mode: 0o600 });
+function savedTokens(): SavedToken[] {
+  const text = decrypt(tokensFile());
+  if (text === null) {
+    const old = decrypt(legacyGithubFile()); // (the single GitHub token of before)
+    if (!old) return [];
+    const tokens = [{ id: 'github', url: 'https://github.com', user: 'x-access-token', token: old }];
+    writeTokens(tokens);
+    fs.rmSync(legacyGithubFile(), { force: true });
+    return tokens;
+  }
+  return list(parseJson(text)).filter(isRecord).map((t) => ({ id: str(t.id), url: str(t.url), user: str(t.user), token: str(t.token) })).filter((t) => t.id && t.url && t.token);
+}
+const githubToken = () => savedTokens().find((t) => isGithub(t.url))?.token ?? '';
+// (a token checked with GitHub goes through this process, which no proxy covers)
 const noDirectGithub = () => settings.config.torEnabled && settings.config.torShell;
-async function githubStatus() {
+async function remotesStatus() {
   const env = await gitEnv().catch(() => ({}));
   const gh = await readyGh();
-  const token = savedGithubToken();
   const account = (o: { gh?: string; token?: string }) => githubAccount({ ...o, env }).catch(() => null);
   return {
     ghInstalled: Boolean(findGh()),
     gh: gh ? await account({ gh }) ?? '?' : null, // (logged in: its account, if it answers)
-    tokenSaved: Boolean(token),
-    token: token && !noDirectGithub() ? await account({ token }) : null,
+    tokens: await Promise.all(savedTokens().map(async (t) => ({
+      id: t.id, url: t.url, user: t.user,
+      account: isGithub(t.url) && !noDirectGithub() ? await account({ token: t.token }) : null,
+    }))),
     canSave: safeStorage.isEncryptionAvailable(),
   };
 }
-handle('github:status', [], githubStatus);
+handle('remotes:status', [], remotesStatus);
 handle('github:openTokenPage', [], () => shell.openExternal(GITHUB_TOKEN_PAGE));
-handle('github:setToken', [isString], async (token) => {
-  if (noDirectGithub()) throw new Error('Un jeton ne peut pas être vérifié à travers Tor : utilisez gh.');
+handle('remotes:addToken', [isObject], async ({ url, token, user }) => {
   if (!safeStorage.isEncryptionAvailable()) throw new Error('Le chiffrement du système n’est pas disponible : le jeton ne peut pas être enregistré.');
+  const where = tokenUrl(String(url ?? ''));
+  if (!where) throw new Error('Indiquez l’adresse du service, par exemple https://gitlab.com.');
   const clean = String(token ?? '').trim();
-  if (!clean) throw new Error('Collez un jeton GitHub.');
-  await githubAccount({ token: clean });
-  fs.writeFileSync(githubTokenFile(), safeStorage.encryptString(clean), { mode: 0o600 });
-  return githubStatus();
+  if (!clean) throw new Error('Collez un jeton.');
+  if (isGithub(where)) {
+    if (noDirectGithub()) throw new Error('Un jeton GitHub ne peut pas être vérifié à travers Tor : utilisez gh.');
+    await githubAccount({ token: clean });
+  }
+  const name = String(user ?? '').trim() || (isGithub(where) ? 'x-access-token' : 'oauth2');
+  writeTokens([...savedTokens(), { id: crypto.randomUUID(), url: where, user: name, token: clean }]);
+  return remotesStatus();
 });
-handle('github:removeToken', [], () => {
-  fs.rmSync(githubTokenFile(), { force: true });
-  return githubStatus();
+handle('remotes:removeToken', [isString], (id) => {
+  writeTokens(savedTokens().filter((t) => t.id !== id));
+  return remotesStatus();
 });
 handle('git:createGithub', [isObject], async ({ name, isPrivate, token }) => {
   const env = await gitEnv();
   const gh = await readyGh();
   if (!gh && noDirectGithub()) throw new Error('La création sur GitHub avec un jeton ne passe pas par Tor : installez gh, ou raccordez un dépôt existant.');
-  const url = await createGithubRepo({ name, isPrivate, gh, token: token || savedGithubToken(), env });
+  const url = await createGithubRepo({ name, isPrivate, gh, token: token || githubToken(), env });
   await gitConnect(viewCwd(), url, env, { keep: true });
 });
 handle('agent:approve', [isObject], ({ id, ok, always, reason, answers }) => {
