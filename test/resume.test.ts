@@ -58,6 +58,29 @@ test('resuming from a failed action re-runs it and continues; the failed result 
   assert.doesNotMatch(JSON.stringify(agent.messages), /No such file|could not read/);
 });
 
+test('a call edited before resuming runs as edited, and the model sees the edited call', async () => {
+  const cwd = await tmp();
+  await fs.writeFile(path.join(cwd, 'good.txt'), 'hello\n');
+  const m = await fake((messages) => {
+    const last = lastResult(messages);
+    if (!last.includes('<result')) return '<run>cat bad.txt</run>';
+    return last.includes('hello') ? 'The file says hello.' : 'I could not read it.';
+  });
+  const agent = new Agent({ cwd, config: cfg({ baseUrl: m.url, model: 'm', approval: 'auto' }) });
+  const events: AgentEvent[] = [];
+  agent.on('event', (e) => events.push(e));
+  await agent.send('Read the file', { turnId: 't1' });
+  const runId = actionsOf(events)[0].id;
+  const before = events.length;
+  await agent.resumeFrom(runId, { command: 'cat good.txt' });
+  m.server.close();
+  assert.deepEqual(actionsOf(events, before).map((e) => e.args), [{ command: 'cat good.txt' }]);
+  assert.equal((events.filter((e) => e.type === 'final').at(-1))!.text, 'The file says hello.');
+  const sent = JSON.stringify(m.requests.at(-1)!.messages);
+  assert.match(sent, /<run>cat good\.txt<\/run>/);
+  assert.doesNotMatch(sent, /bad\.txt/);
+});
+
 test('in a batch, resuming from a later action keeps the earlier results and does not re-run them', async () => {
   const cwd = await tmp();
   let reads = 0;

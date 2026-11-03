@@ -129,6 +129,18 @@ test('the resume state of an old action is rebuilt from the transcript', () => {
   assert.equal(rebuildForAction(events, 999), null);
 });
 
+test('an old action edited before it runs again: the history shows the edited call', () => {
+  const events = ([
+    { type: 'user_message', text: 'Lis le fichier' },
+    { type: 'assistant_end', id: 1, text: 'Je lis.', thinking: '' },
+    { type: 'action_start', id: 2, tool: 'read', args: { path: 'a.txt' } },
+    { type: 'action_end', id: 2, ok: false, output: 'missing', meta: {} },
+  ]) as AgentEvent[];
+  const r = rebuildForAction(events, 2, { path: 'b.txt' });
+  assert.deepEqual(r!.remaining, [{ tool: 'read', args: { path: 'b.txt' }, complete: undefined }]);
+  assert.equal(r!.messages.at(-1)!.content, 'Je lis.\n<read path="b.txt" />');
+});
+
 test('an old failed action is re-run and the agent goes on', async () => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-legacy-'));
   const old = ([

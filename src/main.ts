@@ -23,7 +23,7 @@ import { migrateLegacy, rebuildHistory, rebuildForAction } from './agent/rebuild
 import { checkTor, torStatus, newCircuits, findTorProxy, requireTor, proxyEnv } from './agent/tor.ts';
 import { errorMessage, isBoolean, isNumber, isRecord, isString, isStringArray, list, parseJson, rec, str } from './unknown.ts';
 import type { AppAlert, Args, Channel, ClaudeAccount, ClaudeUsage, Reply, SessionView } from './ipc.ts';
-import type { AgentEvent, ApprovalAnswer, ApprovalRequest, AskDraft, Choice, ConversationFile, ConversationPair, ProjectIcon, Provider, PublicSettings, Settings, Viewing } from './types.ts';
+import type { AgentEvent, ApprovalAnswer, ApprovalRequest, AskDraft, Choice, ConversationFile, ConversationPair, ProjectIcon, Provider, PublicSettings, Settings, ToolArgs, Viewing } from './types.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -829,7 +829,9 @@ handle('agent:retryText', [], () => {
 });
 // Resume the conversation from a past action: everything after it is removed,
 // the action runs again and the agent goes on (events stream as for a message).
-handle('agent:resumeFrom', [isNumber], (actId) => {
+const isToolArgs = (v: unknown): v is ToolArgs => isRecord(v) && Object.values(v).every((x) => x === undefined || isString(x));
+// (`edited`: the arguments the user changed before running it again)
+handle('agent:resumeFrom', [isNumber, optional(isToolArgs)], (actId, edited) => {
   const s = current();
   const a = s.localAgent();
   if (a.running) throw new Error('L’agent est en cours d’exécution.');
@@ -842,11 +844,11 @@ handle('agent:resumeFrom', [isNumber], (actId) => {
     if (at < 0) throw new Error('Action introuvable dans cette conversation.');
     conv.events = conv.events.slice(0, at);
     store.save(conv);
-    a.resumeFrom(actId).catch((e) => s.onEvent({ type: 'error', message: errorMessage(e) }));
+    a.resumeFrom(actId, edited).catch((e) => s.onEvent({ type: 'error', message: errorMessage(e) }));
     return { events: conv.events };
   }
   // No resume point (action saved before they existed): rebuild the state from the transcript.
-  const rebuilt = rebuildForAction(conv.events, actId);
+  const rebuilt = rebuildForAction(conv.events, actId, edited);
   if (!rebuilt) throw new Error('Impossible de reprendre depuis cette action : elle est introuvable dans la conversation.');
   conv.events = conv.events.slice(0, rebuilt.cutAt);
   store.save(conv);

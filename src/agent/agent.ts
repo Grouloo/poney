@@ -23,7 +23,8 @@ import {
   buildSummaryMessage, calibrate, SUMMARY_MARKER, filesInContext, splitChapter, chapterDates, capChapters,
 } from './context.ts';
 import { errorMessage, errorName, isRecord, list, rec, str } from '../unknown.ts';
-import type { Action, AgentEvent, Approve, Checkpoint, Config, ContextStats, EventOf, GenerationStats, Message, Plan, ResumeState, RebuiltAction, Steps, StreamChat, Triage, TurnStats, Usage, Viewing } from '../types.ts';
+import type { Action, AgentEvent, Approve, Checkpoint, Config, ContextStats, EventOf, GenerationStats, Message, Plan, ResumeState, RebuiltAction, Steps, StreamChat, ToolArgs, Triage, TurnStats, Usage, Viewing } from '../types.ts';
+import { editAction } from './rebuild.ts';
 
 type SubTurnEvent = EventOf<'turn_start' | 'turn_end'>;
 
@@ -387,13 +388,16 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
    * the message that asked for it, then that action (and the rest of its batch)
    * runs again and the agent goes on. Files are not restored.
    */
-  resumeFrom(actId: number): Promise<void> {
+  resumeFrom(actId: number, edited?: ToolArgs): Promise<void> {
     if (this.running) throw new Error('Agent is running.');
     const i = this.checkpoints.findIndex((c) => c.kind === 'action' && c.actIds?.includes(actId));
     if (i < 0) throw new Error('Cette action ne peut pas servir de point de reprise.');
     const cp = this.checkpoints[i];
     this.restoreCheckpoint(i);
-    return this.send(null, { resume: cp });
+    const remaining = [...(cp.remaining ?? [])];
+    // (the user changed the call before it runs again: a group is re-run from its first member)
+    if (edited) editAction(this.messages, remaining, Math.max(0, (cp.actIds ?? []).indexOf(actId)), edited);
+    return this.send(null, { resume: { ...cp, remaining } });
   }
 
   /**

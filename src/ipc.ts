@@ -7,7 +7,7 @@ import type { TorStatus } from './agent/tor.ts';
 import type { ModelEngine } from './engine/engine.ts';
 import type { listDir, OpeningApp, ViewedFile } from './files.ts';
 import type { GitBranches, GitRepoStatus, gitFileStates } from './git.ts';
-import type { AgentEvent, ApprovalRequest, AskDraft, Choice, Config, ConversationPair, ContextStats, ConversationSummary, EngineSettings, ProjectIcon, Provider, ProviderType, PublicSettings, QuestionAnswer, Steps, Viewing } from './types.ts';
+import type { AgentEvent, ApprovalRequest, AskDraft, Choice, Config, ConversationPair, ContextStats, ConversationSummary, EngineSettings, ProjectIcon, Provider, ProviderType, PublicSettings, QuestionAnswer, Steps, ToolArgs, Viewing } from './types.ts';
 
 /** An event of the agent, with the conversation it comes from. */
 export type SessionEvent = AgentEvent & { session?: string };
@@ -144,7 +144,7 @@ export interface Channels {
   'engine:setOptions': [[patch: Partial<EngineSettings>], PublicSettings];
   'agent:send': [[text: string, turnId?: string, viewing?: Viewing | null], boolean];
   'agent:rewind': [[turnId: string], { events: AgentEvent[] }];
-  'agent:resumeFrom': [[actId: number], { events: AgentEvent[] }];
+  'agent:resumeFrom': [[actId: number, edited?: ToolArgs], { events: AgentEvent[] }];
   'agent:stop': [[], void];
   'agent:reset': [[], PublicSettings];
   'agent:retryText': [[], string];

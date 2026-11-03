@@ -24,6 +24,23 @@ export function actionTag(tool: string, a: ToolArgs = {}): string {
 }
 
 /**
+ * Changes the arguments of the action at `i` of a batch about to run again: in
+ * what is to run, and in the message that asked for it, so the model sees the
+ * call as edited (the user's correction, not its own first attempt).
+ */
+export function editAction(messages: Message[], remaining: Action[], i: number, args: ToolArgs): void {
+  const a = remaining[i];
+  if (!a) throw new Error('Action introuvable dans ce point de reprise.');
+  const tag = actionTag(a.tool, args);
+  const m = messages.findLast((x) => x.role === 'assistant');
+  if (m) {
+    const old = [a.raw, actionTag(a.tool, a.args)].find((t) => t && m.content.includes(t));
+    if (old) m.content = m.content.replace(old, () => tag);
+  }
+  remaining[i] = { tool: a.tool, args, complete: a.complete };
+}
+
+/**
  * Rebuilds the model history from the transcript events: user messages, the
  * assistant's text and reasoning, its actions and their results. Close to the
  * original, not identical: long outputs were truncated when saved, and the
@@ -143,7 +160,7 @@ export function migrateLegacy(conv: ConversationFile): boolean {
  * before it in that message, and the actions to run again. A sub-agent restarts
  * with its whole group. Null if the action is not found.
  */
-export function rebuildForAction(events: AgentEvent[], actId: number): RebuiltAction | null {
+export function rebuildForAction(events: AgentEvent[], actId: number, edited?: ToolArgs): RebuiltAction | null {
   const top = (e: AgentEvent) => !e.agentId;
   const at = events.findIndex((e) => e.type === 'action_start' && e.id === actId && top(e));
   if (at < 0) return null;
@@ -175,6 +192,7 @@ export function rebuildForAction(events: AgentEvent[], actId: number): RebuiltAc
 
   const priorResults = step.slice(0, j).map((a) => resultText({ tool: a.tool, args: a.args || {}, end: ends.get(a.id) }));
   const remaining: Action[] = step.slice(j).map((a) => ({ tool: a.tool, args: { ...(a.args || {}) } }));
+  if (edited) editAction(messages, remaining, step.slice(j).findIndex((a) => a.id === actId), edited);
   // The request being worked on: the last message the user wrote before this step.
   const request = [...events.slice(0, stepAt)].reverse().find((e): e is EventOf<'user_message'> => e.type === 'user_message');
   let turnStartIndex = messages.findLastIndex((m) => m.role === 'user' && request && m.content.includes(request.text));

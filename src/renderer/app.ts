@@ -1048,7 +1048,62 @@ function addResumeButton(card: HTMLElement, ev: EventOf<'action_start'>) {
   btn.textContent = '↻ Reprendre d’ici';
   btn.title = 'Relancer cette action et reprendre la conversation à partir d’elle (la suite est retirée)';
   btn.onclick = (e) => { e.stopPropagation(); resumeFromAction(ev.id); };
-  card.querySelector<HTMLElement>('.card-head')!.appendChild(btn);
+  const head = card.querySelector<HTMLElement>('.card-head')!;
+  if (EDIT_FIELDS[ev.tool]) {
+    const edit = document.createElement('button');
+    edit.className = 'resume-btn';
+    edit.textContent = '✎ Modifier';
+    edit.title = 'Modifier cet appel, puis le relancer et reprendre la conversation à partir de lui (la suite est retirée)';
+    edit.onclick = (e) => { e.stopPropagation(); startEditAction(card, ev); };
+    head.appendChild(edit);
+  }
+  head.appendChild(btn);
+}
+
+/** The arguments of a tool call the user can change before running it again, multi-line ones marked. */
+const EDIT_FIELDS: Record<string, [key: string, label: string, multiline?: boolean][]> = {
+  run: [['command', 'Commande', true]],
+  read: [['path', 'Fichier'], ['start', 'Première ligne'], ['end', 'Dernière ligne']],
+  write: [['path', 'Fichier'], ['content', 'Contenu', true]],
+  edit: [['path', 'Fichier'], ['body', 'Modifications', true]],
+  list: [['path', 'Dossier'], ['depth', 'Profondeur']],
+  search: [['query', 'Recherche'], ['pattern', 'Motif de fichiers'], ['path', 'Dossier']],
+  web_search: [['query', 'Recherche']],
+  fetch: [['url', 'Adresse']],
+  agent: [['title', 'Titre'], ['task', 'Tâche', true]],
+};
+
+/** Inline editor on a past tool call: "Relancer" runs it as edited and the conversation goes on from it. */
+function startEditAction(card: HTMLElement, ev: EventOf<'action_start'>) {
+  if ((running && !asking()) || card.querySelector('.action-editor')) return;
+  const args = ev.args ?? {};
+  const editor = div('msg-editor action-editor');
+  editor.innerHTML = `${EDIT_FIELDS[ev.tool].map(([key, label, multi]) => `<label><span>${esc(label)}</span>${multi ? `<textarea data-key="${key}" rows="2"></textarea>` : `<input data-key="${key}">`}</label>`).join('')}
+    <p class="edit-note">L’appel modifié sera relancé, et tout ce qui le suit sera retiré de la conversation. Les fichiers déjà modifiés ne sont pas restaurés.</p>
+    <div class="edit-actions"><button class="ghost cancel">Annuler</button><button class="primary relaunch">Relancer</button></div>`;
+  const fields = [...editor.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('[data-key]')];
+  for (const f of fields) f.value = args[f.dataset.key!] ?? '';
+  editor.onclick = (e) => e.stopPropagation(); // (a sub-agent card opens its panel on click)
+  card.querySelector<HTMLElement>('.card-head')!.after(editor);
+  const fit = (area: HTMLTextAreaElement) => { area.style.height = 'auto'; area.style.height = `${Math.min(area.scrollHeight, 360)}px`; };
+  for (const area of editor.querySelectorAll('textarea')) { fit(area); area.addEventListener('input', () => fit(area)); }
+  fields[0].focus();
+  const close = () => editor.remove();
+  const relaunch = () => {
+    const edited: ToolArgs = { ...args };
+    for (const f of fields) {
+      const v = f instanceof HTMLTextAreaElement ? f.value : f.value.trim();
+      if (v.trim()) edited[f.dataset.key!] = v;
+      else delete edited[f.dataset.key!];
+    }
+    void resumeFromAction(ev.id, { ask: false, edited });
+  };
+  editor.querySelector<HTMLElement>('.cancel')!.onclick = close;
+  editor.querySelector<HTMLElement>('.relaunch')!.onclick = relaunch;
+  editor.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); close(); }
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); relaunch(); }
+  });
 }
 
 /** Takes up a turn that ended on an error. */
@@ -1057,7 +1112,7 @@ async function retryTurn() {
   await sendMessage(await window.api.retryText());
 }
 
-async function resumeFromAction(id: number, { ask = true } = {}) {
+async function resumeFromAction(id: number, { ask = true, edited }: { ask?: boolean; edited?: ToolArgs } = {}) {
   if (running && !asking()) return;
   if (ask && !confirm('Reprendre à partir de cette action ?\n\nElle sera relancée, et tout ce qui la suit sera retiré de la conversation. Les fichiers déjà modifiés ne sont pas restaurés.')) return;
   if (!(await stopAsking())) return;
@@ -1070,7 +1125,7 @@ async function resumeFromAction(id: number, { ask = true } = {}) {
     saveAskDraft(draft);
   }
   try {
-    const { events } = await window.api.resumeFrom(id);
+    const { events } = await window.api.resumeFrom(id, edited);
     replayTranscript(events);
     setRunning(true);
     refreshGauge();
