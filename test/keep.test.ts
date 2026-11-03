@@ -5,7 +5,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { Agent } from '../src/agent/agent.ts';
-import { addProjectNote, insertNote, noteHeadings, parseKeep, projectPath } from '../src/agent/keep.ts';
+import { addProjectNote, insertNote, keepProposed, noteHeadings, parseKeep, projectPath } from '../src/agent/keep.ts';
 import { port } from './helpers.ts';
 import type { ModelRequest } from './helpers.ts';
 import type { AgentEvent, EventOf } from '../src/types.ts';
@@ -45,6 +45,10 @@ test('what to keep is cleaned: no restatement, nothing banal, a project fact onl
   assert.equal(projectPath('.poney/notes.md'), null);
   assert.equal(projectPath('docs\\a.md'), 'docs/a.md');
   assert.deepEqual(parseKeep('{"keep": []}'), []);
+  // A preference of the user is not banal.
+  assert.deepEqual(parseKeep(json([{ fact: 'The user wants the notes in paragraphs, no bullet points.', where: 'memory' }]))!.map((i) => i.fact), ['The user wants the notes in paragraphs, no bullet points.']);
+  assert.equal(keepProposed(json([{ fact: 'a', where: 'memory' }, { fact: 'b', where: 'none' }])), 1);
+  assert.equal(keepProposed('no json'), 0);
 });
 
 test('a project line goes at the end of the section the model names, or under a new heading', async () => {
@@ -128,6 +132,11 @@ test('no keep step without memory, and an unreadable answer only skips it', asyn
   assert.deepEqual(bad.agent.memory, []);
   const kept = bad.events.find((e): e is EventOf<'kept'> => e.type === 'kept')!;
   assert.deepEqual([kept.memory, kept.project], [[], []]);
+  assert.equal(kept.failed, 'réponse du modèle illisible'); // (told apart from nothing to keep)
+  const known = await compactWith(json([{ fact: 'Something to keep for sure.', where: 'memory' }, { fact: 'The user asked for help with it.', where: 'memory' }]));
+  const k2 = known.events.find((e): e is EventOf<'kept'> => e.type === 'kept')!;
+  assert.equal(k2.failed, undefined);
+  assert.equal(k2.dropped, 1); // (the banal one)
 });
 
 test('a doc to update is left to a sub-agent, before the summary, with what it needs', async () => {

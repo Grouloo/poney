@@ -7,7 +7,7 @@ import { streamChat, complete, serverContextLength } from './llm.ts';
 import { callOrigins, calledAs, liveAction, partialEditPairs, TOOLS, buildSystemPrompt, parseActions, splitThinking, formatResult, isToolEnabled, withReasoning, findRepetition, normalizeToolCalls, stripReasoning, legacyReasoningToNotes, stripChannelMarkers, toolSchemas, answerInReasoning } from './protocol.ts';
 import { executeAction, runShell, truncateMiddle, checkOldBlock, resolveInside, SCRATCH, type SharedFiles } from './tools.ts';
 import { changesNote, citedLines, projectSnapshot, type Snapshot } from './hints.ts';
-import { KEEP_SCHEMA, addProjectNote, fileTask, keepInstruction, messageStart, noteHeadings, parseKeep } from './keep.ts';
+import { KEEP_SCHEMA, addProjectNote, fileTask, keepInstruction, keepProposed, messageStart, noteHeadings, parseKeep } from './keep.ts';
 import { remember, forget, memoryBlock, standingInstructions, instructionNote, replacedAutoNote } from './memory.ts';
 import { loadSkills, skillDirs, mentionedSkills, matchingSkills, skillBlock, type Skill } from './skills.ts';
 import { recall, autoRecall, recalledBlock, keywordsOf, outOfContext } from './history.ts';
@@ -630,7 +630,8 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
     if (this.role !== 'main' || this.config.memoryEnabled === false) return null;
     const prompt = this.buildPrompt(system);
     const room = this.cfg.numCtx - historyTokens(prompt, this.est) - this.plan(system).margin;
-    if (room < 600) return null; // no room to answer
+    // (no room to answer: said, so that a review not done is not taken for one that found nothing)
+    if (room < 600) { this.emit('event', { type: 'kept', id: `kept-${Date.now()}`, memory: [], project: [], file: 'AGENTS.md', failed: 'pas assez de place dans le contexte pour répondre' }); return null; }
     const { projectNotes, notesFile } = await this.loadProjectNotes();
     const project = !this.offProject;
     const files = project && this.config.subagentsEnabled !== false;
@@ -659,7 +660,8 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
         text = ''; // (a server without structured output: the JSON only asked for)
       }
     }
-    const items = parseKeep(text, { memory: this.memory, notes: projectNotes, project, files, notesFile: file }) ?? [];
+    const parsed = parseKeep(text, { memory: this.memory, notes: projectNotes, project, files, notesFile: file });
+    const items = parsed ?? [];
     const memory: string[] = [];
     for (const it of items) {
       if (it.where !== 'memory') continue;
@@ -676,7 +678,8 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
       } catch {} // (a read-only project: that line is lost, not the compaction)
     }
     const doc = items.find((it) => it.where === 'file');
-    this.emit('event', { type: 'kept', id: `kept-${Date.now()}`, memory, project: lines, file, ...(doc?.path ? { update: doc.path } : {}) });
+    const dropped = keepProposed(text) - memory.length - lines.length - (doc?.path ? 1 : 0); // (already known, banal, or too short)
+    this.emit('event', { type: 'kept', id: `kept-${Date.now()}`, memory, project: lines, file, ...(doc?.path ? { update: doc.path } : {}), ...(dropped > 0 ? { dropped } : {}), ...(parsed ? {} : { failed: 'réponse du modèle illisible' }) });
     if (!doc?.path || !doc.task) return null;
     const report = await this.runSubAgent({ tool: 'agent', args: { title: `Mise à jour de ${doc.path}`.slice(0, 60), task: fileTask(doc.path, doc.task) } }, signal, 1500, nextId++, { auto: true });
     return `${doc.path} (updated before this summary by a helper): ${truncateMiddle(report.replace(/<\/?result[^>]*>/g, '').replace(/\s+/g, ' ').trim(), 400)}`;

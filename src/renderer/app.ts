@@ -2093,6 +2093,8 @@ function onEvent(ev: SessionEvent) {
     case 'kept':
       (target ?? transcript).querySelector<HTMLElement>('.compaction.pending')?.remove();
       if (ev.memory.length || ev.project.length || ev.update) add(keptCard(ev));
+      // (nothing kept: said all the same, so the review is not taken for one that did not run)
+      else add(div('notice', esc(ev.failed ? `🧠 Bilan avant le compactage impossible : ${ev.failed}.` : `🧠 Avant le compactage : rien de nouveau à retenir${ev.dropped ? ` (${ev.dropped} proposition${ev.dropped > 1 ? 's' : ''} écartée${ev.dropped > 1 ? 's' : ''} : déjà en mémoire ou trop vague${ev.dropped > 1 ? 's' : ''})` : ''}.`)));
       break;
     case 'compaction_start':
       (target ?? transcript).querySelector<HTMLElement>('.compaction.pending')?.remove();

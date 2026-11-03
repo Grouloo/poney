@@ -78,7 +78,8 @@ function restates(fact: string, known: string[]): boolean {
 }
 
 // Items about the conversation itself, not facts ("The user asked for help").
-const BANAL = /^(the )?(user|conversation|discussion|task|assistant|i|we)\b[^.]{0,30}\b(asked|wants|is about|discussed|talked|helped|started|working on)\b/i;
+// ("The user wants…" is not one: it is how a preference is said.)
+const BANAL = /^(the )?(user|conversation|discussion|task|assistant|i|we)\b[^.]{0,30}\b(asked|is about|discussed|talked|helped|started|working on)\b/i;
 
 /**
  * The items of the answer, cleaned: known destinations only, not too short, not
@@ -113,6 +114,12 @@ export function parseKeep(text: string, { memory = [], notes = '', project = tru
     if (out.length >= MAX_KEPT) break;
   }
   return out;
+}
+
+/** How many items the model proposed to keep (its "none" not counted), to tell what the cleaning removed. */
+export function keepProposed(text: string): number {
+  const m = String(text ?? '').match(/\{[\s\S]*\}/);
+  try { return m ? list(rec(JSON.parse(m[0])).keep).filter((x) => rec(x).where !== 'none').length : 0; } catch { return 0; }
 }
 
 /** A path given by the model, if it stays inside the project: relative, cleaned. */
