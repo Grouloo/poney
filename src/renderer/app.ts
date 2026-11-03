@@ -9,6 +9,7 @@ import { SwipeDetector } from './swipe.ts';
 import { EMOJIS, ICONS, ICON_COLORS, iconSvg } from './project-icons.ts';
 import { fileIconSvg, folderIconSvg, privateFolderIconSvg } from './file-icons.ts';
 import { menuIconSvg, type MenuGlyph } from './menu-icons.ts';
+import { findRanges } from './find.ts';
 import DOMPurify from '../../node_modules/dompurify/dist/purify.es.mjs';
 import type { Api } from '../preload.cts';
 import { isGithub, repoName } from '../remote-url.ts';
@@ -1267,6 +1268,78 @@ for (const area of [...panes.map((p) => p.transcript), $('agentPanelBody')]) {
     if (/^(https?:|mailto:)/i.test(href)) window.open(href);
   });
 }
+
+// ---------- ⌘F: search the conversation worked in, or the file in the viewer (the one clicked last) ----------
+let findZone: 'chat' | 'viewer' = 'chat';
+document.addEventListener('pointerdown', (e) => {
+  const t = e.target as HTMLElement;
+  if (t.closest('.find-bar')) return;
+  findZone = t.closest('#viewer') ? 'viewer' : t.closest('.chat') ? 'chat' : findZone;
+}, true);
+const findBar = document.body.appendChild(div('find-bar hidden', '<input type="text" spellcheck="false" autocomplete="off" placeholder="Rechercher"><span class="find-count"></span><button type="button" class="ghost icon find-prev" title="Précédent (⇧↩)">↑</button><button type="button" class="ghost icon find-next" title="Suivant (↩)">↓</button><button type="button" class="ghost icon find-close" title="Fermer (Échap)">✕</button>'));
+const findInput = findBar.querySelector('input')!;
+let findRoot: HTMLElement | null = null; // (what is searched)
+let found: Range[] = [];
+let foundAt = 0;
+
+function openFind() {
+  findRoot = findZone === 'viewer' && !$('viewer').classList.contains('hidden') ? $('viewerBody') : focused.transcript;
+  const sel = window.getSelection()?.toString().trim();
+  if (sel && !sel.includes('\n')) findInput.value = sel;
+  findBar.classList.remove('hidden');
+  placeFind();
+  findInput.focus();
+  findInput.select();
+  runFind(false);
+}
+function closeFind() {
+  findBar.classList.add('hidden');
+  CSS.highlights.delete('find');
+  CSS.highlights.delete('find-current');
+  findRoot = null;
+  found = [];
+}
+/** At the top right of what is searched, under the bar of the window. */
+function placeFind() {
+  if (!findRoot) return;
+  const r = findRoot.getBoundingClientRect();
+  findBar.style.top = `${Math.max(r.top, topbar.getBoundingClientRect().bottom) + 8}px`;
+  findBar.style.left = `${Math.max(r.left + 8, r.right - findBar.offsetWidth - 18)}px`;
+}
+/** The matches, again; step: to the next (1) or previous (-1) one, or false for a new text (the first one on screen). */
+function runFind(step: number | false) {
+  if (!findRoot) return;
+  const root = findRoot;
+  found = findRanges(root, findInput.value, '.gutter');
+  if (step === false) {
+    const top = root.getBoundingClientRect().top;
+    foundAt = Math.max(0, found.findIndex((r) => r.getBoundingClientRect().bottom >= top));
+  } else foundAt = found.length ? (foundAt + step + found.length) % found.length : 0;
+  CSS.highlights.set('find', new Highlight(...found));
+  const cur = found[foundAt];
+  if (cur) {
+    CSS.highlights.set('find-current', new Highlight(cur));
+    const r = cur.getBoundingClientRect();
+    const box = root.getBoundingClientRect();
+    if (r.top < box.top + 50 || r.bottom > box.bottom - 30) root.scrollTop += r.top - box.top - box.height / 3;
+  } else CSS.highlights.delete('find-current');
+  findBar.querySelector<HTMLElement>('.find-count')!.textContent = found.length ? `${foundAt + 1}/${found.length}` : findInput.value.trim() ? 'Aucun' : '';
+}
+findInput.addEventListener('input', () => runFind(false));
+findInput.addEventListener('keydown', (e) => {
+  e.stopPropagation();
+  if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); runFind(e.shiftKey ? -1 : 1); }
+  else if (e.key === 'Escape') { e.preventDefault(); closeFind(); }
+});
+findBar.querySelector<HTMLElement>('.find-prev')!.onclick = () => runFind(-1);
+findBar.querySelector<HTMLElement>('.find-next')!.onclick = () => runFind(1);
+findBar.querySelector<HTMLElement>('.find-close')!.onclick = closeFind;
+document.addEventListener('keydown', (e) => {
+  if (e.key.toLowerCase() !== 'f' || e.shiftKey || e.altKey || !(MAC ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey)) return;
+  e.preventDefault();
+  openFind();
+});
+window.addEventListener('resize', placeFind);
 
 // ---------- quote a passage of the conversation (select it, then "Citer") ----------
 const quoteBtn = document.createElement('button');
@@ -3712,6 +3785,12 @@ function paneOfFolder() {
   if (inPane(other, activeDir) === dir) return other;
   return inPane(focused, activeDir) === dir ? focused : null;
 }
+/** The pane a file's panel goes over: not the conversation of its project (the file is seen beside it); with both there, the one not worked in. */
+function paneForFile() {
+  const owner = paneOfFolder();
+  if (!owner || inPane(otherPane(owner), activeDir) === viewDir()) return otherPane(focused);
+  return otherPane(owner);
+}
 for (const el of SIDE_PANELS) {
   watchPanels.observe(el, { attributes: true, attributeFilter: ['class'] });
   el.querySelector<HTMLElement>('.viewer-head')!.addEventListener('pointerdown', (down) => {
@@ -4275,7 +4354,7 @@ async function openDiff(file: GitFile, staged: boolean, { keepScroll = false } =
     closeViewer(); // (one side panel at a time)
     closeAgentPanel();
     if (liveBubble) closeLivePanel();
-    panelOver(paneOfFolder() ?? otherPane(focused));
+    panelOver(paneForFile());
   }
   const shown = diffFile = { path: file.path, oldPath: file.oldPath, staged };
   $('diffPanel').classList.remove('hidden');
@@ -4464,7 +4543,7 @@ async function openFile(rel: string, { keepScroll = false, over, tab = false }: 
   if (existing && !over) viewerPane = existing.pane; // (a tab of the other project stays read there)
   else if (rel !== shown || over) {
     viewerPane = paneOfFolder() ?? focused;
-    panelOver(over ?? paneOfFolder() ?? otherPane(focused));
+    panelOver(over ?? paneForFile());
   }
   let read: Viewed;
   try {

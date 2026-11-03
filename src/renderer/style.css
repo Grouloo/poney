@@ -1265,3 +1265,16 @@ body.split .viewer.dragging, body.split .viewer.placing { transition: opacity 0.
 body.split .viewer-head { cursor: grab; }
 body.split .viewer.dragging { cursor: grabbing; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35); }
 body.panel-dragging { user-select: none; cursor: grabbing; }
+
+/* ⌘F: the search bar, over what it searches; the matches, the current one brighter. */
+.find-bar {
+  position: fixed; z-index: 60; display: flex; align-items: center; gap: 2px; padding: 3px 4px 3px 10px; border-radius: 10px;
+  background: color-mix(in srgb, var(--sheet-solid) 78%, transparent); backdrop-filter: blur(14px) saturate(170%);
+  border: 1px solid var(--glass-edge); box-shadow: var(--float); -webkit-app-region: no-drag;
+}
+.find-bar { width: 340px; }
+.find-bar input { flex: 1; min-width: 0; width: auto; padding: 0; border: none; background: none; color: var(--text); font: 14px var(--ui); outline: none; }
+.find-count { min-width: 46px; margin-right: 4px; text-align: right; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.find-bar button { width: 26px; height: 26px; padding: 0; }
+::highlight(find) { background-color: color-mix(in srgb, var(--warn) 32%, transparent); }
+::highlight(find-current) { background-color: var(--warn); color: #1a1a1a; }
