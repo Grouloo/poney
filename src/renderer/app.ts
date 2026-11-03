@@ -1491,10 +1491,12 @@ function drawStreaming() {
 // ---------- a file being written or edited, followed live in the side panel ----------
 let liveBubble: Bubble | null = null;
 let livePane: Pane | null = null; // (the pane of the answer followed)
+let viewerPane: Pane | null = null; // (the pane whose project the file shown is from: its reads go through it)
 /** The side panels of the pane worked in are closed (its conversation is drawn again, or another one shown). */
 function closePanelsOfPane() {
   if (livePane === pane) closeLivePanel();
   if (panelPane === pane) closeAgentPanel();
+  if (split && viewerPane === pane) closeViewer(); // (perhaps of another project)
 }
 
 function liveCard(b: Bubble) {
@@ -3330,6 +3332,8 @@ let splitAt = 0.5; // the left pane's share of the room
 let panelSide: Side = 'right'; // the pane the side panels float over
 let panelPlaced = false; // (put there by the user: it stays)
 let dragged: string | null = null; // the conversation whose card is dragged
+let draggedFile: string | null = null; // the file of the tree dragged
+let panelTarget: Pane | null = null; // (the pane a side panel about to open goes over)
 const chats = $('chats');
 const sideOf = (p: Pane): Side => (p === leftPane ? 'left' : 'right');
 const paneAt = (side: Side) => (side === 'left' ? leftPane : otherPane(leftPane));
@@ -3533,13 +3537,20 @@ function showDropZone(side: Side | null) {
   zone.classList.toggle('shown', Boolean(side));
   if (!side) return;
   const box = chats.getBoundingClientRect();
-  const r = split ? paneAt(side).root.getBoundingClientRect() : { left: box.left + (side === 'left' ? 0 : box.width / 2), width: box.width / 2 };
+  const whole = draggedFile && !split; // (one pane: the file opens beside it)
+  const r = split ? paneAt(side).root.getBoundingClientRect() : whole ? box : { left: box.left + (side === 'left' ? 0 : box.width / 2), width: box.width / 2 };
   zone.style.left = `${r.left - box.left}px`;
   zone.style.width = `${r.width}px`;
   const title = split ? lastConversations.find((c) => c.id === sessionOf(paneAt(side)))?.title : null;
-  zone.querySelector<HTMLElement>('span')!.textContent = split ? `Remplacer « ${title ?? 'Nouvelle conversation'} »` : side === 'left' ? 'Ouvrir à gauche' : 'Ouvrir à droite';
+  zone.querySelector<HTMLElement>('span')!.textContent = draggedFile ? (split ? `Ouvrir le fichier sur « ${title ?? 'Nouvelle conversation'} »` : 'Ouvrir le fichier')
+    : split ? `Remplacer « ${title ?? 'Nouvelle conversation'} »` : side === 'left' ? 'Ouvrir à gauche' : 'Ouvrir à droite';
 }
 chats.addEventListener('dragover', (e) => {
+  if (draggedFile) {
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+    return showDropZone(dropSide(e));
+  }
   if (!dragged || (!split && dragged === sessionOf(focused)) || (split && dragged === sessionOf(paneAt(dropSide(e))))) return showDropZone(null);
   e.preventDefault();
   if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
@@ -3550,12 +3561,14 @@ chats.addEventListener('drop', (e) => {
   e.preventDefault();
   showDropZone(null);
   const id = dragged;
-  dragged = null;
+  const file = draggedFile;
+  dragged = draggedFile = null;
   if (id) openAside(id, dropSide(e));
+  else if (file) openFile(file, { over: paneAt(dropSide(e)) });
 });
 
-// The side panels, in a split view: over one pane, the one not focused when they open, or the
-// one they were dragged over (by their head).
+// The side panels, in a split view: over one pane, the one not focused when they open, the
+// one of the project of the file they show, or the one they were dragged over (by their head).
 const SIDE_PANELS = ['viewer', 'agentPanel', 'diffPanel', 'livePanel'].map((id) => $(id));
 const layout = document.querySelector<HTMLElement>('.layout')!;
 function placePanels() {
@@ -3568,14 +3581,35 @@ function placePanels() {
 let panelsOpen = false;
 const watchPanels = new MutationObserver(() => {
   const open = SIDE_PANELS.some((el) => !el.classList.contains('hidden'));
-  if (open && !panelsOpen && split && !panelPlaced) {
-    panelSide = sideOf(otherPane(focused));
+  if (open && !panelsOpen && split && (panelTarget || !panelPlaced)) {
+    panelSide = sideOf(panelTarget ?? otherPane(focused));
     for (const el of SIDE_PANELS) el.classList.add('placing'); // (where it opens: no slide from elsewhere)
     placePanels();
     requestAnimationFrame(() => { for (const el of SIDE_PANELS) el.classList.remove('placing'); });
   }
   panelsOpen = open;
+  panelTarget = null;
 });
+/** A side panel opening (or open) over this pane. */
+function panelOver(p: Pane) {
+  if (!split) return;
+  if (!panelsOpen) {
+    panelTarget = p;
+    return;
+  }
+  panelPlaced = true;
+  if (sideOf(p) === panelSide) return;
+  panelSide = sideOf(p);
+  placePanels();
+}
+/** The pane whose project the Files and Git sections show: the other one if both are there (the focused one stays free), none if neither. */
+function paneOfFolder() {
+  if (!split) return null;
+  const dir = viewDir();
+  const other = otherPane(focused);
+  if (inPane(other, activeDir) === dir) return other;
+  return inPane(focused, activeDir) === dir ? focused : null;
+}
 for (const el of SIDE_PANELS) {
   watchPanels.observe(el, { attributes: true, attributeFilter: ['class'] });
   el.querySelector<HTMLElement>('.viewer-head')!.addEventListener('pointerdown', (down) => {
@@ -3645,6 +3679,13 @@ async function renderDir(rel: string, ul: HTMLElement) {
       };
     } else {
       node.onclick = () => openFile(e.path);
+      // (dropped on a pane of the conversations: the file opens over it)
+      node.draggable = true;
+      node.addEventListener('dragstart', (ev) => {
+        draggedFile = e.path;
+        ev.dataTransfer?.setData('text/plain', e.path);
+      });
+      node.addEventListener('dragend', () => { draggedFile = null; showDropZone(null); });
     }
     ul.appendChild(li);
   }
@@ -4041,6 +4082,7 @@ async function openDiff(file: GitFile, staged: boolean, { keepScroll = false } =
     closeViewer(); // (one side panel at a time)
     closeAgentPanel();
     if (liveBubble) closeLivePanel();
+    panelOver(paneOfFolder() ?? otherPane(focused));
   }
   const shown = diffFile = { path: file.path, oldPath: file.oldPath, staged };
   $('diffPanel').classList.remove('hidden');
@@ -4137,12 +4179,16 @@ function closeViewer() {
   document.querySelectorAll<HTMLElement>('.tree .node.active').forEach((n) => n.classList.remove('active'));
 }
 
-async function openFile(rel: string, { keepScroll = false } = {}) {
+async function openFile(rel: string, { keepScroll = false, over }: { keepScroll?: boolean; over?: Pane } = {}) {
   const body = $('viewerBody');
   const scroll = keepScroll && rel === openPath ? body.scrollTop : 0;
+  if (rel !== openPath || $('viewer').classList.contains('hidden') || over) {
+    viewerPane = paneOfFolder() ?? focused;
+    panelOver(over ?? paneOfFolder() ?? otherPane(focused));
+  }
   let read: Viewed;
   try {
-    read = await window.api.readFile(rel);
+    read = await inPane(viewerPane ?? focused, () => window.api.readFile(rel));
   } catch (e) {
     if (keepScroll) return; // file deleted meanwhile: leave the viewer as is
     read = { path: rel, kind: 'error', message: errorMessage(e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '') };
