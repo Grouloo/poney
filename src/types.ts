@@ -360,6 +360,7 @@ export interface Provider {
   type: ProviderType;
   name: string;
   enabled: boolean;
+  hiddenModels?: string[]; // (not in the model menu)
   baseUrl?: string;
   apiKey?: string;
 }

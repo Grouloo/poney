@@ -196,6 +196,9 @@ export interface Channels {
   'files:list': [[rel?: string], FileEntries];
   'files:read': [[rel: string], ViewedFile];
   'files:image': [[src: string], string | null];
+  'files:saveImage': [[src: string], string | null];
+  'files:imageInto': [[src: string, dir: string], string[]];
+  'files:moveInto': [[paths: string[], dir: string], string[]];
   'files:openExternal': [[rel: string], string];
   'files:reveal': [[rel: string], void];
   'files:apps': [[rel: string], OpeningApps];

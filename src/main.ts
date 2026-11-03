@@ -17,7 +17,7 @@ import type { LocalModel } from './types.ts';
 import { addClaudeAccount, addServer, CLAUDE, claudeAccountOf, loadProviders, modelConfig, providerOf, removeProvider, savedConfig, unavailable, updateProvider } from './providers.ts';
 import { ConversationStore, moveAppData } from './conversations.ts';
 import { isGithub, tokenUrl } from './remote-url.ts';
-import { appsToOpen, listDir, openWith, readFileForViewer, readImage, type OpeningApp } from './files.ts';
+import { appsToOpen, bringInto, imagePath, listDir, openWith, readFileForViewer, readImage, type OpeningApp } from './files.ts';
 import { resolveInside } from './agent/tools.ts';
 import { credentialEnv, gitClone, type RemoteToken, gitFileStates, gitBranches, gitSwitch, gitCreateBranch, createGithubRepo, findGh, GITHUB_TOKEN_PAGE, gitChangeRemote, githubAccount, gitStatus, gitConnect, gitDiff, gitFetch, gitRemote, gitRemoveRemote, gitSync, readyGh } from './git.ts';
 import { migrateLegacy, rebuildHistory, rebuildForAction } from './agent/rebuild.ts';
@@ -1241,6 +1241,33 @@ handle('files:observe', [(v: unknown): v is string | null => v === null || isStr
 handle('files:list', [optional(isString)], (rel) => listDir(viewCwd(), rel, viewScratch()));
 handle('files:read', [isString], (rel) => readFileForViewer(viewCwd(), rel, viewScratch()));
 handle('files:image', [isString], (src) => readImage(current().cwd || null, src));
+// An image of an answer, saved where the user says (Downloads by default).
+handle('files:saveImage', [isString], async (src) => {
+  const file = imagePath(current().cwd || null, src);
+  if (!file || !fs.existsSync(file)) throw new Error('Image introuvable.');
+  const options = { defaultPath: path.join(app.getPath('downloads'), path.basename(file)) };
+  const r = await (win ? dialog.showSaveDialog(win, options) : dialog.showSaveDialog(options));
+  if (r.canceled || !r.filePath) return null;
+  await fs.promises.copyFile(file, r.filePath);
+  return r.filePath;
+});
+// Into a folder of the files panel: an image of an answer (copied), files from the Finder (moved).
+const intoFolder = (rel: string) => {
+  const dir = resolveInside(viewCwd(), rel || '.', viewScratch());
+  if (!fs.statSync(dir.abs).isDirectory()) throw new Error('Ce n’est pas un dossier.');
+  return dir;
+};
+const joinRel = (dir: string, name: string) => (dir === '.' ? name : `${dir}/${name}`);
+handle('files:imageInto', [isString, isString], async (src, rel) => {
+  const file = imagePath(current().cwd || null, src);
+  if (!file || !fs.existsSync(file)) throw new Error('Image introuvable.');
+  const dir = intoFolder(rel);
+  return (await bringInto([file], dir.abs)).map((n) => joinRel(dir.rel, n));
+});
+handle('files:moveInto', [isStringArray, isString], async (paths, rel) => {
+  const dir = intoFolder(rel);
+  return (await bringInto(paths.filter((p) => path.isAbsolute(p)), dir.abs, { move: true })).map((n) => joinRel(dir.rel, n));
+});
 handle('files:openExternal', [isString], (rel) => shell.openPath(resolveInside(viewCwd(), rel, viewScratch()).abs));
 handle('files:reveal', [isString], (rel) => shell.showItemInFolder(resolveInside(viewCwd(), rel, viewScratch()).abs));
 // A file renamed in its folder, or put in the trash; busy: an agent works in the project meanwhile.

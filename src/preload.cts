@@ -1,7 +1,7 @@
 import type { AppAlert, Args, Channel, ContextMenuParams, Reply, SessionApproval, SessionEvent } from './ipc.ts' with { 'resolution-mode': 'import' };
 import type { QuestionAnswer } from './types.ts' with { 'resolution-mode': 'import' };
 
-const { contextBridge, ipcRenderer } = require('electron') as typeof Electron;
+const { contextBridge, ipcRenderer, webUtils } = require('electron') as typeof Electron;
 
 // Before each call: the window says which conversation it comes from (its split view's pane).
 let beforeCall = () => {};
@@ -99,6 +99,11 @@ const api = {
   listFiles: call('files:list'),
   readFile: call('files:read'),
   readImage: call('files:image'),
+  saveImage: call('files:saveImage'),
+  imageInto: call('files:imageInto'),
+  moveInto: call('files:moveInto'),
+  /** The path of a file dropped from the Finder. */
+  pathOf: (file: File) => webUtils.getPathForFile(file),
   openFileExternal: call('files:openExternal'),
   revealFile: call('files:reveal'),
   appsToOpen: call('files:apps'),

@@ -16,8 +16,9 @@ import type { AgentEvent, Checkpoint, Choice, Config, ContextStats, Message, Pla
 type ExecFn = (file: string, args: string[], options: { timeout: number; env: NodeJS.ProcessEnv }, callback: (error: unknown, stdout: string, stderr: string) => void) => unknown;
 const defaultExec: ExecFn = (file, args, options, callback) => execFile(file, args, options, (error, stdout, stderr) => callback(error, String(stdout), String(stderr)));
 
-/** The installed `agy` program, or null. (From the Finder, the PATH lacks the usual folders.) */
+/** The installed `agy` program, or null. (From the Finder, the PATH lacks the usual folders.) PONEY_AGY: another one, for trials. */
 export function findAgy(env = process.env) {
+  if (env.PONEY_AGY) return env.PONEY_AGY;
   const dirs = [...(env.PATH || '').split(path.delimiter), path.join(os.homedir(), '.local', 'bin'), '/opt/homebrew/bin', '/usr/local/bin'];
   const names = process.platform === 'win32' ? ['agy.exe', 'agy.cmd'] : ['agy'];
   for (const dir of dirs) {
@@ -134,13 +135,31 @@ interface Tool {
   done: boolean;
 }
 
+/** A conversation's log, read as agy writes it: its new lines at each look. */
+interface Log {
+  conversation: string;
+  file: string;
+  offset: number;
+  rest: string;
+  main: boolean;
+  agentId?: number;
+  pending: number[]; // (its tool calls waiting for their result, in order)
+}
+
 interface TurnState {
   main: string | null;
   gens: Map<string, Gen>;
   tools: Map<string, Tool>;
   subagents: Map<string, number>;
   tokens: number;
+  logs: Map<string, Log>;
+  thought: Set<string>; // (the steps whose reasoning is shown)
+  before: Set<string>; // (the sub-agents of earlier messages: not shown again)
 }
+
+/** Where agy writes its conversations: brain/<id>/.system_generated/. */
+export const agyBrain = (env = process.env) => env.PONEY_AGY_BRAIN || path.join(os.homedir(), '.gemini', 'antigravity-cli', 'brain'); // (another one: for trials with a fake agy)
+const logFile = (brain: string, conversation: string) => path.join(brain, conversation, '.system_generated', 'logs', 'transcript_full.jsonl');
 
 let nextId = Date.now();
 
@@ -156,6 +175,7 @@ export class AntigravityAgent extends EventEmitter<{ event: [AgentEvent] }> {
   autoSkills?: boolean;
   child: ReturnType<typeof spawn> | null;
   stopped = false;
+  brain: string;
   // (what the app reads from any agent: all empty here, the Antigravity harness keeps its own)
   messages: Message[];
   untested: boolean;
@@ -168,8 +188,10 @@ export class AntigravityAgent extends EventEmitter<{ event: [AgentEvent] }> {
   checkpoints: Checkpoint[];
   archives: (Message[] | null)[];
 
-  constructor({ cwd, executable, skillsDir = null }: { cwd: string; executable: string | null; skillsDir?: string | null }) {
+  constructor({ cwd, executable, skillsDir = null, brain = agyBrain() }: { cwd: string; executable: string | null; skillsDir?: string | null; brain?: string }) {
     super();
+    // The stream says neither the reasoning nor a sub-agent's steps: agy's logs do, read during the turn.
+    this.brain = brain;
     this.cwd = cwd;
     this.executable = executable;
     this.skillsDir = skillsDir;
@@ -224,7 +246,10 @@ export class AntigravityAgent extends EventEmitter<{ event: [AgentEvent] }> {
     if (this.running) throw new Error('L’agent est déjà en cours d’exécution.');
     this.stopped = false;
     this.emit('event', { type: 'turn_start' });
-    const state: TurnState = { main: this.sessionId, gens: new Map(), tools: new Map(), subagents: new Map(), tokens: 0 };
+    const state: TurnState = { main: this.sessionId, gens: new Map(), tools: new Map(), subagents: new Map(), tokens: 0, logs: new Map(), thought: new Set(), before: new Set() };
+    let looking = Promise.resolve();
+    const look = () => { looking = looking.then(() => this.readLogs(state)); return looking; };
+    const timer = setInterval(look, 500);
     let reason = 'done';
     let stats: TurnStats | null = null;
     let errorShown = false;
@@ -233,6 +258,7 @@ export class AntigravityAgent extends EventEmitter<{ event: [AgentEvent] }> {
       if (!this.executable) throw new Error('Antigravity n’est pas installé sur cette machine (programme « agy »).');
       const content = this.prompt(text, turnId);
       this.messages.push({ role: 'user', content });
+      if (this.sessionId) this.track(state, this.sessionId, true);
       const child = spawn(this.executable, this.args(content), { cwd: this.cwd, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
       this.child = child;
       let stderr = '';
@@ -254,6 +280,8 @@ export class AntigravityAgent extends EventEmitter<{ event: [AgentEvent] }> {
         }
       }
       const code = await exited;
+      clearInterval(timer);
+      await look(); // (what was written last)
       if (this.stopped) reason = 'stopped';
       else if (!stats) { // (no result: an error, or a stream this file does not read)
         reason = 'error';
@@ -268,9 +296,12 @@ export class AntigravityAgent extends EventEmitter<{ event: [AgentEvent] }> {
         if (!errorShown) this.emit('event', { type: 'error', message: agyError(errorMessage(e)) });
       }
     }
+    clearInterval(timer);
+    await looking;
     if (reason === 'stopped') this.emit('event', { type: 'notice', text: 'Arrêté.' });
     for (const [key, gen] of state.gens) this.endGen(state, key, gen); // (cut short)
     for (const t of state.tools.values()) if (!t.done) this.emitAs(t.agentId, { type: 'action_end', id: t.id, ok: false, output: 'Arrêté.' });
+    for (const log of state.logs.values()) for (const id of log.pending) this.emitAs(log.agentId, { type: 'action_end', id, ok: reason === 'done', output: reason === 'done' ? '' : 'Arrêté.' });
     this.child = null;
     this.emit('event', { type: 'turn_end', reason, stats });
   }
@@ -292,6 +323,7 @@ export class AntigravityAgent extends EventEmitter<{ event: [AgentEvent] }> {
     const p = isRecord(m[kind]) ? m[kind] : m;
     if (kind === 'init') {
       state.main ??= str(m.conversation_id) || str(p.conversation_id) || null;
+      if (state.main) this.track(state, state.main, true);
       return null;
     }
     if (kind === 'step_update') {
@@ -323,6 +355,7 @@ export class AntigravityAgent extends EventEmitter<{ event: [AgentEvent] }> {
   onStep(state: TurnState, p: Record<string, unknown>): void {
     const conversation = str(p.conversation_id);
     state.main ??= conversation || null;
+    if (state.main) this.track(state, state.main, true);
     const agentId = conversation && conversation !== state.main ? state.subagents.get(conversation) : undefined;
     if (conversation && conversation !== state.main && agentId === undefined) return; // (a conversation of which nothing is known)
     const key = `${conversation}:${num(p.step_index)}`;
@@ -333,6 +366,7 @@ export class AntigravityAgent extends EventEmitter<{ event: [AgentEvent] }> {
       const info = rec(p.tool_info);
       let t = state.tools.get(key);
       if (!t) {
+        this.showThinking(state, conversation, num(p.step_index), null); // (the reasoning that led to it, first)
         const { tool, args } = toolView(str(p.tool_name) || str(info.name), info.parameters, this.cwd);
         t = { id: nextId++, agentId, done: false };
         state.tools.set(key, t);
@@ -353,6 +387,7 @@ export class AntigravityAgent extends EventEmitter<{ event: [AgentEvent] }> {
       gen = { id: nextId++, text: '', thinking: '', agentId };
       state.gens.set(key, gen);
       this.emitAs(agentId, { type: 'assistant_start', id: gen.id });
+      this.showThinking(state, conversation, num(p.step_index), gen);
     }
     const thinking = str(p.thinking_delta);
     if (thinking) {
@@ -364,6 +399,146 @@ export class AntigravityAgent extends EventEmitter<{ event: [AgentEvent] }> {
       gen.text += text;
       this.emitAs(agentId, { type: 'delta', id: gen.id, kind: 'text', text });
     }
-    if (done) this.endGen(state, key, gen);
+    if (done) {
+      this.showThinking(state, conversation, num(p.step_index), gen);
+      this.endGen(state, key, gen);
+    }
+  }
+
+  /** A conversation whose log is read: the main one, or a sub-agent's (shown in its card). */
+  track(state: TurnState, conversation: string, main: boolean, agentId?: number): void {
+    if (state.logs.has(conversation)) return;
+    const file = logFile(this.brain, conversation);
+    // (a conversation resumed, tracked before agy starts: its lines from before this message are not shown again)
+    let offset = 0;
+    if (main && conversation === this.sessionId) {
+      // (the steps of earlier messages: their reasoning was shown then)
+      try {
+        const text = fs.readFileSync(file, 'utf8');
+        offset = Buffer.byteLength(text);
+        for (const line of text.split('\n')) {
+          try { state.thought.add(`${conversation}:${num(rec(parseJson(line)).step_index, -1)}`); } catch {}
+        }
+      } catch {}
+      try { for (const name of fs.readdirSync(path.join(this.brain, conversation, '.system_generated', 'subagents'))) state.before.add(name.replace(/\.json$/, '')); } catch {}
+    }
+    state.logs.set(conversation, { conversation, file, offset, rest: '', main, agentId, pending: [] });
+  }
+
+  /**
+   * The reasoning of the main conversation's steps up to this one, from its log, not shown yet:
+   * in the answer being written (`gen`, for its own step), else on its own.
+   */
+  showThinking(state: TurnState, conversation: string, upTo: number, gen: Gen | null): void {
+    if (!conversation || conversation !== state.main) return;
+    let text: string;
+    try { text = fs.readFileSync(logFile(this.brain, conversation), 'utf8'); } catch { return; }
+    for (const line of text.split('\n')) {
+      let step: Record<string, unknown>;
+      try { step = rec(parseJson(line)); } catch { continue; }
+      const index = num(step.step_index, -1);
+      if (index < 0 || index > upTo || (index === upTo && !gen)) continue;
+      this.thinkingOf(state, conversation, step, index === upTo ? gen : null);
+    }
+  }
+
+  thinkingOf(state: TurnState, conversation: string, step: Record<string, unknown>, gen: Gen | null, agentId?: number): void {
+    const thinking = str(step.thinking).trim();
+    const key = `${conversation}:${num(step.step_index)}`;
+    if (!thinking || state.thought.has(key)) return;
+    state.thought.add(key);
+    if (gen) {
+      gen.thinking += thinking;
+      this.emitAs(gen.agentId, { type: 'delta', id: gen.id, kind: 'thinking', text: thinking, summary: true });
+      return;
+    }
+    const id = nextId++;
+    this.emitAs(agentId, { type: 'assistant_start', id });
+    this.emitAs(agentId, { type: 'delta', id, kind: 'thinking', text: thinking, summary: true });
+    this.emitAs(agentId, { type: 'assistant_end', id, text: '', thinking, hasActions: true });
+  }
+
+  /** The new lines of the logs, and the sub-agents started since. */
+  async readLogs(state: TurnState): Promise<void> {
+    const seen = new Set<Log>();
+    for (let log = [...state.logs.values()].find((l) => !seen.has(l)); log; log = [...state.logs.values()].find((l) => !seen.has(l))) {
+      seen.add(log); // (a sub-agent found on the way is read in the same look)
+      await this.subagentsOf(state, log);
+      let chunk = '';
+      try {
+        const handle = await fs.promises.open(log.file, 'r');
+        try {
+          const { size } = await handle.stat();
+          if (size > log.offset) {
+            const buf = Buffer.alloc(size - log.offset);
+            await handle.read(buf, 0, buf.length, log.offset);
+            log.offset = size;
+            chunk = buf.toString('utf8');
+          }
+        } finally { await handle.close(); }
+      } catch { continue; } // (not written yet)
+      const lines = (log.rest + chunk).split('\n');
+      log.rest = lines.pop() ?? '';
+      for (const line of lines) {
+        try { this.onLogLine(state, log, rec(parseJson(line))); } catch {}
+      }
+    }
+  }
+
+  /** The sub-agents a conversation started (brain/<id>/.system_generated/subagents/*.json). */
+  async subagentsOf(state: TurnState, log: Log): Promise<void> {
+    const dir = path.join(this.brain, log.conversation, '.system_generated', 'subagents');
+    let names: string[];
+    try { names = await fs.promises.readdir(dir); } catch { return; }
+    for (const name of names) {
+      if (!name.endsWith('.json') || state.logs.has(name.slice(0, -5)) || state.before.has(name.slice(0, -5))) continue;
+      let info: Record<string, unknown>;
+      try { info = rec(parseJson(await fs.promises.readFile(path.join(dir, name), 'utf8'))); } catch { continue; }
+      const conversation = str(info.conversationId) || name.slice(0, -5);
+      // Its card: the call that started it, or one of its own.
+      let agentId = state.subagents.get(conversation) ?? state.tools.get(`${log.conversation}:${num(info.spawnStepIndex)}`)?.id;
+      if (agentId === undefined) {
+        agentId = nextId++;
+        const d = rec(info.subagentDescriptor);
+        this.emitAs(log.agentId, { type: 'action_start', id: agentId, tool: 'agent', args: { title: str(d.role) || str(d.typeName) || 'Sous-agent', task: '' } });
+        state.tools.set(`${log.conversation}:sub:${conversation}`, { id: agentId, agentId: log.agentId, done: false });
+      }
+      state.subagents.set(conversation, agentId);
+      this.track(state, conversation, false, agentId);
+    }
+  }
+
+  /** A step of a log: the main conversation's reasoning; all of a sub-agent's steps. */
+  onLogLine(state: TurnState, log: Log, step: Record<string, unknown>): void {
+    const type = str(step.type);
+    if (log.main) {
+      if (type === 'PLANNER_RESPONSE') this.thinkingOf(state, log.conversation, step, null);
+      return;
+    }
+    const agentId = log.agentId;
+    if (type === 'PLANNER_RESPONSE') {
+      const content = str(step.content);
+      const calls = list(step.tool_calls).map(rec);
+      const thinking = str(step.thinking).trim();
+      if (thinking || content) {
+        state.thought.add(`${log.conversation}:${num(step.step_index)}`);
+        const id = nextId++;
+        this.emitAs(agentId, { type: 'assistant_start', id });
+        if (thinking) this.emitAs(agentId, { type: 'delta', id, kind: 'thinking', text: thinking, summary: true });
+        if (content) this.emitAs(agentId, { type: 'delta', id, kind: 'text', text: content });
+        this.emitAs(agentId, { type: 'assistant_end', id, text: content, thinking, hasActions: calls.length > 0 });
+      }
+      for (const call of calls) {
+        const id = nextId++;
+        const { tool, args } = toolView(str(call.name), call.args, this.cwd);
+        log.pending.push(id);
+        this.emitAs(agentId, { type: 'action_start', id, tool, args });
+      }
+    } else if (type === 'GENERIC' && log.pending.length) {
+      const id = log.pending.shift()!;
+      state.tools.set(`${log.conversation}:${num(step.step_index)}`, { id, agentId, done: true }); // (a sub-agent it starts: in this card)
+      const output = str(step.content).replace(/^Created At: .*\nCompleted At: .*\n/, '');
+      this.emitAs(agentId, { type: 'action_end', id, ok: !/ERROR|FAILED/.test(str(step.status)), output });
+    }
   }
 }

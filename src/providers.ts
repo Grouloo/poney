@@ -2,7 +2,7 @@
 // stable id and a type, so that a conversation can name its own and that new
 // types can come. See docs/instances.md.
 import { randomUUID } from 'node:crypto';
-import { isRecord, rec } from './unknown.ts';
+import { isRecord, isStringArray, rec } from './unknown.ts';
 import type { Choice, Config, Provider, ProviderType } from './types.ts';
 
 export const SERVER_TYPES: ProviderType[] = ['openai', 'ollama'];
@@ -45,8 +45,13 @@ export const removeProvider = (providers: Provider[], id: string) => providers.f
 
 export const updateProvider = (providers: Provider[], id: string, patch: Partial<Provider>) => providers.map((p): Provider => {
   if (p.id !== id) return p;
-  const { id: _, type, ...rest } = patch;
-  return { ...p, ...rest, ...(isServer(p) && type && SERVER_TYPES.includes(type) ? { type } : {}) };
+  const { id: _, type, hiddenModels, ...rest } = patch;
+  return {
+    ...p,
+    ...rest,
+    ...(isServer(p) && type && SERVER_TYPES.includes(type) ? { type } : {}),
+    ...(isStringArray(hiddenModels) ? { hiddenModels: [...new Set(hiddenModels)] } : {}),
+  };
 });
 
 /**

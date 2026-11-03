@@ -471,7 +471,8 @@ function openModelMenu() {
   const several = modelGroups.filter((g) => g.models.length || g.error).length + claude.accounts.length + Number(agyShown) > 1;
   for (const g of modelGroups) {
     if (several && (g.models.length || g.error)) label(g.name ?? (g.provider.type === 'poney' ? 'Poney' : ''), g.provider.id);
-    for (const m of g.models) row('local', m.id, m.name, started && c.engine !== 'local', g);
+    const mine = (id: string) => c.engine === 'local' && id === (c.model ?? settings.config.model) && g.provider.id === choiceProvider();
+    for (const m of g.models) if (!hiddenModel(g.provider.id, m.id) || mine(m.id)) row('local', m.id, m.name, started && c.engine !== 'local', g);
     if (g.error) into.appendChild(div('pm-row muted', `<span class="pm-icon">${groupIcon(g)}</span><span class="pm-name">${esc(g.name)} : injoignable</span>`));
     into = menu;
   }
@@ -479,7 +480,7 @@ function openModelMenu() {
   // One group per Claude account; a conversation goes on with another one (its session follows).
   for (const a of claude.accounts) {
     if (several) label(accountLabel(a), a.id);
-    for (const m of a.models) row('claude', m.value, m.name, Boolean(started) && c.engine !== 'claude', undefined, a);
+    for (const m of a.models) if (!hiddenModel(a.id, m.value) || (c.engine === 'claude' && accountId(c) === a.id && m.value === claudeModel()?.value)) row('claude', m.value, m.name, Boolean(started) && c.engine !== 'claude', undefined, a);
     if (!a.loggedIn) {
       const hint = into.appendChild(document.createElement('button'));
       hint.type = 'button';
@@ -490,7 +491,7 @@ function openModelMenu() {
   }
   if (agyShown) {
     if (several) label('Antigravity', 'antigravity');
-    for (const m of antigravity.models) row('antigravity', m.value, m.name, Boolean(started) && c.engine !== 'antigravity');
+    for (const m of antigravity.models) if (!hiddenModel('antigravity', m.value) || (c.engine === 'antigravity' && m.value === agyModel()?.value)) row('antigravity', m.value, m.name, Boolean(started) && c.engine !== 'antigravity');
     if (antigravity.error) into.appendChild(div('pm-row muted', `<span class="pm-icon">${AGY_ICON}</span><span class="pm-name">${esc(antigravity.error)}</span>`));
     into = menu;
   }
@@ -533,6 +534,35 @@ async function changeProvider(call: Promise<PublicSettings>) {
   refreshGauge();
   refreshModels();
 }
+/** A model hidden from the menu, in its provider's settings (the conversation's own stays). */
+const hiddenModel = (provider: string | undefined, model: string) => Boolean(provider && settings.providers.find((p) => p.id === provider)?.hiddenModels?.includes(model));
+/** The models of a provider, each with its box: unticked, it leaves the model menu. */
+function modelChecks(card: HTMLElement, p: Provider, models: { id: string; name: string }[]) {
+  if (!models.length) return;
+  const box = card.appendChild(div('provider-models'));
+  const hidden = p.hiddenModels ?? [];
+  box.appendChild(div('provider-models-head', `Modèles affichés <span class="muted">${models.filter((m) => !hidden.includes(m.id)).length} / ${models.length}</span>`));
+  for (const m of models) {
+    const row = box.appendChild(document.createElement('label'));
+    row.className = 'provider-check';
+    row.appendChild(shownBox(p, m.id));
+    row.appendChild(document.createElement('span')).textContent = m.name;
+    if (m.name !== m.id) row.title = m.id;
+  }
+}
+/** The box that shows a model in the menu, or hides it. */
+function shownBox(p: Provider, model: string) {
+  const check = document.createElement('input');
+  check.type = 'checkbox';
+  check.checked = !p.hiddenModels?.includes(model);
+  check.title = 'Affiché dans le menu des modèles';
+  check.onchange = () => {
+    const hidden = new Set(p.hiddenModels ?? []);
+    if (check.checked) hidden.delete(model); else hidden.add(model);
+    changeProvider(window.api.updateProvider(p.id, { hiddenModels: [...hidden] }));
+  };
+  return check;
+}
 // The providers' cards are folded, but for those opened (until the app closes): an added one is.
 const openProviders = new Set<string>();
 function providerCard(p: Provider) {
@@ -568,6 +598,7 @@ function serverCard(p: Provider) {
   select.onchange = () => update({ type: select.value as ProviderType, baseUrl: select.value === 'ollama' ? 'http://localhost:11434' : 'http://localhost:1234/v1' });
   fieldIn(card, 'URL', p.baseUrl, (baseUrl) => update({ baseUrl }), { placeholder: 'http://localhost:1234/v1' });
   fieldIn(card, 'Clé API (optionnelle)', p.apiKey, (apiKey) => update({ apiKey }), { type: 'password', autocomplete: 'off' });
+  modelChecks(card, p, modelGroups.find((g) => g.provider.id === p.id)?.models ?? []);
   return card;
 }
 async function poneyCard(p: Provider) {
@@ -589,6 +620,7 @@ async function poneyCard(p: Provider) {
   fieldIn(card, 'Cache de prompt sur disque (Go)', options.cacheGb, (v) => changeProvider(window.api.setEngineOptions({ cacheGb: Math.max(0, Number(v) || 0) })), { type: 'number', min: 0 });
   for (const m of modelGroups.find((g) => g.provider.id === p.id)?.models ?? []) {
     const row = card.appendChild(div('provider-model'));
+    row.appendChild(shownBox(p, m.id));
     row.appendChild(document.createElement('span')).textContent = m.name;
     row.title = 'Taille du contexte de ce modèle, en tokens. Vide : celle des réglages. Elle s’applique au message suivant.';
     const i = row.appendChild(document.createElement('input'));
@@ -622,6 +654,7 @@ function claudeCard(p: Provider) {
     login.textContent = a.loggedIn ? 'Changer de compte…' : 'Se connecter…';
     login.onclick = () => loginClaude(p.id);
   }
+  modelChecks(card, p, a?.models.map((m) => ({ id: m.value, name: m.name })) ?? []);
   return card;
 }
 
@@ -631,6 +664,7 @@ function antigravityCard(p: Provider) {
   const state = card.appendChild(div('muted'));
   state.textContent = !antigravity.installed ? 'Antigravity n’est pas installé sur cette machine : installez sa ligne de commande (agy), puis lancez « agy » une fois dans un terminal pour vous connecter.'
     : !p.enabled ? '' : antigravity.error ?? `${antigravity.models.length} modèle${antigravity.models.length > 1 ? 's' : ''}, avec la connexion de cette machine.`;
+  modelChecks(card, p, antigravity.models.map((m) => ({ id: m.value, name: m.name })));
   return card;
 }
 
@@ -1075,7 +1109,7 @@ function startEditMessage(m: HTMLElement, turnId: string, text: string) {
 
 /** "Resume from here" on the agent's own actions (not the app's checks, not inside a sub-agent). */
 function addResumeButton(card: HTMLElement, ev: EventOf<'action_start'>) {
-  if (target || ev.auto) return;
+  if (target || ev.auto || external()) return; // (only Poney's harness can resume from an action)
   const btn = document.createElement('button');
   btn.className = 'resume-btn';
   btn.textContent = '↻ Reprendre d’ici';
@@ -1709,11 +1743,38 @@ function showImages(root: HTMLElement) {
       imagesAsked.get(src)!.then((data) => { if (data) img.src = data; else missingImage(img); });
     }
     img.onclick = () => { if (img.src) openLightbox(img.src, img.alt); };
+    // (dropped on the files panel: saved in the project)
+    img.draggable = true;
+    img.ondragstart = (e) => {
+      draggedImage = src;
+      e.dataTransfer?.setData('text/plain', src);
+    };
+    img.ondragend = () => { draggedImage = null; };
+    // In its top right corner: the button that saves it.
+    if (!img.parentElement?.classList.contains('img-wrap')) {
+      const wrap = document.createElement('span');
+      wrap.className = 'img-wrap';
+      img.replaceWith(wrap);
+      wrap.appendChild(img);
+      const save = wrap.appendChild(document.createElement('button'));
+      save.type = 'button';
+      save.className = 'img-save';
+      save.innerHTML = DOWNLOAD_ICON;
+      save.dataset.tip = 'Télécharger l’image';
+      save.onclick = async (e) => {
+        e.stopPropagation();
+        const saved = await window.api.saveImage(src).catch((err: unknown) => { $('status').textContent = String(err); return null; });
+        if (saved) $('status').textContent = `Image enregistrée : ${saved}`;
+      };
+    }
   }
 }
+const DOWNLOAD_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5v8m0 0L4.8 7.3M8 10.5l3.2-3.2M3 13.5h10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+let draggedImage: string | null = null; // (an image of an answer being dragged: its address)
 /** An image that cannot be shown: its name and where it was said to be. */
 function missingImage(img: HTMLImageElement) {
   if (!img.isConnected) return;
+  if (img.parentElement?.classList.contains('img-wrap')) img.parentElement.replaceWith(img); // (nothing to save)
   const src = img.dataset.src ?? '';
   const link = /^https?:/i.test(src);
   const el = document.createElement(link ? 'a' : 'span');
@@ -4048,6 +4109,49 @@ async function renderDir(rel: string, ul: HTMLElement) {
   }
   if (!entries.length && rel === '.') ul.innerHTML = '<li class="node muted">Dossier vide</li>';
 }
+
+// ---------- dropped on the files panel: into the project ----------
+// An image of an answer is copied there, files of the Finder are moved there: into the folder
+// dropped on (or the one of the file dropped on), else at the root of the folder shown.
+const filesPane = $('filesPane');
+const dropFolder = (e: DragEvent) => {
+  const node = e.target instanceof Element ? e.target.closest<HTMLElement>('#fileTree .node[data-path]') : null;
+  if (!node?.dataset.path) return { node: null, dir: '.' };
+  const isDir = Boolean(node.parentElement?.querySelector(':scope > ul'));
+  const dir = isDir ? node.dataset.path : node.dataset.path.includes('/') ? node.dataset.path.slice(0, node.dataset.path.lastIndexOf('/')) : '.';
+  const target = isDir ? node : dir === '.' ? null : filesPane.querySelector<HTMLElement>(`#fileTree .node[data-path="${CSS.escape(dir)}"]`);
+  return { node: target, dir };
+};
+const fromFinder = (e: DragEvent) => Boolean(e.dataTransfer?.types.includes('Files')) && !draggedFile;
+function markDrop(node: HTMLElement | null, on: boolean) {
+  filesPane.querySelectorAll('.drop-target').forEach((n) => n.classList.remove('drop-target'));
+  filesPane.classList.toggle('drop-root', on && !node);
+  if (on && node) node.classList.add('drop-target');
+}
+filesPane.addEventListener('dragover', (e) => {
+  if (!viewDir() || (!draggedImage && !fromFinder(e))) return;
+  e.preventDefault();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = draggedImage ? 'copy' : 'move';
+  markDrop(dropFolder(e).node, true);
+});
+filesPane.addEventListener('dragleave', (e) => { if (!(e.relatedTarget instanceof Node && filesPane.contains(e.relatedTarget))) markDrop(null, false); });
+filesPane.addEventListener('drop', async (e) => {
+  if (!viewDir() || (!draggedImage && !fromFinder(e))) return;
+  e.preventDefault();
+  markDrop(null, false);
+  const { dir } = dropFolder(e);
+  const image = draggedImage;
+  draggedImage = null;
+  try {
+    const added = image ? await window.api.imageInto(image, dir)
+      : await window.api.moveInto([...(e.dataTransfer?.files ?? [])].map((f) => window.api.pathOf(f)).filter(Boolean), dir);
+    if (dir !== '.') expanded.add(dir);
+    await refreshTree();
+    $('status').textContent = added.length ? `${image ? 'Image enregistrée' : added.length > 1 ? 'Fichiers déplacés' : 'Fichier déplacé'} dans le projet : ${added.join(', ')}` : '';
+  } catch (err) {
+    $('status').textContent = err instanceof Error ? err.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '') : String(err);
+  }
+});
 
 let treeRefresh: ReturnType<typeof setTimeout> | undefined;
 let treeStates: FileStates = {}; // the git state of each path, for its color

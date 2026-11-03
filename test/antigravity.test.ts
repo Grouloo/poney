@@ -14,12 +14,17 @@ const FAKE = `#!/usr/bin/env node
 const fs = require('fs');
 fs.writeFileSync(process.env.AGY_ARGS, JSON.stringify(process.argv.slice(2)));
 const script = JSON.parse(fs.readFileSync(process.env.AGY_SCRIPT, 'utf8'));
+for (const [rel, text] of Object.entries(script.files || {})) {
+  const file = require('path').join(process.env.AGY_BRAIN, rel);
+  fs.mkdirSync(require('path').dirname(file), { recursive: true });
+  fs.writeFileSync(file, text);
+}
 if (script.stderr) process.stderr.write(script.stderr);
 for (const line of script.stdout) process.stdout.write(JSON.stringify(line) + '\\n');
 setTimeout(() => process.exit(script.code || 0), script.sleep || 0);
 `;
 
-interface Script { stdout: unknown[]; stderr?: string; code?: number; sleep?: number }
+interface Script { stdout: unknown[]; stderr?: string; code?: number; sleep?: number; files?: Record<string, string> }
 
 async function fakeAgy() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'poney-agy-'));
@@ -27,7 +32,8 @@ async function fakeAgy() {
   await fs.writeFile(executable, FAKE, { mode: 0o755 });
   process.env.AGY_ARGS = path.join(dir, 'args.json');
   process.env.AGY_SCRIPT = path.join(dir, 'script.json');
-  const agent = new AntigravityAgent({ cwd: dir, executable });
+  process.env.AGY_BRAIN = path.join(dir, 'brain');
+  const agent = new AntigravityAgent({ cwd: dir, executable, brain: path.join(dir, 'brain') });
   const events: AgentEvent[] = [];
   agent.on('event', (e) => events.push(e));
   return {
@@ -108,6 +114,55 @@ test('a turn as agy 1.4.12 prints it', async () => {
   assert.deepEqual(of(events, 'final').map((e) => e.text), ['OK\n']);
   assert.equal(of(events, 'turn_end')[0].stats?.tokens, 1);
   assert.equal(agent.sessionId, 'ad26b583');
+});
+
+test('the reasoning and the sub-agents\' steps come from agy\'s logs', async () => {
+  const { agent, events, script } = await fakeAgy();
+  const log = (steps: object[]) => steps.map((x) => JSON.stringify(x)).join('\n') + '\n';
+  const image = '/brain/main/pony.jpg';
+  await script({
+    files: {
+      'main/.system_generated/logs/transcript_full.jsonl': log([
+        { step_index: 0, type: 'USER_INPUT', content: 'un poney' },
+        { step_index: 1, type: 'PLANNER_RESPONSE', thinking: 'Je délègue l’image.', tool_calls: [{ name: 'invoke_subagent', args: { Role: 'Pony Generator' } }] },
+        { step_index: 2, type: 'GENERIC', content: 'Created the following subagent' },
+        { step_index: 3, type: 'PLANNER_RESPONSE', thinking: 'Le fichier est prêt.', content: 'Voici.' },
+      ]),
+      'main/.system_generated/subagents/sub.json': JSON.stringify({ conversationId: 'sub', subagentDescriptor: { typeName: 'image-generator', role: 'Pony Generator' }, spawnStepIndex: 2 }),
+      'sub/.system_generated/logs/transcript_full.jsonl': log([
+        { step_index: 0, type: 'SYSTEM_MESSAGE', content: 'Generate a pony' },
+        { step_index: 1, type: 'PLANNER_RESPONSE', thinking: 'A white pony, pink mane.', tool_calls: [{ name: 'generate_image', args: { ImageName: 'pony', Prompt: 'A white pony' } }] },
+        { step_index: 2, type: 'GENERIC', status: 'DONE', content: `Created At: 2026-11-04T00:13:27+01:00\nCompleted At: 2026-11-04T00:13:36+01:00\nGenerated image is saved at ${image}.` },
+        { step_index: 3, type: 'PLANNER_RESPONSE', content: 'Sent back.' },
+      ]),
+    },
+    stdout: [
+      { event: 'init', conversation_id: 'main', init: {} },
+      step('main', 2, { state: 'ACTIVE', step_type: 'tool', tool_name: 'invoke_subagent', tool_info: { name: 'invoke_subagent', parameters: { Role: 'Pony Generator' } } }),
+      step('main', 2, { state: 'DONE', step_type: 'tool', tool_name: 'invoke_subagent', tool_info: { name: 'invoke_subagent', output: 'Created' } }),
+      step('main', 3, { state: 'DONE', step_type: 'agent_response', text_delta: 'Voici.' }),
+      result({ conversation_id: 'main', status: 'SUCCESS', response: 'Voici.' }),
+    ],
+  });
+  await agent.send('un poney');
+  const ends = of(events, 'assistant_end');
+  // The main conversation: the reasoning before its call, then the answer with its own.
+  const main = ends.filter((e) => !e.agentId);
+  assert.deepEqual(main.map((e) => [e.text, e.thinking]), [['', 'Je délègue l’image.'], ['Voici.', 'Le fichier est prêt.']]);
+  const card = of(events, 'action_start').find((e) => e.tool === 'agent')!;
+  assert.ok(events.indexOf(main[0]) < events.indexOf(card)); // (the reasoning before the card)
+  // The sub-agent: its steps in its card.
+  const sub = events.filter((e) => e.agentId === card.id);
+  assert.deepEqual(of(sub, 'assistant_end').map((e) => [e.text, e.thinking]), [['', 'A white pony, pink mane.'], ['Sent back.', '']]);
+  const generate = of(sub, 'action_start')[0];
+  assert.deepEqual([generate.tool, generate.args], ['image', { path: 'pony' }]);
+  assert.deepEqual(of(sub, 'action_end').map((e) => [e.id, e.ok, e.output]), [[generate.id, true, `Generated image is saved at ${image}.`]]);
+
+  // The next message: nothing of before is shown again.
+  events.length = 0;
+  await script({ stdout: [result({ conversation_id: 'main', status: 'SUCCESS', response: 'ok' })] });
+  await agent.send('merci');
+  assert.ok(!events.some((e) => e.type === 'assistant_end' || e.agentId !== undefined));
 });
 
 test('what goes wrong with agy is said once, in the words of the interface', async () => {

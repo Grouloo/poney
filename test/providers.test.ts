@@ -84,3 +84,11 @@ test('a list saved before Antigravity gets it, which can be turned off but not r
   assert.equal(providerOf(list, { engine: 'antigravity', model: 'gemini-3-pro' })!.id, 'antigravity');
   assert.match(unavailable(providerOf(updateProvider(list, 'antigravity', { enabled: false }), { engine: 'antigravity' }))!, /désactivé/);
 });
+
+test('a provider keeps the models hidden from the menu, as a list of names', () => {
+  const list = loadProviders(undefined, config);
+  const hidden = updateProvider(list, 'antigravity', { hiddenModels: ['gpt-oss-120b-medium', 'gpt-oss-120b-medium', 'claude-opus-5-5-low'] });
+  assert.deepEqual(hidden.find((p) => p.id === 'antigravity')!.hiddenModels, ['gpt-oss-120b-medium', 'claude-opus-5-5-low']);
+  assert.deepEqual(updateProvider(hidden, 'antigravity', { hiddenModels: [] }).find((p) => p.id === 'antigravity')!.hiddenModels, []);
+  assert.equal(list.find((p) => p.id === 'antigravity')!.hiddenModels, undefined);
+});

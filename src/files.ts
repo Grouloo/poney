@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { IGNORED_DIRS, SCRATCH, resolveInside } from './agent/tools.ts';
-import { isRecord, isString, list, parseJson } from './unknown.ts';
+import { isRecord, isString, list, parseJson, rec } from './unknown.ts';
 
 const IMAGE_TYPES: Record<string, string | undefined> = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
@@ -66,10 +66,10 @@ export async function readFileForViewer(cwd: string, rel: string, scratch: strin
 }
 
 /**
- * An image the agent shows in its answer (![…](path)): an absolute path, a file:// URL, or a
- * path in the project. Only images, as a data URL (null: none there, or too large).
+ * The file of an image the agent shows in its answer (![…](path)): an absolute path, a file://
+ * URL, or a path in the project. Null: not a local image.
  */
-export async function readImage(cwd: string | null, src: string): Promise<string | null> {
+export function imagePath(cwd: string | null, src: string): string | null {
   let file = src.trim();
   if (/^file:\/\//i.test(file)) {
     try { file = fileURLToPath(file); } catch { return null; }
@@ -79,15 +79,57 @@ export async function readImage(cwd: string | null, src: string): Promise<string
     if (!cwd) return null;
     file = path.resolve(cwd, file);
   }
-  const type = IMAGE_TYPES[path.extname(file).toLowerCase()];
-  if (!type) return null;
+  return IMAGE_TYPES[path.extname(file).toLowerCase()] ? file : null;
+}
+
+/** Such an image, as a data URL (null: none there, or too large). */
+export async function readImage(cwd: string | null, src: string): Promise<string | null> {
+  const file = imagePath(cwd, src);
+  if (!file) return null;
   try {
     const st = await fs.stat(file);
     if (!st.isFile() || st.size > MAX_IMAGE) return null;
-    return `data:${type};base64,${(await fs.readFile(file)).toString('base64')}`;
+    return `data:${IMAGE_TYPES[path.extname(file).toLowerCase()]};base64,${(await fs.readFile(file)).toString('base64')}`;
   } catch {
     return null;
   }
+}
+
+/** A name not taken in a folder: "name.ext", else "name 2.ext", "name 3.ext"… */
+export async function freeName(dir: string, name: string): Promise<string> {
+  const ext = path.extname(name);
+  const stem = name.slice(0, name.length - ext.length);
+  for (let n = 1; ; n++) {
+    const candidate = n === 1 ? name : `${stem} ${n}${ext}`;
+    try { await fs.lstat(path.join(dir, candidate)); } catch { return candidate; }
+  }
+}
+
+/**
+ * Files brought into a folder (of the project): copied, or moved (from another disk too, by a
+ * copy then removal). A name taken gets a number. Returns the new names.
+ */
+export async function bringInto(sources: string[], dir: string, { move = false } = {}): Promise<string[]> {
+  const names: string[] = [];
+  for (const source of sources) {
+    const from = path.resolve(source);
+    if (dir === from || dir.startsWith(`${from}${path.sep}`)) throw new Error(`« ${path.basename(from)} » ne peut pas aller dans lui-même.`);
+    if (move && path.dirname(from) === dir) continue; // (already there)
+    const name = await freeName(dir, path.basename(from));
+    const to = path.join(dir, name);
+    if (!move) await fs.cp(from, to, { recursive: true, errorOnExist: true, force: false });
+    else {
+      try {
+        await fs.rename(from, to);
+      } catch (e) {
+        if (rec(e).code !== 'EXDEV') throw e;
+        await fs.cp(from, to, { recursive: true, errorOnExist: true, force: false });
+        await fs.rm(from, { recursive: true, force: true });
+      }
+    }
+    names.push(name);
+  }
+  return names;
 }
 
 // The applications that open a file (macOS asks Launch Services; elsewhere, none is known).

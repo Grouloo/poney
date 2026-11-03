@@ -1201,10 +1201,15 @@ fieldset label.check input { width: auto; }
 .provider-head { display: flex; align-items: center; gap: 8px; font-weight: 600; }
 .provider-head .spacer { flex: 1; }
 .provider-head label { display: flex; flex-direction: row; align-items: center; gap: 6px; margin: 0; font-weight: normal; font-size: 13px; color: var(--muted); }
+.provider-models { display: flex; flex-direction: column; gap: 2px; }
+.provider-models-head { font-size: 12px; font-weight: 600; margin-bottom: 2px; }
+.provider-check { display: flex; flex-direction: row; align-items: center; gap: 8px; margin: 0; font-size: 13px; font-weight: normal; cursor: pointer; }
+.provider-check input[type="checkbox"] { width: auto; flex: none; margin: 0; }
 .provider-folder { align-self: flex-start; display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 10px; color: var(--text); font-weight: 600; }
 .provider-model { display: flex; align-items: center; gap: 8px; font-size: 13.5px; }
 .provider-model span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .provider-model input { flex: none; width: 110px; }
+.provider-model input[type="checkbox"] { width: auto; }
 .model-sep { display: flex; align-items: center; gap: 6px; width: 100%; padding: 8px 8px 4px; color: var(--muted); font-size: 12px; background: none; border: none; text-align: left; cursor: pointer; }
 .model-sep:hover { color: var(--text); }
 .model-sep .picker-chev { flex: none; transition: transform 0.15s; }
@@ -1297,3 +1302,14 @@ body.panel-dragging { user-select: none; cursor: grabbing; }
 .missing-img { color: var(--muted, #888); font-size: 0.92em; }
 .lightbox { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.78); cursor: zoom-out; -webkit-app-region: no-drag; }
 .lightbox img { max-width: 92vw; max-height: 92vh; border-radius: 6px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5); }
+
+.img-wrap { position: relative; display: inline-block; max-width: 100%; }
+.img-wrap .answer-img { margin: 8px 0; }
+.img-save { position: absolute; top: 16px; right: 8px; display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0; border: none; border-radius: 8px; color: #fff; background: rgba(0, 0, 0, 0.55); opacity: 0; transition: opacity 0.15s; cursor: pointer; }
+.img-save svg { width: 16px; height: 16px; }
+.img-wrap:hover .img-save, .img-save:focus-visible { opacity: 1; }
+.img-save:hover { background: rgba(0, 0, 0, 0.75); }
+
+/* A drop on the files panel: the folder it goes into */
+#filesPane.drop-root { outline: 2px dashed var(--accent); outline-offset: -4px; border-radius: 8px; }
+#fileTree .node.drop-target { background: color-mix(in srgb, var(--accent) 22%, transparent); border-radius: 6px; }
