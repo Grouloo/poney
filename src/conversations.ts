@@ -9,7 +9,7 @@ import type { AgentEvent, ConversationFile, ConversationSummary } from './types.
 
 const MAX_STORED_OUTPUT = 20000;
 // Streaming events are redundant with assistant_end / action_end.
-const SKIPPED_EVENTS = new Set<AgentEvent['type']>(['delta', 'action_output', 'turn_start', 'context', 'compaction_start', 'prompt_progress', 'fetching']);
+const SKIPPED_EVENTS = new Set<AgentEvent['type']>(['delta', 'action_output', 'turn_start', 'context', 'compaction_start', 'keep_start', 'prompt_progress', 'fetching']);
 
 /** A saved conversation: written by this app, so only its top level is checked. */
 const isConversation = (v: unknown): v is ConversationFile => isRecord(v);

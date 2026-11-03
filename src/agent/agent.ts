@@ -6,6 +6,7 @@ import os from 'node:os';
 import { streamChat, complete, serverContextLength } from './llm.ts';
 import { callOrigins, calledAs, liveAction, partialEditPairs, TOOLS, buildSystemPrompt, parseActions, splitThinking, formatResult, isToolEnabled, withReasoning, findRepetition, normalizeToolCalls, stripReasoning, legacyReasoningToNotes, stripChannelMarkers, toolSchemas, answerInReasoning } from './protocol.ts';
 import { executeAction, runShell, truncateMiddle, checkOldBlock, type SharedFiles } from './tools.ts';
+import { KEEP_SCHEMA, keepInstruction, messageStart, parseKeep } from './keep.ts';
 import { remember, forget, memoryBlock, standingInstructions, instructionNote, replacedAutoNote } from './memory.ts';
 import { loadSkills, skillDirs, mentionedSkills, matchingSkills, skillBlock, type Skill } from './skills.ts';
 import { recall, autoRecall, recalledBlock, keywordsOf, outOfContext } from './history.ts';
@@ -505,6 +506,7 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
     const { old, recent } = splitForCompaction(this.messages, keepTokens, est);
     if (old.length < 2) return { compacted: false, reason: 'Pas assez de messages anciens à résumer.' };
 
+    await this.keepBeforeCompaction(system, signal, recent);
     this.emit('event', { type: 'compaction_start' });
     const turnStart = this.turnStartIndex ?? this.messages.length;
     // The request of the current task, if it is about to be summarized. After a
@@ -579,6 +581,56 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
     this.emit('event', { type: 'compaction', before, after, removed: old.length, summary: content, fallback, failure: fallback ? failure : null });
     await this.emitContext(system);
     return { compacted: true, before, after, fallback, failure };
+  }
+
+  /**
+   * Before a compaction (see keep.ts): what the model wants kept from the whole
+   * conversation. Its memory notes are written here; lines for the project's notes
+   * file are only proposed (the 'kept' event, answered in the window). A failure
+   * is ignored: the compaction goes on without it.
+   */
+  async keepBeforeCompaction(system: string, signal: AbortSignal, recent: Message[]) {
+    if (this.role !== 'main' || this.config.memoryEnabled === false) return;
+    const prompt = this.buildPrompt(system);
+    if (this.cfg.numCtx - historyTokens(prompt, this.est) - this.plan(system).margin < 600) return; // no room to answer
+    const { projectNotes, notesFile } = await this.loadProjectNotes();
+    const project = !this.offProject;
+    const file = notesFile ?? 'AGENTS.md';
+    const instruction = keepInstruction({ until: recent.length ? messageStart(stripReasoning(recent[0].content)) : '', project, file });
+    this.emit('event', { type: 'keep_start' });
+    let text = '';
+    for (const jsonSchema of [KEEP_SCHEMA, undefined]) {
+      try {
+        for await (const chunk of (this.streamChat ?? streamChat)({
+          ...this.cfg,
+          toolSchemas: toolSchemas(this.config, { subagentRole: false }), // (the cached prompt's tools)
+          temperature: 0.2,
+          maxTokens: 400,
+          noThinking: true,
+          messages: triageRequest(prompt, instruction),
+          jsonSchema,
+          signal,
+        })) {
+          if (chunk.type === 'text') text += chunk.text;
+          else if (chunk.type === 'progress') this.emit('event', { type: 'prompt_progress', id: 'keep', progress: chunk.progress });
+        }
+        break;
+      } catch (e) {
+        if (signal.aborted) throw e;
+        text = ''; // (a server without structured output: the JSON only asked for)
+      }
+    }
+    const items = parseKeep(text, { memory: this.memory, notes: projectNotes, project }) ?? [];
+    const memory: string[] = [];
+    for (const it of items) {
+      if (it.where !== 'memory') continue;
+      const k = replacedAutoNote(this.memory, it.fact);
+      const r = remember(k >= 0 ? this.memory.filter((_, i) => i !== k) : this.memory, it.fact);
+      if (r.ok && r.notes !== this.memory) { this.memory = r.notes; memory.push(it.fact); }
+    }
+    if (memory.length) this.emit('event', { type: 'memory', notes: this.memory });
+    const lines = items.filter((it) => it.where === 'project').map((it) => it.fact);
+    this.emit('event', { type: 'kept', id: `kept-${Date.now()}`, memory, project: lines, file });
   }
 
   /** Manual compaction, from the UI. */

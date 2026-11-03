@@ -63,6 +63,7 @@ const api = {
   listSkills: call('skills:list'),
   setDraft: call('session:setDraft'),
   setAskDraft: call('session:setAskDraft'),
+  keepAnswer: call('session:keepAnswer'),
   onOpenSettings: on('ui:openSettings'),
   onContextMenu: onValue<ContextMenuParams>('ui:contextMenu'),
   onSwipe: onValue<'left' | 'right'>('ui:swipe'),

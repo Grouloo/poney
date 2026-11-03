@@ -18,6 +18,7 @@ import type { Message, Role } from '../src/types.ts';
 const est = makeEstimator(3.2);
 // A summary request: separate transcript, or continuation of the conversation.
 const isSummaryReq = (d: ModelRequest) => d.messages[0].content.startsWith('You summarize') || d.messages.at(-1)!.content.includes('PAUSE THE TASK');
+const isKeepReq = (d: ModelRequest) => d.messages.at(-1)!.content.includes('BEFORE THE SUMMARY.');
 const msg = (role: Role, content: string): Message => ({ role, content });
 
 test('splitForCompaction keeps recent messages that fit, at least 2', () => {
@@ -70,6 +71,8 @@ function fakeOllama(handler: (data: ModelRequest, n: number) => { content: strin
     req.on('data', (d) => (body += d));
     req.on('end', () => {
       const data = JSON.parse(body) as ModelRequest;
+      // (what to keep before a compaction: nothing here, and not counted; see test/keep.test.ts)
+      if (isKeepReq(data)) return res.end(`${JSON.stringify({ message: { content: '{"keep": []}' }, done: true, done_reason: 'stop' })}\n`);
       requests.push(data);
       const { content, promptTokens, doneReason = 'stop' } = handler(data, requests.length);
       res.end(`${JSON.stringify({ message: { content }, done: false })}\n${JSON.stringify({ message: { content: '' }, done: true, done_reason: doneReason, prompt_eval_count: promptTokens, eval_count: 10 })}\n`);
@@ -233,6 +236,7 @@ test('summary rejected by the server is retried with a shorter transcript', asyn
     req.on('data', (d) => (body += d));
     req.on('end', () => {
       const data = JSON.parse(body) as ModelRequest;
+      if (isKeepReq(data)) return res.end(`${JSON.stringify({ message: { content: '{"keep": []}' }, done: true, done_reason: 'stop' })}\n`);
       sizes.push(data.messages[1].content.length);
       if (sizes.length === 1) { res.statusCode = 400; return res.end('{"error":"context length exceeded"}'); }
       res.end(`${JSON.stringify({ message: { content: 'Goal: g\nNext step: s' }, done: true, done_reason: 'stop' })}\n`);

@@ -279,6 +279,11 @@ export type AgentEvent = Scoped & (
   | { type: 'triage_start'; turnId?: string; update?: boolean }
   | ({ type: 'triage'; turnId?: string; update?: boolean; failed?: boolean } & Partial<Triage>)
   | { type: 'compaction_start' }
+  | { type: 'keep_start' }
+  // What the model kept before a compaction: notes written to the memory, and lines
+  // proposed for the project's notes file (file), each accepted or not (kept_answer).
+  | { type: 'kept'; id: string; memory: string[]; project: string[]; file: string }
+  | { type: 'kept_answer'; id: string; index: number; added: boolean }
   | { type: 'compaction'; before: number; after: number; removed: number; summary: string; fallback: boolean; failure: string | null }
   | ContextStats
   | { type: 'sleeping'; on: boolean }
