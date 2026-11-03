@@ -1496,7 +1496,7 @@ let viewerPane: Pane | null = null; // (the pane whose project the file shown is
 function closePanelsOfPane() {
   if (livePane === pane) closeLivePanel();
   if (panelPane === pane) closeAgentPanel();
-  if (split && viewerPane === pane) closeViewer(); // (perhaps of another project)
+  if (split) closeTabsOf(pane); // (perhaps of another project)
 }
 
 function liveCard(b: Bubble) {
@@ -3619,14 +3619,17 @@ for (const el of SIDE_PANELS) {
     const move = (e: PointerEvent) => {
       const dx = e.clientX - down.clientX;
       if (!moving && Math.abs(dx) < 5) return;
+      if (!moving) window.getSelection()?.removeAllRanges(); // (the press began one)
       moving = true;
       el.classList.add('dragging');
+      document.body.classList.add('panel-dragging');
       el.style.left = `${from + dx}px`;
     };
     const up = (e: PointerEvent) => {
       document.removeEventListener('pointermove', move);
       document.removeEventListener('pointerup', up);
       if (!moving) return;
+      document.body.classList.remove('panel-dragging');
       const r = splitDivider.getBoundingClientRect();
       panelSide = e.clientX < r.left + r.width / 2 ? 'left' : 'right';
       panelPlaced = true;
@@ -3679,6 +3682,7 @@ async function renderDir(rel: string, ul: HTMLElement) {
       };
     } else {
       node.onclick = () => openFile(e.path);
+      node.addEventListener('auxclick', (ev) => { if (ev.button === 1) openFile(e.path, { tab: true }); });
       // (dropped on a pane of the conversations: the file opens over it)
       node.draggable = true;
       node.addEventListener('dragstart', (ev) => {
@@ -4171,18 +4175,67 @@ function viewing(): Viewing | null {
   return { path: openPath, ...(visible ? { visible } : {}), ...(viewerSelection ? { selection: viewerSelection } : {}) };
 }
 
+// ---------- the viewer's tabs: a middle click opens a file beside the one shown ----------
+/** The files open in the viewer (a bar shows from two), each read through its pane. */
+let viewerTabs: { path: string; pane: Pane | null; scroll: number }[] = [];
+
+function renderTabs() {
+  const bar = $('viewerTabs');
+  bar.classList.toggle('hidden', viewerTabs.length < 2);
+  bar.innerHTML = '';
+  for (const t of viewerTabs) {
+    const tab = document.createElement('div');
+    tab.className = 'viewer-tab' + (t.path === openPath ? ' active' : '');
+    tab.title = t.path;
+    tab.innerHTML = `<span class="name">${esc(t.path.split('/').pop() ?? t.path)}</span><button class="ghost icon" title="Fermer">✕</button>`;
+    tab.onclick = () => { if (t.path !== openPath) openFile(t.path); };
+    tab.addEventListener('auxclick', (e) => { if (e.button === 1) closeTab(t.path); });
+    tab.querySelector('button')!.onclick = (e) => { e.stopPropagation(); closeTab(t.path); };
+    bar.appendChild(tab);
+  }
+  bar.querySelector('.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+
+function closeTab(path: string) {
+  const at = viewerTabs.findIndex((t) => t.path === path);
+  if (at < 0) return;
+  viewerTabs.splice(at, 1);
+  if (!viewerTabs.length) return closeViewer();
+  if (path === openPath) openFile(viewerTabs[Math.min(at, viewerTabs.length - 1)].path);
+  else renderTabs();
+}
+
+/** The tabs read through a pane are closed (its conversation is no longer shown there). */
+function closeTabsOf(p: Pane) {
+  const kept = viewerTabs.filter((t) => t.pane !== p);
+  if (kept.length === viewerTabs.length) return;
+  if (!kept.length) return closeViewer();
+  const shown = kept.some((t) => t.path === openPath);
+  viewerTabs = kept;
+  if (shown) renderTabs();
+  else openFile(kept[0].path);
+}
+
 function closeViewer() {
   closeDiffPanel();
   viewerSelection = null;
   openPath = null;
+  viewerTabs = [];
+  renderTabs();
   $('viewer').classList.add('hidden');
   document.querySelectorAll<HTMLElement>('.tree .node.active').forEach((n) => n.classList.remove('active'));
 }
 
-async function openFile(rel: string, { keepScroll = false, over }: { keepScroll?: boolean; over?: Pane } = {}) {
+/** Opens a file in the viewer: in place of the one shown, or in a tab of its own beside it. */
+async function openFile(rel: string, { keepScroll = false, over, tab = false }: { keepScroll?: boolean; over?: Pane; tab?: boolean } = {}) {
   const body = $('viewerBody');
-  const scroll = keepScroll && rel === openPath ? body.scrollTop : 0;
-  if (rel !== openPath || $('viewer').classList.contains('hidden') || over) {
+  const shown = $('viewer').classList.contains('hidden') ? null : openPath;
+  const current = viewerTabs.find((t) => t.path === shown);
+  if (current && rel !== shown) current.scroll = body.scrollTop;
+  const existing = shown ? viewerTabs.find((t) => t.path === rel) : undefined;
+  const scroll = keepScroll && rel === shown ? body.scrollTop : rel === shown ? 0 : existing?.scroll ?? 0;
+  if (existing && !over) viewerPane = existing.pane; // (a tab of the other project stays read there)
+  else if (rel !== shown || over) {
     viewerPane = paneOfFolder() ?? focused;
     panelOver(over ?? paneOfFolder() ?? otherPane(focused));
   }
@@ -4196,6 +4249,14 @@ async function openFile(rel: string, { keepScroll = false, over }: { keepScroll?
   const f = read;
   if (f.path !== openPath) viewerSelection = null;
   openPath = f.path;
+  const entry = { path: f.path, pane: viewerPane, scroll };
+  const at = viewerTabs.findIndex((t) => t.path === f.path);
+  const from = viewerTabs.findIndex((t) => t.path === shown);
+  if (at >= 0) viewerTabs[at].pane = viewerPane;
+  else if (from < 0) viewerTabs = [entry];
+  else if (tab) viewerTabs.splice(from + 1, 0, entry);
+  else viewerTabs[from] = entry; // (a click replaces the file shown)
+  renderTabs();
   if (panelAgent) closeAgentPanel(); // (one side panel at a time)
   if (liveBubble) closeLivePanel();
   closeDiffPanel();
