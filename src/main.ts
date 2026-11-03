@@ -23,7 +23,7 @@ import { migrateLegacy, rebuildHistory, rebuildForAction } from './agent/rebuild
 import { checkTor, torStatus, newCircuits, findTorProxy, requireTor, proxyEnv } from './agent/tor.ts';
 import { errorMessage, isBoolean, isNumber, isRecord, isString, isStringArray, list, parseJson, rec, str } from './unknown.ts';
 import type { AppAlert, Args, Channel, ClaudeAccount, ClaudeUsage, Reply, SessionView } from './ipc.ts';
-import type { AgentEvent, ApprovalAnswer, ApprovalRequest, AskDraft, Choice, ConversationFile, ProjectIcon, Provider, PublicSettings, Settings, Viewing } from './types.ts';
+import type { AgentEvent, ApprovalAnswer, ApprovalRequest, AskDraft, Choice, ConversationFile, ConversationPair, ProjectIcon, Provider, PublicSettings, Settings, Viewing } from './types.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -794,6 +794,13 @@ handle('session:unsplit', [orNull(isString)], (keep) => {
   if (gone && gone !== kept) leave(gone);
   send('sessions:changed');
   return publicSettings();
+});
+// The pairs of conversations, saved so that they come back with the app.
+const isPair = (v: unknown): v is ConversationPair => isRecord(v) && isString(v.left) && isString(v.right) && isNumber(v.at);
+handle('session:setPairs', [(v: unknown): v is ConversationPair[] => Array.isArray(v) && v.every(isPair), orNull(isString)], (pairs, shown) => {
+  settings.pairs = pairs;
+  settings.pairShown = shown;
+  saveSettings();
 });
 // A conversation in view, drawn again (the window was reloaded).
 handle('session:view', [isString], (key) => {

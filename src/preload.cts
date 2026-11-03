@@ -54,6 +54,7 @@ const api = {
   beforeCalls: (fn: () => void) => { beforeCall = fn; },
   split: call('session:split'),
   unsplit: call('session:unsplit'),
+  setPairs: call('session:setPairs'),
   listConversations: call('conversations:list'),
   openConversation: call('conversations:open'),
   renameConversation: call('conversations:rename'),

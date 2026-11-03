@@ -7,7 +7,7 @@ import type { TorStatus } from './agent/tor.ts';
 import type { ModelEngine } from './engine/engine.ts';
 import type { listDir, OpeningApp, ViewedFile } from './files.ts';
 import type { GitBranches, GitRepoStatus, gitFileStates } from './git.ts';
-import type { AgentEvent, ApprovalRequest, AskDraft, Choice, Config, ContextStats, ConversationSummary, EngineSettings, ProjectIcon, Provider, ProviderType, PublicSettings, QuestionAnswer, Steps, Viewing } from './types.ts';
+import type { AgentEvent, ApprovalRequest, AskDraft, Choice, Config, ConversationPair, ContextStats, ConversationSummary, EngineSettings, ProjectIcon, Provider, ProviderType, PublicSettings, QuestionAnswer, Steps, Viewing } from './types.ts';
 
 /** An event of the agent, with the conversation it comes from. */
 export type SessionEvent = AgentEvent & { session?: string };
@@ -160,6 +160,7 @@ export interface Channels {
   'session:focus': [[key: string], void];
   'session:split': [[], void];
   'session:unsplit': [[keep: string | null], PublicSettings];
+  'session:setPairs': [[pairs: ConversationPair[], shown: string | null], void];
   'session:setChoice': [[patch: Choice], PublicSettings];
   'session:setDraft': [[text: string], void];
   'session:setAskDraft': [[draft: AskDraft | null], void];

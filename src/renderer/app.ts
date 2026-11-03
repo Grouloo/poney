@@ -18,7 +18,7 @@ import type { TorStatus } from '../agent/tor.ts';
 import type { GitFile, GitRepoStatus } from '../git.ts';
 import type { ViewedFile } from '../files.ts';
 import { errorMessage, isRecord, isStringArray, num, str } from '../unknown.ts';
-import type { AgentEvent, Choice, ContextStats, Viewing, ConversationSummary, Effort, EngineName, EventOf, PlanTask, ProjectIcon, Provider, ProviderType, PublicSettings, AskDraft, Question, QuestionAnswer, ToolArgs, TriageItem, TurnStats } from '../types.ts';
+import type { AgentEvent, Choice, ContextStats, ConversationPair, Viewing, ConversationSummary, Effort, EngineName, EventOf, PlanTask, ProjectIcon, Provider, ProviderType, PublicSettings, AskDraft, Question, QuestionAnswer, ToolArgs, TriageItem, TurnStats } from '../types.ts';
 
 declare global {
   interface Window {
@@ -2185,7 +2185,7 @@ $<HTMLButtonElement>('sidebarBtn').dataset.tip = `Afficher / masquer les barres 
 const toRead = (key: string) => lastConversations.filter((c) => (key === ALL || projectOf(c) === key) && (c.unread || c.finished));
 
 const projectActions: Record<string, (key: string) => unknown> = {
-  newConversation: (key) => key === ALL ? newConversationHere() : newConversationIn(key === OFF_KEY ? null : key),
+  newConversation: async (key) => { await putPairAside(); return key === ALL ? newConversationHere() : newConversationIn(key === OFF_KEY ? null : key); },
   markRead: async (key) => {
     const ids = toRead(key).map((c) => c.id);
     if (ids.length) await window.api.markConversationsRead(ids);
@@ -2619,7 +2619,7 @@ function showAlert(a: AppAlert) {
   };
   t.onclick = (e) => {
     close();
-    if (!(e.target as HTMLElement).closest('.toast-close')) openConversation(a.session);
+    if (!(e.target as HTMLElement).closest('.toast-close')) goTo(a.session);
   };
   // (an approval waits for an answer: it stays; the others go after a while, not while pointed at)
   const waits = a.kind === 'approval' || a.kind === 'question';
@@ -2631,7 +2631,7 @@ function showAlert(a: AppAlert) {
 }
 const clearAlerts = (session: string) => { for (const t of toasts.querySelectorAll<HTMLElement>(`[data-session="${CSS.escape(session)}"]`)) t.remove(); };
 window.api.onAlert(showAlert);
-window.api.onOpenConversation((id) => openConversation(id)); // (a notification of the system, clicked)
+window.api.onOpenConversation((id) => goTo(id)); // (a notification of the system, clicked)
 
 // ---------- sidebar ----------
 let replaying = false;
@@ -3011,13 +3011,24 @@ async function refreshConversations({ slide = 0 } = {}) {
   if (!keys.includes(projectFilter)) projectFilter = ALL;
   renderProjectBar(keys);
   const inList = (c: ConversationSummary) => projectFilter === ALL || projectOf(c) === projectFilter;
-  // A split view: its two conversations, left then right, as one card where the more recent would be.
-  const pair = split ? [leftPane, otherPane(leftPane)].map((p) => lastConversations.find((c) => c.id === sessionOf(p))) : [];
-  const paired = pair.filter((c): c is ConversationSummary => Boolean(c));
-  const lead = paired.some(inList) ? paired.reduce((a, b) => (b.updatedAt > a.updatedAt ? b : a)) : undefined;
-  const pairCategory = PRIORITY.find((k) => paired.some((c) => category(c) === k));
-  const all = lastConversations.filter((c) => inList(c) ? !paired.includes(c) || c === lead : c === lead);
-  const placeOf = (c: ConversationSummary) => (c === lead ? pairCategory : category(c));
+  syncPair();
+  // (a pair whose conversation is gone comes apart)
+  const known = new Set(every.map((c) => c.id));
+  const whole = pairs.filter((x) => x === shownPair || (known.has(x.left) && known.has(x.right)));
+  if (whole.length !== pairs.length) { pairs = whole; savePairs(); }
+  // Each pair: its two conversations, left then right, as one card where the more recent would be.
+  const leads = new Map<ConversationSummary, { card: PairCard; place?: string }>();
+  const inPairs = new Set<ConversationSummary>();
+  for (const pr of pairs) {
+    const card = { pair: pr, members: [pr.left, pr.right].map((id) => lastConversations.find((c) => c.id === id)) };
+    const paired = card.members.filter((c): c is ConversationSummary => Boolean(c));
+    for (const c of paired) inPairs.add(c);
+    if (!paired.some(inList)) continue;
+    const lead = paired.reduce((a, b) => (b.updatedAt > a.updatedAt ? b : a));
+    leads.set(lead, { card, place: PRIORITY.find((k) => paired.some((c) => category(c) === k)) });
+  }
+  const all = lastConversations.filter((c) => leads.has(c) || (inList(c) && !inPairs.has(c)));
+  const placeOf = (c: ConversationSummary) => (leads.has(c) ? leads.get(c)!.place : category(c));
   const list = $('convList');
   const before = slide ? null : sidebarPlaces();
   list.innerHTML = '';
@@ -3031,7 +3042,7 @@ async function refreshConversations({ slide = 0 } = {}) {
   const key = window.api.platform === 'darwin' ? '⌘' : 'Ctrl+';
   const addButton = add.firstChild as HTMLElement;
   addButton.querySelector<HTMLElement>('.kbd')!.textContent = `${key}N`;
-  addButton.onclick = () => newConversationHere();
+  addButton.onclick = async () => { await putPairAside(); newConversationHere(); };
   middleClick(addButton, () => openBeside(null));
   list.appendChild(add);
   for (const cat of CATEGORIES) {
@@ -3052,7 +3063,7 @@ async function refreshConversations({ slide = 0 } = {}) {
       };
     }
     const ul = li.querySelector<HTMLElement>('ul')!;
-    for (const c of items) ul.appendChild(c === lead ? pairItem(pair, placeOf(c) ?? '') : conversationItem(c, current));
+    for (const c of items) { const lead = leads.get(c); ul.appendChild(lead ? pairItem(lead.card, placeOf(c) ?? '') : conversationItem(c, current)); }
     list.appendChild(li);
   }
   if (!all.length) {
@@ -3180,7 +3191,7 @@ function conversationItem(c: ConversationSummary, current: string | null) {
     when.dataset.since = String(c.workingSince);
     when.textContent = workTime(Date.now() - c.workingSince);
   } else when.textContent = relativeTime(c.updatedAt);
-  li.onclick = () => openConversation(c.id);
+  li.onclick = () => goTo(c.id);
   // A click with the wheel, or the card dropped on one side of the chat: beside the one shown.
   middleClick(li, () => openBeside(c.id));
   li.draggable = true;
@@ -3402,9 +3413,15 @@ async function openAside(id: string | null, side: Side, project?: string) {
   if (!(await open())) await closePane(fresh);
 }
 
-/** A pane closed: the other one takes the whole room, and the conversation goes back to the sidebar as a card of its own. */
-async function closePane(p: Pane) {
+/**
+ * A pane closed: the other one takes the whole room, and the conversation goes back to the
+ * sidebar as a card of its own. keepPair: the pair is only put aside (its card shows it again).
+ */
+async function closePane(p: Pane, { keepPair = false } = {}) {
   if (!split) return;
+  if (!keepPair) pairs = pairs.filter((x) => x !== shownPair);
+  shownPair = null;
+  savePairs();
   const keep = otherPane(p);
   await inPane(p, () => { rememberScroll(); return flushDraft(); });
   focusPane(keep);
@@ -3455,12 +3472,13 @@ splitDivider.addEventListener('pointerdown', (down) => {
   const up = () => {
     splitDivider.removeEventListener('pointermove', move);
     splitDivider.classList.remove('dragging');
+    syncPair(); // (its share is kept with the pair)
   };
   splitDivider.addEventListener('pointermove', move);
   splitDivider.addEventListener('pointerup', up, { once: true });
   splitDivider.addEventListener('pointercancel', up, { once: true });
 });
-splitDivider.ondblclick = () => { splitAt = 0.5; applySplitAt(); };
+splitDivider.ondblclick = () => { splitAt = 0.5; applySplitAt(); syncPair(); };
 
 // The two titles, at the top of the window above their panes.
 const splitHeads = new Map(panes.map((p) => {
@@ -3505,13 +3523,58 @@ function placeHeads() {
 }
 
 /** The card of the two conversations side by side: left, then right; a click goes to one. */
-function pairItem(pair: (ConversationSummary | undefined)[], cat: string) {
+// ---------- pairs: conversations side by side, kept (and saved) until one of them is closed ----------
+// The split view shows one pair. A plain click elsewhere puts it aside (one pane again);
+// its card shows it again. A click with the wheel replaces the other pane: the pair changes.
+let pairs: ConversationPair[] = [];
+let shownPair: ConversationPair | null = null;
+type PairCard = { pair: ConversationPair; members: (ConversationSummary | undefined)[] };
+const samePair = (x: ConversationPair, a: string, b: string) => (x.left === a && x.right === b) || (x.left === b && x.right === a);
+const pairOf = (id: string) => pairs.find((x) => x.left === id || x.right === id);
+const savePairs = () => { window.api.setPairs(pairs, shownPair?.left ?? null).catch(() => {}); };
+
+/** The pair shown follows the panes: one replaced, it changes; another pair that had one of them comes apart. */
+function syncPair() {
+  if (!split) return;
+  const left = sessionOf(leftPane);
+  const right = sessionOf(otherPane(leftPane));
+  if (!left || !right) return;
+  const before = JSON.stringify([pairs, shownPair?.left]);
+  shownPair ??= pairs.find((x) => samePair(x, left, right)) ?? null;
+  if (!shownPair) pairs.push(shownPair = { left, right, at: splitAt });
+  Object.assign(shownPair, { left, right, at: splitAt });
+  pairs = pairs.filter((x) => x === shownPair || ![x.left, x.right].some((id) => id === left || id === right));
+  if (JSON.stringify([pairs, shownPair.left]) !== before) savePairs();
+}
+
+/** One pane again, the pair shown kept for its card (the pane worked in stays). */
+const putPairAside = () => closePane(otherPane(focused), { keepPair: true });
+
+/** A pair in the split view (the one shown before put aside), the pane of `focusOn` worked in. */
+async function showPair(pr: ConversationPair, focusOn?: string) {
+  await putPairAside();
+  if ((await openConversation(pr.left)) === false) return;
+  splitAt = pr.at;
+  await openAside(pr.right, 'right');
+  if (focusOn === pr.left) focusPane(leftPane);
+}
+
+/** A conversation from its card (or a notification): with its pair if it has one; else alone, the pair shown put aside. */
+async function goTo(id: string) {
+  const pr = pairOf(id);
+  if (pr && pr !== shownPair) return showPair(pr, id);
+  if (split && !shownPanes().some((p) => sessionOf(p) === id)) await putPairAside();
+  return openConversation(id);
+}
+
+function pairItem({ pair: pr, members }: PairCard, cat: string) {
+  const shown = pr === shownPair;
   const li = document.createElement('li');
-  li.className = `conv-card pair active ${cat}`;
-  li.dataset.place = 'pair';
-  const sides: [Side, ConversationSummary | undefined][] = [['left', pair[0]], ['right', pair[1]]];
-  for (const [side, c] of sides) {
-    const row = li.appendChild(div(`card-top pair-row${c ? ` ${category(c)}` : ''}${paneAt(side) === focused ? ' focused' : ''}`, `<span class="pair-side ${side}"></span><span class="title"></span><span class="state"></span><span class="pill"></span>`));
+  li.className = `conv-card pair${shown ? ' active' : ''} ${cat}`;
+  li.dataset.place = shown ? 'pair' : `pair ${pr.left}`;
+  const sides: [Side, ConversationSummary | undefined, string][] = [['left', members[0], pr.left], ['right', members[1], pr.right]];
+  for (const [side, c, id] of sides) {
+    const row = li.appendChild(div(`card-top pair-row${c ? ` ${category(c)}` : ''}${shown && paneAt(side) === focused ? ' focused' : ''}`, `<span class="pair-side ${side}"></span><span class="title"></span><span class="state"></span><span class="pill"></span>`));
     const title = row.querySelector<HTMLElement>('.title')!;
     title.textContent = c?.title ?? 'Nouvelle conversation';
     title.title = title.textContent;
@@ -3519,25 +3582,31 @@ function pairItem(pair: (ConversationSummary | undefined)[], cat: string) {
       title.dataset.conv = c.id;
       fillPill(row.querySelector<HTMLElement>('.pill')!, c);
     } else row.querySelector<HTMLElement>('.pill')!.remove();
-    row.onclick = () => focusPane(paneAt(side));
+    row.onclick = () => (shown ? focusPane(paneAt(side)) : showPair(pr, id));
   }
   const meta = li.appendChild(div('card-meta', '<span class="project"></span><span class="when"></span>'));
-  const projects = [...new Set(pair.flatMap((c) => (c ? [projectOf(c)] : [])))];
+  const projects = [...new Set(members.flatMap((c) => (c ? [projectOf(c)] : [])))];
   meta.querySelector<HTMLElement>('.project')!.innerHTML = projects.map((k) => `${projectGlyph(k)} ${esc(projectLabel(k || ''))}`).join(' · ');
-  const latest = Math.max(...pair.map((c) => c?.updatedAt ?? 0));
+  const latest = Math.max(...members.map((c) => c?.updatedAt ?? 0));
   meta.querySelector<HTMLElement>('.when')!.textContent = latest ? relativeTime(latest) : '';
-  li.dataset.tip = 'Côte à côte : fermez l’une des deux pour les séparer';
+  li.dataset.tip = shown ? 'Côte à côte : fermez l’une des deux pour les séparer' : 'Côte à côte : un clic les affiche ensemble';
   li.dataset.tipSide = '';
   li.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     e.stopPropagation();
     closeProjectMenu();
     const name = (c?: ConversationSummary) => `« ${c?.title ?? 'Nouvelle conversation'} »`;
-    showContextMenu(e.clientX, e.clientY, 'Côte à côte', [
-      { glyph: 'markRead', label: 'Marquer comme lues', disabled: !pair.some((c) => c && (c.unread || c.finished)), run: () => window.api.markConversationsRead(pair.flatMap((c) => (c ? [c.id] : []))) },
+    const read: MenuItem = { glyph: 'markRead', label: 'Marquer comme lues', disabled: !members.some((c) => c && (c.unread || c.finished)), run: () => window.api.markConversationsRead(members.flatMap((c) => (c ? [c.id] : []))) };
+    showContextMenu(e.clientX, e.clientY, 'Côte à côte', shown ? [
+      read,
       '-',
-      { glyph: 'close', label: `Fermer ${name(pair[0])}`, run: () => closePane(paneAt('left')) },
-      { glyph: 'close', label: `Fermer ${name(pair[1])}`, run: () => closePane(paneAt('right')) },
+      { glyph: 'close', label: `Fermer ${name(members[0])}`, run: () => closePane(paneAt('left')) },
+      { glyph: 'close', label: `Fermer ${name(members[1])}`, run: () => closePane(paneAt('right')) },
+    ] : [
+      { glyph: 'left', label: 'Afficher côte à côte', run: () => showPair(pr) },
+      read,
+      '-',
+      { glyph: 'close', label: 'Séparer', run: () => { pairs = pairs.filter((x) => x !== pr); savePairs(); refreshConversations(); } },
     ]);
   });
   return li;
@@ -4871,11 +4940,15 @@ else {
   clearTranscript();
   setInput(session.draft || '');
 }
-// (and the other one of a split view, on the right)
+// (and the other one of a split view, on the side it was)
+pairs = settings.pairs ?? [];
 const beside = partner ? await window.api.sessionView(partner).catch(() => null) : null;
 if (beside) {
   const p = otherPane(focused);
   p.active = beside.settings.active;
+  const pr = pairs.find((x) => samePair(x, session.session, beside.session));
+  if (pr?.left === beside.session) leftPane = p;
+  if (pr) splitAt = pr.at;
   setSplit(true);
   inPane(p, () => {
     showSession(beside);
@@ -4884,4 +4957,9 @@ if (beside) {
   });
   refreshConversations();
 } else if (partner) await window.api.unsplit(session.session);
+else {
+  // (the app restarted: the pair shown when it closed)
+  const pr = pairs.find((x) => x.left === settings.pairShown);
+  if (pr) await showPair(pr);
+}
 input.focus();

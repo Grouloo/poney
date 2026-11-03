@@ -388,6 +388,15 @@ export interface Settings {
   providers: Provider[];
   lastChoice?: Choice;
   temperatureFromModel?: boolean;
+  pairs?: ConversationPair[]; // conversations side by side, kept until one is closed
+  pairShown?: string | null; // (the left one of the pair shown when the app closed)
+}
+
+/** Two conversations side by side: left, right, and the left one's share of the room. */
+export interface ConversationPair {
+  left: string;
+  right: string;
+  at: number;
 }
 
 export interface PublicSettings extends Settings {
