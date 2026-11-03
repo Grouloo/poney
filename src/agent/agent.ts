@@ -14,7 +14,7 @@ import { recall, autoRecall, recalledBlock, keywordsOf, outOfContext } from './h
 import { linksToRead, readLinks } from './autofetch.ts';
 import { TRIAGE_SCHEMA, TRIAGE_ATTEMPTS, TRIAGE_RETRY, TRIAGE_RETRY_CUT, fallbackTriage, ROUTE_SOURCES, SOURCE_TOOLS, MAX_REFUSALS, triageRequest, triageInstruction, triageUpdateInstruction, needsUpdate, parseTriage, triageBlock, triageReminder, triageRefusal, askNudge, asksInProse } from './triage.ts';
 import { parseQuestions, askResult, answersText, cleanAnswers, ASK_FORMAT } from './ask.ts';
-import { parsePlan, taskParts, mergePlan, carryPlan, nextGroup, setStatus, formatPlan, subAgentTask, turnDigest, conversationDigest, stoppedPlanText } from './plan.ts';
+import { parsePlan, taskParts, mergePlan, carryPlan, nextGroup, setStatus, formatPlan, subAgentTask, turnDigest, conversationDigest, stoppedPlanText, isConversationPart, partInView, notedSince, dropParts, partWaits } from './plan.ts';
 import {
   summaryTokens, summaryWords, mechanicalSummary, DEFAULT_CHARS_PER_TOKEN,
   makeEstimator, contextPlan, answerTokens, isValidSample, historyTokens, splitForCompaction, extractFacts, buildSummaryRequest, cleanSummary,
@@ -1367,6 +1367,7 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
     let codeChangedThisTurn = false; // the test gates only ask to test this turn's code
     let gateNudges = 0;
     let loopNudges = 0;
+    const partsRefused = new Set<string>(); // parts of the conversation not read at once, for want of notes (see plan.ts)
     let testFailures = 0;
     let emptyReplies = 0;
     let codeDumpNudged = false;
@@ -1720,6 +1721,19 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
             this.emit('event', { type: 'action_end', id: actId, ok: out.ok, output: out.text, meta: { tasks: this.taskPlan?.tasks.length ?? 0 } });
             results.push(out.result);
             continue;
+          }
+          // A part of the conversation (a sub-agent's): one in view at a time, the next
+          // one after notes on the last (asked once per part, then read all the same).
+          const part = action.tool === 'read' ? String(action.args.path ?? '').trim() : '';
+          if (isConversationPart(part) && this.virtualFiles?.has(part)) {
+            const seen = partInView(this.messages);
+            if (seen && seen.path !== part && !notedSince(this.messages, seen.at) && !partsRefused.has(part)) {
+              partsRefused.add(part);
+              this.emit('event', { type: 'action_end', id: actId, ok: false, output: `Lecture de ${part} différée : le sous-agent note d’abord ce qu’il a lu.`, meta: { path: part } });
+              results.push(formatResult('read', { path: part }, partWaits(seen.path, part)));
+              continue;
+            }
+            dropParts(this.messages, part);
           }
           // Already done, its result still in view and nothing changed: not run again.
           const reused = await this.reusedResult(action);

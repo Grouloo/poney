@@ -1,4 +1,4 @@
-import { stripReasoning } from './protocol.ts';
+import { parseActions, stripReasoning } from './protocol.ts';
 import { SUMMARY_MARKER } from './context.ts';
 import type { Message, Plan, PlanTask, TaskStatus } from '../types.ts';
 
@@ -274,9 +274,58 @@ export function conversationDigest(messages: Message[], { maxChars = 6000, outpu
   const partial = left || archived.length || said.some((t) => t.length > 3000);
   if (outputs && partial) {
     const range = parts.length > 1 ? `<read path="${conversationPath(1)}" /> to <read path="${conversationPath(parts.length)}" />` : `<read path="${conversationPath(1)}" />`;
-    out.push(`[This is only part of the conversation. All of it, in ${parts.length} part(s): ${range}. If your task is about the conversation, read every part, one <read> per message, and write down what you need as you go (in the file of your task if it has one): your context is limited, and what you read first may leave it.]`);
+    out.push(`[This is only part of the conversation. All of it, in ${parts.length} part(s): ${range}. If your task is about the conversation, read every part, one <read> per message, and write down what you need from each part before reading the next (in the file of your task if it has one): only the last part read stays in your context.]`);
   }
   return out.join('\n\n');
+}
+
+// A sub-agent reads the parts of the conversation one at a time: each is a fifth
+// of its window, and kept in view they filled it after three or four (then a
+// slow compaction, with little left of what was read). So only the last part
+// read stays in view, and the next one waits for notes on it (see agent.ts).
+const PART_RESULT_RE = /(<result tool="read" path="(@conversation\/\d+)"[^>]*>\n)([\s\S]*?)(\n<\/result>)/g;
+const PART_REMOVED = '[This part was read earlier, and removed from your context to make room for the next one: what you wrote down about it is what is left.]';
+const PART_WAITS = 'Not read yet: ';
+const NOTE_CHARS = 300; // (less is a sentence, not notes)
+export const isConversationPart = (p: string) => /^@conversation\/\d+$/.test(p);
+
+/** The part of the conversation whose content is in view last, and the index of its message. */
+export function partInView(messages: Message[]): { path: string; at: number } | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role !== 'user') continue;
+    const found = [...messages[i].content.matchAll(PART_RESULT_RE)].filter((m) => !m[3].startsWith(PART_REMOVED) && !m[3].startsWith(PART_WAITS));
+    if (found.length) return { path: found[found.length - 1][2], at: i };
+  }
+  return null;
+}
+
+/** Whether the agent wrote down something after message `at`: prose of its own, or a file. */
+export function notedSince(messages: Message[], at: number): boolean {
+  let prose = 0;
+  for (const m of messages.slice(at + 1)) {
+    if (m.role !== 'assistant') continue;
+    const { text, actions } = parseActions(stripReasoning(m.content));
+    if (actions.some((a) => a.tool === 'write' || a.tool === 'edit' || a.tool === 'remember')) return true;
+    prose += text.trim().length;
+  }
+  return prose >= NOTE_CHARS;
+}
+
+/** The result of a read of the next part before notes on the last one. */
+export const partWaits = (seen: string, part: string) => `${PART_WAITS}${seen} leaves your context when you read ${part}. First write down what your task needs from ${seen} (facts, names, dates, decisions, in order), in your message or in your file, then read ${part} again.`;
+
+/** Takes the content of the parts read out of the history, except `keep`'s. Returns how many. */
+export function dropParts(messages: Message[], keep: string): number {
+  let n = 0;
+  for (const m of messages) {
+    if (m.role !== 'user' || !m.content.includes('path="@conversation/')) continue;
+    m.content = m.content.replace(PART_RESULT_RE, (all: string, open: string, p: string, body: string, close: string) => {
+      if (p === keep || body.startsWith(PART_REMOVED)) return all;
+      n++;
+      return `${open}${PART_REMOVED}${close}`;
+    });
+  }
+  return n;
 }
 
 /** A step cut to `limit` characters in the middle, saying what was cut and where to read it. */
