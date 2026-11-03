@@ -704,7 +704,10 @@ img.proj-icon { width: 1.15em; height: 1.15em; object-fit: contain; vertical-ali
 .app-icon { width: 16px; height: 16px; display: block; flex: none; }
 #viewerOpen:has(.app-icon) { padding-right: 4px; }
 .viewer-head .open-with { width: 18px; margin-left: -4px; padding: 0; color: var(--muted); }
-.ctx-icon { width: 16px; height: 16px; flex: none; margin-right: -10px; }
+.ctx-glyph { width: 16px; height: 16px; flex: none; margin-right: -9px; display: flex; color: var(--muted); }
+.ctx-glyph img, .ctx-glyph svg { width: 16px; height: 16px; }
+.ctx-item:hover:not(:disabled) .ctx-glyph { color: inherit; }
+.ctx-item.danger .ctx-glyph { color: inherit; }
 .reveal-root { display: inline-flex; align-items: center; justify-content: center; padding: 4px 7px; }
 .tree, .tree ul { list-style: none; margin: 0; padding: 0; }
 .tree ul { padding-left: 12px; }

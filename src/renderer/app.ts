@@ -8,6 +8,7 @@ import { documentHtml } from './document.ts';
 import { SwipeDetector } from './swipe.ts';
 import { EMOJIS, ICONS, ICON_COLORS, iconSvg } from './project-icons.ts';
 import { fileIconSvg, folderIconSvg, privateFolderIconSvg } from './file-icons.ts';
+import { menuIconSvg, type MenuGlyph } from './menu-icons.ts';
 import DOMPurify from '../../node_modules/dompurify/dist/purify.es.mjs';
 import type { Api } from '../preload.cts';
 import { isGithub, repoName } from '../remote-url.ts';
@@ -57,6 +58,7 @@ interface MenuItem {
   strong?: boolean;
   disabled?: boolean;
   icon?: string; // (an image's URL)
+  glyph?: MenuGlyph; // (or a line icon)
 }
 
 type Viewed = ViewedFile | { path: string; kind: 'error'; message: string; size?: undefined };
@@ -2233,13 +2235,15 @@ function showContextMenu(x: number, y: number, title: string | null, items: (Men
     t.className = 'ctx-title';
     t.innerHTML = title;
   }
+  const slots = items.some((it) => it !== '-' && (it.icon !== undefined || it.glyph)); // (the labels stay aligned)
   for (const it of items) {
     if (it === '-') { ctxMenu.appendChild(document.createElement('div')).className = 'ctx-sep'; continue; }
     const row = ctxMenu.appendChild(document.createElement('button'));
     row.type = 'button';
     row.className = `ctx-item${it.danger ? ' danger' : ''}${it.strong ? ' strong' : ''}`;
     row.disabled = Boolean(it.disabled);
-    row.innerHTML = `${it.icon !== undefined ? `<img class="ctx-icon" src="${esc(it.icon)}" alt="">` : ''}<span class="ctx-label"></span><span class="ctx-kbd">${it.kbd ?? (it.action && SHORTCUTS[it.action] ? shortcutText(SHORTCUTS[it.action]) : '')}</span>`;
+    const icon = it.icon !== undefined ? `<img src="${esc(it.icon)}" alt="">` : it.glyph ? menuIconSvg(it.glyph) : '';
+    row.innerHTML = `${slots ? `<span class="ctx-glyph">${icon}</span>` : ''}<span class="ctx-label"></span><span class="ctx-kbd">${it.kbd ?? (it.action && SHORTCUTS[it.action] ? shortcutText(SHORTCUTS[it.action]) : '')}</span>`;
     row.querySelector<HTMLElement>('.ctx-label')!.textContent = it.label;
     row.onclick = () => { hideContextMenu(); it.run(); };
   }
@@ -2261,11 +2265,11 @@ $('sidebar').addEventListener('contextmenu', (e) => {
   const key = (e.target as HTMLElement).closest<HTMLElement>('[data-project]')?.dataset.project || projectFilter;
   const n = toRead(key).length;
   showContextMenu(e.clientX, e.clientY, key === ALL ? 'Tous les projets' : `${projectGlyph(key)} ${esc(projectLabel(key))}`, [
-    { label: 'Nouvelle conversation', action: 'newConversation', run: () => projectActions.newConversation(key) },
-    { label: n ? `Marquer comme lues (${n})` : 'Marquer comme lues', action: 'markRead', disabled: !n, run: () => projectActions.markRead(key) },
+    { glyph: 'newConversation', label: 'Nouvelle conversation', action: 'newConversation', run: () => projectActions.newConversation(key) },
+    { glyph: 'markRead', label: n ? `Marquer comme lues (${n})` : 'Marquer comme lues', action: 'markRead', disabled: !n, run: () => projectActions.markRead(key) },
     '-',
-    { label: key === ALL ? 'Paramètres des projets…' : 'Paramètres du projet…', action: 'projectSettings', run: () => openProjectSettings(key) },
-    { label: 'Ajouter un projet…', action: 'addProject', run: addProject },
+    { glyph: 'settings', label: key === ALL ? 'Paramètres des projets…' : 'Paramètres du projet…', action: 'projectSettings', run: () => openProjectSettings(key) },
+    { glyph: 'addProject', label: 'Ajouter un projet…', action: 'addProject', run: addProject },
   ]);
 });
 
@@ -2275,25 +2279,25 @@ const editKey = (k: string) => MAC ? `⌘${k}` : `Ctrl+${k}`;
 window.api.onContextMenu((p) => {
   const f = p.editFlags || {};
   const editing: MenuItem[] = [
-    { label: 'Couper', kbd: editKey('X'), disabled: !f.canCut, run: () => window.api.edit('cut') },
-    { label: 'Copier', kbd: editKey('C'), disabled: !f.canCopy, run: () => window.api.edit('copy') },
-    { label: 'Coller', kbd: editKey('V'), disabled: !f.canPaste, run: () => window.api.edit('paste') },
+    { glyph: 'cut', label: 'Couper', kbd: editKey('X'), disabled: !f.canCut, run: () => window.api.edit('cut') },
+    { glyph: 'copy', label: 'Copier', kbd: editKey('C'), disabled: !f.canCopy, run: () => window.api.edit('copy') },
+    { glyph: 'paste', label: 'Coller', kbd: editKey('V'), disabled: !f.canPaste, run: () => window.api.edit('paste') },
   ];
   if (p.isEditable) {
     const spelling: (MenuItem | '-')[] = p.misspelledWord ? [
       ...(p.suggestions?.length
         ? p.suggestions.slice(0, 5).map((w) => ({ label: w, strong: true, run: () => window.api.edit('replace', w) }))
         : [{ label: 'Aucune suggestion', disabled: true, run() {} }]),
-      { label: `Ajouter « ${p.misspelledWord} » au dictionnaire`, run: () => window.api.edit('learn', p.misspelledWord) },
+      { glyph: 'dictionary', label: `Ajouter « ${p.misspelledWord} » au dictionnaire`, run: () => window.api.edit('learn', p.misspelledWord) },
       '-',
     ] : [];
     showContextMenu(p.x, p.y, null, [
       ...spelling,
-      { label: 'Annuler', kbd: editKey('Z'), disabled: !f.canUndo, run: () => window.api.edit('undo') },
+      { glyph: 'undo', label: 'Annuler', kbd: editKey('Z'), disabled: !f.canUndo, run: () => window.api.edit('undo') },
       '-',
       ...editing,
       '-',
-      { label: 'Tout sélectionner', kbd: editKey('A'), disabled: !f.canSelectAll, run: () => window.api.edit('selectAll') },
+      { glyph: 'selectAll', label: 'Tout sélectionner', kbd: editKey('A'), disabled: !f.canSelectAll, run: () => window.api.edit('selectAll') },
     ]);
     return;
   }
@@ -2305,7 +2309,7 @@ window.api.onContextMenu((p) => {
   showContextMenu(p.x, p.y, null, [
     ...editing,
     '-',
-    { label: 'Citer dans le message', kbd: '❝', disabled: !where, run: () => { if (range && where) { focusPane(where); quote(range); } } },
+    { glyph: 'quote', label: 'Citer dans le message', kbd: '❝', disabled: !where, run: () => { if (range && where) { focusPane(where); quote(range); } } },
   ]);
 });
 
@@ -3200,13 +3204,13 @@ function conversationItem(c: ConversationSummary, current: string | null) {
     const here = !split && c.id === current;
     const beside = split ? sideOf(otherPane(focused)) : 'right';
     showContextMenu(e.clientX, e.clientY, esc(c.title), [
-      { label: split ? 'Remplacer la conversation de gauche' : 'Ouvrir à gauche', kbd: beside === 'left' ? 'clic molette' : '', disabled: here, run: () => openAside(c.id, 'left') },
-      { label: split ? 'Remplacer la conversation de droite' : 'Ouvrir à droite', kbd: beside === 'right' ? 'clic molette' : '', disabled: here, run: () => openAside(c.id, 'right') },
+      { glyph: 'left', label: split ? 'Remplacer la conversation de gauche' : 'Ouvrir à gauche', kbd: beside === 'left' ? 'clic molette' : '', disabled: here, run: () => openAside(c.id, 'left') },
+      { glyph: 'right', label: split ? 'Remplacer la conversation de droite' : 'Ouvrir à droite', kbd: beside === 'right' ? 'clic molette' : '', disabled: here, run: () => openAside(c.id, 'right') },
       '-',
-      { label: 'Marquer comme lue', disabled: !(c.unread || c.finished), run: () => window.api.markConversationsRead([c.id]) },
-      { label: 'Renommer', run: () => startRename(li, c) },
+      { glyph: 'markRead', label: 'Marquer comme lue', disabled: !(c.unread || c.finished), run: () => window.api.markConversationsRead([c.id]) },
+      { glyph: 'rename', label: 'Renommer', run: () => startRename(li, c) },
       '-',
-      { label: 'Supprimer…', danger: true, run: () => deleteConversation(c, current) },
+      { glyph: 'trash', label: 'Supprimer…', danger: true, run: () => deleteConversation(c, current) },
     ]);
   });
   return li;
@@ -3530,10 +3534,10 @@ function pairItem(pair: (ConversationSummary | undefined)[], cat: string) {
     closeProjectMenu();
     const name = (c?: ConversationSummary) => `« ${c?.title ?? 'Nouvelle conversation'} »`;
     showContextMenu(e.clientX, e.clientY, 'Côte à côte', [
-      { label: 'Marquer comme lues', disabled: !pair.some((c) => c && (c.unread || c.finished)), run: () => window.api.markConversationsRead(pair.flatMap((c) => (c ? [c.id] : []))) },
+      { glyph: 'markRead', label: 'Marquer comme lues', disabled: !pair.some((c) => c && (c.unread || c.finished)), run: () => window.api.markConversationsRead(pair.flatMap((c) => (c ? [c.id] : []))) },
       '-',
-      { label: `Fermer ${name(pair[0])}`, run: () => closePane(paneAt('left')) },
-      { label: `Fermer ${name(pair[1])}`, run: () => closePane(paneAt('right')) },
+      { glyph: 'close', label: `Fermer ${name(pair[0])}`, run: () => closePane(paneAt('left')) },
+      { glyph: 'close', label: `Fermer ${name(pair[1])}`, run: () => closePane(paneAt('right')) },
     ]);
   });
   return li;
@@ -3700,13 +3704,13 @@ async function renderDir(rel: string, ul: HTMLElement) {
         ev.preventDefault();
         ev.stopPropagation(); // (not the sidebar's menu)
         showContextMenu(ev.clientX, ev.clientY, esc(e.name), [
-          { label: 'Ouvrir', run: () => openFile(e.path) },
-          { label: 'Ouvrir avec…', run: () => openWithMenu(e.path, null, ev.clientX, ev.clientY) },
+          { glyph: 'open', label: 'Ouvrir', run: () => openFile(e.path) },
+          { glyph: 'openWith', label: 'Ouvrir avec…', run: () => openWithMenu(e.path, null, ev.clientX, ev.clientY) },
           '-',
-          { label: 'Renommer…', run: () => startFileRename(node.querySelector<HTMLElement>('.name')!, e.path, null) },
-          { label: `Afficher dans ${FILE_MANAGER}`, run: () => window.api.revealFile(e.path) },
+          { glyph: 'rename', label: 'Renommer…', run: () => startFileRename(node.querySelector<HTMLElement>('.name')!, e.path, null) },
+          { glyph: 'reveal', label: `Afficher dans ${FILE_MANAGER}`, run: () => window.api.revealFile(e.path) },
           '-',
-          { label: 'Mettre à la corbeille', danger: true, run: () => trashFile(e.path) },
+          { glyph: 'trash', label: 'Mettre à la corbeille', danger: true, run: () => trashFile(e.path) },
         ]);
       });
       // (dropped on a pane of the conversations: the file opens over it)
@@ -4297,11 +4301,11 @@ function renderTabs() {
       e.preventDefault();
       e.stopPropagation();
       showContextMenu(e.clientX, e.clientY, esc(name), [
-        { label: 'Renommer…', run: () => startFileRename(tab.querySelector<HTMLElement>('.name')!, t.path, t.pane) },
-        { label: 'Fermer l’onglet', run: () => closeTab(t.path) },
+        { glyph: 'rename', label: 'Renommer…', run: () => startFileRename(tab.querySelector<HTMLElement>('.name')!, t.path, t.pane) },
+        { glyph: 'close', label: 'Fermer l’onglet', run: () => closeTab(t.path) },
         '-',
-        { label: `Afficher dans ${FILE_MANAGER}`, run: () => inFilePane(t.pane, () => window.api.revealFile(t.path)) },
-        { label: 'Ouvrir avec…', run: () => openWithMenu(t.path, t.pane, e.clientX, e.clientY) },
+        { glyph: 'reveal', label: `Afficher dans ${FILE_MANAGER}`, run: () => inFilePane(t.pane, () => window.api.revealFile(t.path)) },
+        { glyph: 'openWith', label: 'Ouvrir avec…', run: () => openWithMenu(t.path, t.pane, e.clientX, e.clientY) },
       ]);
     });
     bar.appendChild(tab);
@@ -4517,7 +4521,7 @@ async function openWithMenu(rel: string, p: Pane | null, x: number, y: number) {
   if (apps.default) items.push({ label: `${apps.default.name} (par défaut)`, icon: apps.default.icon, strong: true, run: () => open(apps.default!.path) });
   if (apps.others.length) items.push('-', ...apps.others.map((a) => ({ label: a.name, icon: a.icon, run: () => open(a.path) })));
   if (items.length) items.push('-');
-  items.push({ label: 'Autre application…', run: () => open(null) });
+  items.push({ glyph: 'openWith', label: 'Autre application…', run: () => open(null) });
   showContextMenu(x, y, 'Ouvrir avec', items);
 }
 async function showOpeners(rel: string) {
