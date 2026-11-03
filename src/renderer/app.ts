@@ -10,6 +10,7 @@ import { EMOJIS, ICONS, ICON_COLORS, iconSvg } from './project-icons.ts';
 import { fileIconSvg, folderIconSvg, privateFolderIconSvg } from './file-icons.ts';
 import { menuIconSvg, type MenuGlyph } from './menu-icons.ts';
 import { findRanges } from './find.ts';
+import { wordDiff, type Piece } from './word-diff.ts';
 import DOMPurify from '../../node_modules/dompurify/dist/purify.es.mjs';
 import type { Api } from '../preload.cts';
 import { isGithub, repoName } from '../remote-url.ts';
@@ -1518,9 +1519,27 @@ function summarize(tool: string, args: ToolArgs = {}) {
 const TOOL_LABEL: Record<string, string> = { list: 'Lister', read: 'Lire', search: 'Chercher', write: 'Écrire', edit: 'Modifier', run: 'Exécuter', web_search: 'Web', fetch: 'Page web', agent: 'Sous-agent', plan: 'Plan', remember: 'Mémoriser', forget: 'Oublier', recall: 'Retrouver', ask: 'Questions' };
 
 function renderDiff(diff: string) {
-  return `<pre class="diff">${diff.split('\n').map((l) => {
-    const cls = l.startsWith('@@') ? 'hunk' : l.startsWith('+++') || l.startsWith('---') ? 'hunk' : l[0] === '+' ? 'add' : l[0] === '-' ? 'del' : 'ctx';
-    return `<span class="${cls}">${esc(l) || ' '}</span>`;
+  const lines = diff.split('\n');
+  const kind = (l: string) => (l.startsWith('@@') || l.startsWith('+++') || l.startsWith('---') ? 'hunk' : l[0] === '+' ? 'add' : l[0] === '-' ? 'del' : 'ctx');
+  // The words changed inside a line: lines removed then added, taken in pairs (the first removed with the first added…).
+  const marks = new Map<number, Piece[]>();
+  for (let i = 0; i < lines.length;) {
+    if (kind(lines[i]) !== 'del') { i++; continue; }
+    const del = i;
+    while (i < lines.length && kind(lines[i]) === 'del') i++;
+    const add = i;
+    while (i < lines.length && kind(lines[i]) === 'add') i++;
+    for (let k = 0; k < Math.min(add - del, i - add); k++) {
+      const d = wordDiff(lines[del + k].slice(1), lines[add + k].slice(1));
+      if (!d) continue;
+      marks.set(del + k, d.before);
+      marks.set(add + k, d.after);
+    }
+  }
+  return `<pre class="diff">${lines.map((l, i) => {
+    const pieces = marks.get(i);
+    const text = pieces ? esc(l[0]) + pieces.map(([t, changed]) => (changed ? `<span class="wd">${esc(t)}</span>` : esc(t))).join('') : esc(l);
+    return `<span class="${kind(l)}">${text || ' '}</span>`;
   }).join('')}</pre>`;
 }
 

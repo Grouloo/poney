@@ -213,6 +213,11 @@ details.thinking div { white-space: pre-wrap; border-left: 2px solid var(--borde
 .diff .del { background: var(--del-bg); color: var(--err); display: block; }
 .diff .hunk { color: var(--accent); display: block; }
 .diff .ctx { display: block; }
+/* (long lines wrap, after their + or -: a paragraph on one line stays readable) */
+.diff { white-space: pre-wrap; overflow-wrap: anywhere; }
+.diff > span { padding-left: 1ch; text-indent: -1ch; }
+.diff .del .wd { background: color-mix(in srgb, var(--err) 30%, transparent); border-radius: 3px; }
+.diff .add .wd { background: color-mix(in srgb, var(--ok) 30%, transparent); border-radius: 3px; }
 
 .approval { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--border); background: color-mix(in srgb, var(--warn) 10%, var(--panel)); }
 .approval span { flex: 1; color: var(--warn); font-size: 14px; }
@@ -769,7 +774,7 @@ img.proj-icon { width: 1.15em; height: 1.15em; object-fit: contain; vertical-ali
 .git-letter.A { color: var(--ok); }
 .git-letter.D, .git-letter.U { color: var(--err); }
 .git-commit { padding: 4px 6px; font-size: 13.5px; }
-#diffPanelBody .diff { width: max-content; min-width: 100%; margin: 0; padding: 8px 12px; box-sizing: border-box; font-size: 13px; }
+#diffPanelBody .diff { margin: 0; padding: 8px 12px; box-sizing: border-box; font-size: 13px; }
 .git-subject, .git-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .git-meta { color: var(--muted); font-size: 12px; }
 .git-meta code { font: 11.5px var(--mono); }
