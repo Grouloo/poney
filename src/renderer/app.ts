@@ -293,6 +293,7 @@ const activeDir = () => settings.active?.cwd || '';
 // the user comes back to it. ('Hors projet' there: no folder to show.)
 let observed: string | null = null;
 const viewDir = () => (observed === OFF_KEY ? '' : observed ?? activeDir());
+let listedDir: string | null = null; // (the folder the Files and Git sections show)
 const viewOff = () => (observed ? observed === OFF_KEY : offMode());
 
 function renderSettings() {
@@ -377,6 +378,7 @@ function renderChoice() {
     $<HTMLButtonElement>('convSettingsBtn').title = isClaude ? 'Les modèles Claude n’utilisent ni les étapes ni le prompt système de Poney' : 'Étapes et prompt système de cette conversation';
     document.body.classList.toggle('claude-focus', isClaude);
   }
+  headOf(pane)?.classList.toggle('claude', isClaude); // (its own settings button, in a split view)
   const picker = $<HTMLButtonElement>('modelPicker');
   const group = modelGroups.find((g) => g.provider.id === choiceProvider());
   picker.querySelector<HTMLElement>('.model-icon')!.innerHTML = isClaude ? CLAUDE_ICON : groupIcon(group);
@@ -2892,7 +2894,14 @@ async function syncFocusedView() {
   // (on the page of a new conversation, the project chosen is where it goes: nothing to grey)
   const key = viewProject();
   const next = key && key !== own && !$('empty') ? key : null;
-  if (next === observed) return;
+  if (next === observed) {
+    // (the other pane of a split view, in another folder: its files)
+    if (listedDir !== null && viewDir() !== listedDir) {
+      expanded.clear();
+      refreshTree();
+    }
+    return;
+  }
   observed = next;
   greyChat(Boolean(next));
   await window.api.observeProject(next === OFF_KEY ? null : next);
@@ -3127,13 +3136,14 @@ function fillPill(pill: HTMLElement, c: ConversationSummary) {
   } else pill.remove();
 }
 
+const TRASH_ICON = '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4h11M6.5 4V2.5h3V4M4 4l.7 9.5h6.6L12 4M6.8 6.8v4.4M9.2 6.8v4.4"/></svg>';
 function conversationItem(c: ConversationSummary, current: string | null) {
   const li = document.createElement('li');
   li.className = `conv-card ${category(c)}`;
   li.dataset.place = c.id;
   li.dataset.project = projectOf(c);
   li.classList.toggle('active', c.id === current);
-  li.innerHTML = '<div class="card-top"><span class="title"></span><span class="state"></span><span class="pill"></span><span class="card-actions"><button class="ren">✎</button><button class="del" title="Supprimer">✕</button></span></div><div class="card-meta"><span class="project"></span><span class="when"></span><span class="card-engine"></span></div>';
+  li.innerHTML = '<div class="card-top"><span class="title"></span><span class="state"></span><span class="pill"></span><span class="card-actions"><button class="ren">✎</button><button class="del" title="Supprimer">' + TRASH_ICON + '</button></span></div><div class="card-meta"><span class="project"></span><span class="when"></span><span class="card-engine"></span></div>';
   li.querySelector<HTMLElement>('.title')!.textContent = c.title;
   li.querySelector<HTMLElement>('.title')!.dataset.conv = c.id;
   if (c.draft) { // (the card shows its prompt on hover, instead of the title in full)
@@ -3434,7 +3444,11 @@ splitDivider.ondblclick = () => { splitAt = 0.5; applySplitAt(); };
 
 // The two titles, at the top of the window above their panes.
 const splitHeads = new Map(panes.map((p) => {
-  const head = $('splitHeads').appendChild(div('conv-head split-head', '<span class="head-project"></span><span class="head-title"></span><button class="head-close" type="button" aria-label="Fermer">✕</button>'));
+  const head = $('splitHeads').appendChild(div('conv-head split-head', '<span class="head-project"></span><span class="head-title"></span><button class="head-settings" type="button" aria-label="Paramètres de la conversation"></button><button class="head-close" type="button" aria-label="Fermer">✕</button>'));
+  const settingsBtn = head.querySelector<HTMLElement>('.head-settings')!;
+  settingsBtn.innerHTML = $('convSettingsBtn').querySelector('svg')!.outerHTML;
+  settingsBtn.dataset.tip = 'Étapes et prompt système de cette conversation';
+  settingsBtn.onclick = (e) => { e.stopPropagation(); focusPane(p); openConvSettings(); };
   head.querySelector<HTMLElement>('.head-close')!.dataset.tip = 'Fermer cette conversation (elle continue en arrière-plan)';
   head.querySelector<HTMLElement>('.head-close')!.onclick = (e) => { e.stopPropagation(); closePane(p); };
   head.addEventListener('mousedown', () => focusPane(p));
@@ -3442,6 +3456,10 @@ const splitHeads = new Map(panes.map((p) => {
   return [p, head];
 }));
 const splitHead = (p: Pane) => splitHeads.get(p)!;
+/** A pane's title, or none before they are made (they come in the order of the panes). */
+function headOf(p: Pane) {
+  return [...document.querySelectorAll<HTMLElement>('.split-head')].at(panes.indexOf(p));
+}
 function renderSplitHeads() {
   for (const p of panes) {
     inPane(p, () => fillHead(splitHead(p)));
@@ -3454,7 +3472,7 @@ function placeHeads() {
   if (!split) return;
   const bar = topbar.getBoundingClientRect();
   const lo = document.querySelector<HTMLElement>('.brand')!.getBoundingClientRect().right + 14;
-  const hi = $('convSettingsBtn').getBoundingClientRect().left - 14;
+  const hi = $('settingsBtn').getBoundingClientRect().left - 14;
   for (const p of panes) {
     const head = splitHead(p);
     const r = p.root.getBoundingClientRect();
@@ -3636,6 +3654,7 @@ async function renderDir(rel: string, ul: HTMLElement) {
 let treeRefresh: ReturnType<typeof setTimeout> | undefined;
 let treeStates: FileStates = {}; // the git state of each path, for its color
 async function refreshTree() {
+  listedDir = viewDir();
   renderFilesHead();
   refreshGit();
   if (!viewDir()) {
@@ -4250,6 +4269,7 @@ const showConvPage = navDialog(convDialog);
 let openedSteps: string | null = null;
 
 async function refreshPromptBadge() {
+  const head = headOf(focused);
   let steps = null;
   try {
     steps = await window.api.getSteps();
@@ -4258,6 +4278,7 @@ async function refreshPromptBadge() {
     promptInfo = null;
   }
   $('convBadge').classList.toggle('hidden', !steps && !promptInfo?.custom);
+  head?.classList.toggle('modified', Boolean(steps || promptInfo?.custom));
   return steps;
 }
 
@@ -4274,7 +4295,9 @@ const convUnsaved = () => JSON.stringify(stepsForm()) !== openedSteps || $<HTMLT
 closeOnOutside(convDialog, convUnsaved);
 const stepsForm = () => ({ before: $<HTMLTextAreaElement>('stepsBefore').value, after: $<HTMLTextAreaElement>('stepsAfter').value, afterOnlyIfChanged: $<HTMLInputElement>('stepsAfterOnlyIfChanged').checked, triage: $<HTMLInputElement>('stepsTriage').checked });
 
-$<HTMLButtonElement>('convSettingsBtn').onclick = async () => {
+$<HTMLButtonElement>('convSettingsBtn').onclick = openConvSettings;
+/** The steps and system prompt of the conversation in focus. */
+async function openConvSettings() {
   const steps = await refreshPromptBadge();
   if (!promptInfo) return;
   $<HTMLTextAreaElement>('stepsBefore').value = steps?.before || '';
@@ -4294,7 +4317,7 @@ $<HTMLButtonElement>('convSettingsBtn').onclick = async () => {
   $<HTMLTextAreaElement>('stepsBefore').focus();
   $<HTMLTextAreaElement>('promptText').setSelectionRange(0, 0);
   $<HTMLTextAreaElement>('promptText').scrollTop = 0;
-};
+}
 $<HTMLTextAreaElement>('promptText').addEventListener('input', updatePromptMeta);
 $<HTMLButtonElement>('promptReset').onclick = () => {
   $<HTMLTextAreaElement>('promptText').value = promptInfo!.default;
