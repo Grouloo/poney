@@ -146,13 +146,17 @@ export interface Channels {
   'agent:reset': [[], PublicSettings];
   'agent:retryText': [[], string];
   'agent:approve': [[answer: { id: number; ok: boolean; always?: boolean; reason?: string; answers?: QuestionAnswer[] }], PublicSettings];
-  'conversations:list': [[], { current: string | null; all: ConversationSummary[] }];
+  'conversations:list': [[], { current: string | null; partner: string | null; all: ConversationSummary[] }];
   'conversations:newOffProject': [[], PublicSettings];
   'conversations:open': [[id: string], SessionView];
   'conversations:rename': [[id: string, title: string], string];
   'conversations:delete': [[id: string], void];
   'conversations:markRead': [[ids: string[]], void];
   'session:current': [[], SessionView];
+  'session:view': [[key: string], SessionView];
+  'session:focus': [[key: string], void];
+  'session:split': [[], void];
+  'session:unsplit': [[keep: string | null], PublicSettings];
   'session:setChoice': [[patch: Choice], PublicSettings];
   'session:setDraft': [[text: string], void];
   'session:setAskDraft': [[draft: AskDraft | null], void];

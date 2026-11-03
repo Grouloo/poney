@@ -61,29 +61,130 @@ type Places = Map<string, { el: HTMLElement; r: DOMRect }>;
 
 const isStats = (v: unknown): v is ContextStats => isRecord(v) && v.type === 'context';
 
-/** An element of the page: index.html has them all. */
-const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
-const transcript = $('transcript');
-const input = $<HTMLTextAreaElement>('input');
+type Timer = ReturnType<typeof setTimeout>;
+type PlanBlock = { el: HTMLElement; tasks: PlanTask[]; agents: Map<string, number> };
+type AskState = { answers: QuestionAnswer[]; step: number };
+
+// ---------- the panes: one conversation, or two side by side ----------
+// Each pane is a copy of the conversation's section of index.html (its elements keep their
+// ids, looked up in the pane). The code works on one pane at a time, through the variables
+// below: usePane puts a pane's state in them, keeping the other's. The pane worked in is
+// the focused one, the user's; the other is worked in for a moment, to draw its events.
+interface Pane {
+  root: HTMLElement;
+  transcript: HTMLElement;
+  input: HTMLTextAreaElement;
+  sendBtn: HTMLButtonElement;
+  composer: HTMLElement;
+  skillMenu: HTMLElement;
+  active: PublicSettings['active'] | null; // (its conversation, as settings.active says it while it is worked in)
+  running: boolean;
+  agentContext: Map<number, ContextStats>;
+  bubbles: Map<number, Bubble>;
+  cards: Map<number, HTMLElement>;
+  planBlock: PlanBlock | null;
+  agentViews: Map<number, HTMLElement>;
+  memoryNotes: string[];
+  draftTimer: Timer | undefined;
+  draftChanged: boolean;
+  skillMatches: ListedSkill[];
+  skillPick: number;
+  skillList: ListedSkill[] | null;
+  promptProgress: { id: number | string; value: number; t0: number } | null;
+  modelStatus: string;
+  liveGen: Bubble | null;
+  runTimer: ReturnType<typeof setInterval> | undefined;
+  askDrafts: Map<string, AskState>;
+  askAnswers: Map<number, QuestionAnswer[]>;
+  askSaveTimer: Timer | undefined;
+}
+
+const div = (cls: string, html?: string) => {
+  const d = document.createElement('div');
+  d.className = cls;
+  if (html !== undefined) d.innerHTML = html;
+  return d;
+};
+const firstChat = document.querySelector<HTMLElement>('.chat')!;
+const CHAT_IDS = new Set([...firstChat.querySelectorAll<HTMLElement>('[id]')].map((el) => el.id).concat(['empty', 'welcomePicker', 'welcomeMenu']));
+const secondChat = firstChat.cloneNode(true) as HTMLElement;
+secondChat.classList.add('hidden');
+const splitDivider = div('split-divider hidden');
+splitDivider.setAttribute('role', 'separator');
+firstChat.after(splitDivider, secondChat);
+
+function makePane(root: HTMLElement): Pane {
+  const el = <T extends HTMLElement>(id: string) => root.querySelector<T>(`#${id}`)!;
+  return {
+    root, transcript: el('transcript'), input: el<HTMLTextAreaElement>('input'), sendBtn: el<HTMLButtonElement>('sendBtn'), composer: root.querySelector<HTMLElement>('.composer')!,
+    skillMenu: root.querySelector<HTMLElement>('.composer-box')!.appendChild(div('skill-menu hidden')),
+    active: null, running: false, agentContext: new Map(), bubbles: new Map(), cards: new Map(), planBlock: null, agentViews: new Map(), memoryNotes: [],
+    draftTimer: undefined, draftChanged: false, skillMatches: [], skillPick: 0, skillList: null, promptProgress: null, modelStatus: '', liveGen: null, runTimer: undefined,
+    askDrafts: new Map(), askAnswers: new Map(), askSaveTimer: undefined,
+  };
+}
+const panes = [makePane(firstChat), makePane(secondChat)];
+let pane = panes[0]; // the pane worked in
+let focused = panes[0]; // the pane the user works in
+let split = false; // two panes shown
+const shownPanes = () => (split ? panes : [focused]);
+const otherPane = (p: Pane) => panes[1 - panes.indexOf(p)];
+
+/** An element of the page: index.html has them all (those of a conversation, in the pane worked in). */
+const $ = <T extends HTMLElement = HTMLElement>(id: string) => (CHAT_IDS.has(id) ? pane.root.querySelector(`#${id}`) : document.getElementById(id)) as T;
 const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
-const sendBtn = $<HTMLButtonElement>('sendBtn');
 const form = $<HTMLFormElement>('settingsForm');
 
 let settings!: PublicSettings;
+// The pane worked in: its elements and its state.
+let { root: chat, transcript, input, sendBtn, composer, skillMenu } = pane;
 let running = false;
-const agentContext = new Map<number, ContextStats>(); // sub-agent id -> its latest context figures
-const bubbles = new Map<number, Bubble>(); // assistant id -> {el, raw, thinking}
-const cards = new Map<number, HTMLElement>(); // action id -> card element
+let agentContext = new Map<number, ContextStats>(); // sub-agent id -> its latest context figures
+let bubbles = new Map<number, Bubble>(); // assistant id -> {el, raw, thinking}
+let cards = new Map<number, HTMLElement>(); // action id -> card element
+
+/** Works in another pane: its state goes in the variables, the one left keeps its own. */
+function usePane(p: Pane) {
+  if (p === pane) return;
+  const q = pane;
+  Object.assign(q, {
+    active: settings?.active ?? null, running, agentContext, bubbles, cards, planBlock, agentViews, memoryNotes, draftTimer, draftChanged, skillMatches, skillPick, skillList,
+    promptProgress, modelStatus, liveGen, runTimer, askDrafts, askAnswers, askSaveTimer,
+  });
+  pane = p;
+  ({ root: chat, transcript, input, sendBtn, composer, skillMenu, running, agentContext, bubbles, cards, planBlock, agentViews, memoryNotes, draftTimer, draftChanged, skillMatches, skillPick, skillList, promptProgress, modelStatus, liveGen, runTimer, askDrafts, askAnswers, askSaveTimer } = p);
+  if (settings) settings.active = p.active ?? { offProject: false, cwd: '', session: null, choice: { engine: 'local', model: null }, blocked: null, started: false };
+}
+/** Something done in a pane (its events, a timer of its own), then back to the one worked in. */
+function inPane<T>(p: Pane, fn: () => T): T {
+  const was = pane;
+  usePane(p);
+  try {
+    return fn();
+  } finally {
+    usePane(was);
+  }
+}
+/** The same, in each pane shown. */
+const forPanes = (fn: () => unknown) => { for (const p of shownPanes()) inPane(p, fn); };
+/** The conversation of a pane. */
+const sessionOf = (p: Pane) => (p === pane ? settings?.active?.session : p.active?.session) ?? null;
+// Each call to the main process goes to the conversation of the pane worked in.
+window.api.beforeCalls(() => {
+  const key = split ? sessionOf(pane) : null;
+  if (key) void window.api.focusSession(key);
+});
 
 // The conversation runs under the input: its end stays above it, whatever its height
 // (the plan showing up, a long message), and in view if it was.
-const composer = document.querySelector<HTMLElement>('.composer')!;
 const fitComposer = () => transcript.style.setProperty('--composer-h', `${composer.offsetHeight}px`);
-new ResizeObserver(() => {
-  const atEnd = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 40;
-  fitComposer();
-  if (atEnd) transcript.scrollTop = transcript.scrollHeight;
-}).observe(composer);
+for (const p of panes) {
+  new ResizeObserver(() => inPane(p, () => {
+    const atEnd = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 40;
+    fitComposer();
+    if (atEnd) transcript.scrollTop = transcript.scrollHeight;
+  })).observe(p.composer);
+}
 // (and under the top bar, which blurs it as it passes: --topbar-h is the bar's height)
 const topbar = document.querySelector<HTMLElement>('.topbar')!;
 new ResizeObserver(() => document.body.style.setProperty('--topbar-h', `${topbar.offsetHeight}px`)).observe(topbar);
@@ -121,9 +222,11 @@ const MENUS: [picker: string, menu: string, close: () => void][] = [
 document.addEventListener('click', (e) => {
   const target = e.target instanceof Node ? e.target : null;
   for (const [picker, menu, close] of MENUS) {
-    const m = document.getElementById(menu);
-    if (!m || m.classList.contains('hidden') || m.contains(target) || document.getElementById(picker)?.contains(target)) continue;
-    close();
+    for (const scope of CHAT_IDS.has(menu) ? panes.map((p) => p.root) : [document.body]) {
+      const m = scope.querySelector(`#${menu}`);
+      if (!m || m.classList.contains('hidden') || m.contains(target) || scope.querySelector(`#${picker}`)?.contains(target)) continue;
+      close();
+    }
   }
 }, true);
 
@@ -140,7 +243,7 @@ let target: HTMLElement | null = null;
 function add<T extends HTMLElement>(el: T): T {
   if ($('empty')) {
     $('empty').remove();
-    document.querySelector<HTMLElement>('.chat')!.classList.remove('fresh');
+    chat.classList.remove('fresh');
   }
   if (target) {
     // Inside a sub-agent's view: the side panel follows it when it shows it and is at the end.
@@ -155,21 +258,15 @@ function add<T extends HTMLElement>(el: T): T {
   return el;
 }
 
-function div(cls: string, html?: string) {
-  const d = document.createElement('div');
-  d.className = cls;
-  if (html !== undefined) d.innerHTML = html;
-  return d;
-}
 
 const SEND_ICON = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 13V3.5M3.8 7.5 8 3.3l4.2 4.2"/></svg>';
 const CHEV_LEFT = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5"/></svg>';
 const CHEV_RIGHT = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5"/></svg>';
 const STOP_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="4" y="4" width="8" height="8" rx="1.6" fill="currentColor"/></svg>';
-sendBtn.innerHTML = SEND_ICON;
+for (const p of panes) p.sendBtn.innerHTML = SEND_ICON;
 function setRunning(v: boolean) {
   running = v;
-  document.body.classList.toggle('running', v); // hides the "edit message" buttons
+  chat.classList.toggle('running', v); // hides the "edit message" buttons
   sendBtn.innerHTML = v ? STOP_ICON : SEND_ICON;
   sendBtn.dataset.tip = v ? 'Arrêter' : 'Envoyer (Entrée)';
   sendBtn.setAttribute('aria-label', v ? 'Arrêter' : 'Envoyer');
@@ -179,7 +276,7 @@ function setRunning(v: boolean) {
     stopRunTimer();
     $('status').textContent = '';
     // (stopped or interrupted: nothing goes on)
-    document.querySelectorAll<HTMLElement>('.plan-list li.running').forEach((li) => li.classList.replace('running', 'pending'));
+    chat.querySelectorAll<HTMLElement>('.plan-list li.running').forEach((li) => li.classList.replace('running', 'pending'));
   }
 }
 
@@ -200,24 +297,29 @@ const viewOff = () => (observed ? observed === OFF_KEY : offMode());
 
 function renderSettings() {
   syncView();
-  const shellOn = settings.config.shellEnabled !== false;
-  $<HTMLInputElement>('webEnabled').checked = settings.config.webEnabled !== false;
-  $<HTMLInputElement>('shellEnabled').checked = shellOn;
-  $<HTMLInputElement>('autoApprove').checked = settings.config.approval === 'auto';
-  $<HTMLInputElement>('autoApprove').disabled = !shellOn;
-  $('autoApproveLabel').classList.toggle('disabled', !shellOn);
+  forPanes(renderPaneSettings);
   const config: Record<string, unknown> = { ...settings.config };
   for (const el of [...$<HTMLFormElement>('settingsForm').elements] as HTMLInputElement[]) {
     if (!el.name || config[el.name] === undefined) continue;
     if (el.type === 'checkbox') el.checked = Boolean(config[el.name]);
     else el.value = String(config[el.name] ?? '');
   }
+  if (Boolean(torTimer) !== Boolean(settings.config.torEnabled)) scheduleTorStatus();
+}
+/** What a pane shows of the settings: the input's switches, its project, its model. */
+function renderPaneSettings() {
+  const shellOn = settings.config.shellEnabled !== false;
+  $<HTMLInputElement>('webEnabled').checked = settings.config.webEnabled !== false;
+  $<HTMLInputElement>('shellEnabled').checked = shellOn;
+  $<HTMLInputElement>('autoApprove').checked = settings.config.approval === 'auto';
+  $<HTMLInputElement>('autoApprove').disabled = !shellOn;
+  $('autoApproveLabel').classList.toggle('disabled', !shellOn);
   $<HTMLInputElement>('torEnabled').checked = Boolean(settings.config.torEnabled);
   $<HTMLInputElement>('subagentsEnabled').checked = settings.config.subagentsEnabled !== false;
-  if (Boolean(torTimer) !== Boolean(settings.config.torEnabled)) scheduleTorStatus();
   renderWelcomeProject();
   renderChoice();
 }
+const renderChoices = () => forPanes(renderChoice);
 
 // ---------- the model of the conversation ----------
 const LOCAL_ICON = '<svg class="engine-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="3" width="12" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M5.5 13.5h5M8 11v2.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
@@ -256,12 +358,12 @@ async function refreshModels() {
   if (failed) $('status').textContent = `Serveur de modèles injoignable (${failed.name})`;
   const first = modelGroups.find((g) => g.provider.type !== 'poney' && g.models.length);
   if (!settings.config.model && first) settings = await window.api.setConfig({ model: first.models[0].id });
-  renderChoice();
+  renderChoices();
   claude = await window.api.claudeStatus().catch(() => claude);
-  renderChoice();
+  renderChoices();
   refreshConversations(); // (the cards show their provider's icon)
   if ($<HTMLDialogElement>('settingsDialog').open) renderProviders();
-  if (!$('modelMenu').classList.contains('hidden')) openModelMenu();
+  for (const p of shownPanes()) if (!p.root.querySelector('#modelMenu')?.classList.contains('hidden')) inPane(p, openModelMenu);
 }
 window.api.onModelsChanged(refreshModels);
 
@@ -269,9 +371,12 @@ window.api.onModelsChanged(refreshModels);
 function renderChoice() {
   const c = choice();
   const isClaude = c.engine === 'claude';
-  // (steps and system prompt belong to Poney's harness)
-  $<HTMLButtonElement>('convSettingsBtn').disabled = isClaude;
-  $<HTMLButtonElement>('convSettingsBtn').title = isClaude ? 'Les modèles Claude n’utilisent ni les étapes ni le prompt système de Poney' : 'Étapes et prompt système de cette conversation';
+  if (pane === focused) {
+    // (steps and system prompt belong to Poney's harness)
+    $<HTMLButtonElement>('convSettingsBtn').disabled = isClaude;
+    $<HTMLButtonElement>('convSettingsBtn').title = isClaude ? 'Les modèles Claude n’utilisent ni les étapes ni le prompt système de Poney' : 'Étapes et prompt système de cette conversation';
+    document.body.classList.toggle('claude-focus', isClaude);
+  }
   const picker = $<HTMLButtonElement>('modelPicker');
   const group = modelGroups.find((g) => g.provider.id === choiceProvider());
   picker.querySelector<HTMLElement>('.model-icon')!.innerHTML = isClaude ? CLAUDE_ICON : groupIcon(group);
@@ -281,9 +386,9 @@ function renderChoice() {
   const modelName = isClaude ? claudeModel()?.name ?? c.model ?? 'Claude' : group?.models.find((m) => m.id === local)?.name ?? local ?? 'aucun modèle';
   picker.querySelector<HTMLElement>('.model-name')!.textContent = account ? `${modelName} · ${accountShort(account)}` : modelName;
   picker.dataset.tip = account ? `Modèle · ${accountLabel(account)}` : 'Modèle';
-  document.body.classList.toggle('claude-mode', isClaude);
+  chat.classList.toggle('claude-mode', isClaude);
   $('claudeControls').classList.toggle('hidden', !isClaude);
-  document.querySelector<HTMLElement>('.toggles')!.classList.toggle('hidden', isClaude);
+  chat.querySelector<HTMLElement>('.toggles')!.classList.toggle('hidden', isClaude);
   if (!isClaude) return;
   const levels = claudeModel()?.efforts ?? [];
   $<HTMLSelectElement>('effortSelect').innerHTML = levels.map((l) => `<option value="${l}">${EFFORT_LABEL[l] ?? l}</option>`).join('');
@@ -292,8 +397,6 @@ function renderChoice() {
   $<HTMLSelectElement>('modeSelect').querySelector<HTMLOptionElement>('[value="auto"]')!.disabled = claudeModel()?.auto === false;
   $<HTMLSelectElement>('modeSelect').value = c.mode ?? 'manual';
 }
-$<HTMLSelectElement>('effortSelect').addEventListener('change', (e) => setChoice({ effort: (e.target as HTMLInputElement).value as Effort }));
-$<HTMLSelectElement>('modeSelect').addEventListener('change', (e) => setChoice({ mode: (e.target as HTMLInputElement).value }));
 
 // (a menu opening upward stops below the top bar: the system takes the clicks there before the page does)
 function fitBelowBar(menu: HTMLElement, anchor: HTMLElement) {
@@ -361,17 +464,8 @@ function openModelMenu() {
   fitBelowBar(menu, $<HTMLButtonElement>('modelPicker'));
   menu.classList.remove('hidden');
 }
-function closeModelMenu() { $('modelMenu').classList.add('hidden'); }
+function closeModelMenu() { for (const p of panes) p.root.querySelector('#modelMenu')!.classList.add('hidden'); }
 window.addEventListener('resize', closeModelMenu);
-$<HTMLButtonElement>('modelPicker').onclick = async (e) => {
-  e.stopPropagation();
-  if (!$('modelMenu').classList.contains('hidden')) return closeModelMenu();
-  settings = await window.api.getSettings(); // (has it started since?)
-  if (claude.accounts.some((a) => !a.loggedIn)) claude = await window.api.claudeStatus().catch(() => claude); // (logged in since?)
-  openModelMenu();
-  refreshModels(); // (a server started or stopped since)
-};
-$('modelMenu').onclick = (e) => e.stopPropagation();
 document.addEventListener('click', closeModelMenu);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModelMenu(); });
 
@@ -546,26 +640,19 @@ $<HTMLButtonElement>('addClaudeAccount').onclick = async () => {
   claude = await window.api.claudeStatus().catch(() => claude);
   loginClaude(added.id);
 };
-$<HTMLInputElement>('autoApprove').onchange = async (e) => {
-  settings = await window.api.setConfig({ approval: (e.target as HTMLInputElement).checked ? 'auto' : 'ask' });
-  renderSettings();
-};
-for (const flag of ['webEnabled', 'shellEnabled', 'torEnabled', 'subagentsEnabled']) {
-  $(flag).onchange = async (e) => {
-    settings = await window.api.setConfig({ [flag]: (e.target as HTMLInputElement).checked });
-    renderSettings();
-  };
-}
 // ---------- Tor connection status ----------
 let torTimer: ReturnType<typeof setTimeout> | undefined;
 
 function renderTorStatus(s: TorStatus) {
-  for (const id of ['torState', 'torStateBig']) $(id).className = `tor-state ${s.state}`;
-  $('torState').textContent = s.state === 'bootstrapping' || s.state === 'stuck' ? ` ${s.progress} %`
-    : s.state === 'reconnecting' ? ' reconnexion' : s.state === 'degraded' ? ' lent' : '';
-  $('torToggleLabel').dataset.tip = s.state === 'disabled'
-    ? 'Tor : recherche web et lecture de pages via Tor (réglages : ⚙︎ › Confidentialité)'
-    : `Tor : ${s.detail}${s.proxy ? ` — ${s.proxy.replace('socks5h://', '')}` : ''}`;
+  $('torStateBig').className = `tor-state ${s.state}`;
+  for (const p of panes) inPane(p, () => {
+    $('torState').className = `tor-state ${s.state}`;
+    $('torState').textContent = s.state === 'bootstrapping' || s.state === 'stuck' ? ` ${s.progress} %`
+      : s.state === 'reconnecting' ? ' reconnexion' : s.state === 'degraded' ? ' lent' : '';
+    $('torToggleLabel').dataset.tip = s.state === 'disabled'
+      ? 'Tor : recherche web et lecture de pages via Tor (réglages : ⚙︎ › Confidentialité)'
+      : `Tor : ${s.detail}${s.proxy ? ` — ${s.proxy.replace('socks5h://', '')}` : ''}`;
+  });
   $('torStatusLine').textContent = s.detail;
 }
 
@@ -661,7 +748,7 @@ function onWorkspaceChanged() {
 
 // A plan, in the conversation: its tasks, with the state of each. The sub-agent that
 // carries out a task has no card of its own: a click on the task shows its work.
-let planBlock: { el: HTMLElement; tasks: PlanTask[]; agents: Map<string, number> } | null = null; // the plan being carried out: { el, tasks, agents (title -> action id) }
+let planBlock: PlanBlock | null = null; // the plan being carried out: { el, tasks, agents (title -> action id) }
 const planTitle = (t: PlanTask) => taskParts(t.text).head.slice(0, 60); // (the title of its sub-agent)
 
 function startPlanBlock(card: HTMLElement) {
@@ -691,29 +778,33 @@ function renderPlan(tasks: PlanTask[]) {
     const sub = parts.length ? `<ul class="plan-parts">${parts.map((p) => `<li>${esc(p)}</li>`).join('')}</ul>` : '';
     const agent = agents.get(planTitle(t));
     const resume = agent !== undefined && cards.get(agent)?.querySelector<HTMLElement>('.resume-btn') ? '<button class="resume-btn" type="button" title="Relancer cette action et reprendre la conversation à partir d’elle (la suite est retirée)">↻ Reprendre d’ici</button>' : '';
-    return `<li class="${t.status}${agent === panelAgent && agent !== undefined ? ' shown' : ''}"${agent === undefined ? '' : ` data-agent="${agent}" title="Voir son travail dans le panneau de droite"`}><span class="plan-dot"></span><div class="plan-text"><span>${esc(head)}</span>${sub}</div>${t.parallel ? '<span class="tag">en parallèle</span>' : ''}${resume}</li>`;
+    return `<li class="${t.status}${agent === shownAgent() && agent !== undefined ? ' shown' : ''}"${agent === undefined ? '' : ` data-agent="${agent}" title="Voir son travail dans le panneau de droite"`}><span class="plan-dot"></span><div class="plan-text"><span>${esc(head)}</span>${sub}</div>${t.parallel ? '<span class="tag">en parallèle</span>' : ''}${resume}</li>`;
   }).join('');
   markWaiting();
 }
 /** A sub-agent waiting for an approval: the state of its task says so. */
 function markWaiting() {
-  for (const li of document.querySelectorAll<HTMLElement>('.plan-list li[data-agent]')) {
+  for (const li of chat.querySelectorAll<HTMLElement>('.plan-list li[data-agent]')) {
     li.classList.toggle('waiting', Boolean(agentViews.get(Number(li.dataset.agent))?.querySelector<HTMLElement>('.approval')));
   }
 }
 
 // ---------- a sub-agent's work, in the side panel ----------
-const agentViews = new Map<number, HTMLElement>(); // sub-agent action id -> its view (task, log, report)
+let agentViews = new Map<number, HTMLElement>(); // sub-agent action id -> its view (task, log, report)
 let panelAgent: number | null = null;
+let panelPane: Pane | null = null; // (the pane of the sub-agent shown: action ids are each conversation's own)
+/** The sub-agent shown in the side panel, if it is one of the pane worked in. */
+const shownAgent = () => (panelPane === pane ? panelAgent : null);
 
 function renderAgentPanelHead() {
-  const card = cards.get(panelAgent ?? -1);
+  const card = cards.get(shownAgent() ?? -1);
   $('agentPanelTitle').textContent = card?.querySelector<HTMLElement>('.summary')!.textContent || '';
   $('agentPanelInfo').textContent = card ? (card.classList.contains('running') ? 'en cours' : card.classList.contains('ok') ? 'terminé' : 'échec') : '';
   document.querySelectorAll<HTMLElement>('.card.subagent.shown').forEach((c) => c.classList.remove('shown'));
   card?.classList.add('shown');
-  for (const li of document.querySelectorAll<HTMLElement>('.plan-list li[data-agent]')) li.classList.toggle('shown', Number(li.dataset.agent) === panelAgent);
-  renderGauge(agentContext.get(panelAgent ?? -1), $('agentPanelGauge'), { sub: true });
+  document.querySelectorAll<HTMLElement>('.plan-list li.shown').forEach((li) => li.classList.remove('shown'));
+  for (const li of chat.querySelectorAll<HTMLElement>('.plan-list li[data-agent]')) li.classList.toggle('shown', Number(li.dataset.agent) === shownAgent());
+  renderGauge(agentContext.get(shownAgent() ?? -1), $('agentPanelGauge'), { sub: true });
 }
 
 function openAgentPanel(id: number) {
@@ -722,6 +813,7 @@ function openAgentPanel(id: number) {
   closeViewer(); // (one side panel at a time)
   if (liveBubble) closeLivePanel();
   panelAgent = id;
+  panelPane = pane;
   const body = $('agentPanelBody');
   body.replaceChildren(view);
   $('agentPanel').classList.remove('hidden');
@@ -731,6 +823,7 @@ function openAgentPanel(id: number) {
 
 function closeAgentPanel() {
   panelAgent = null;
+  panelPane = null;
   $('agentPanel').classList.add('hidden');
   $('agentPanelBody').replaceChildren();
   document.querySelectorAll<HTMLElement>('.card.subagent.shown, .plan-list li.shown').forEach((c) => c.classList.remove('shown'));
@@ -760,20 +853,10 @@ async function saveMemory(notes: string[]) {
     $('status').textContent = errorText(e);
   }
 }
-$<HTMLButtonElement>('memoryBtn').onclick = () => $('memoryPanel').classList.toggle('hidden');
-$<HTMLButtonElement>('memoryClose').onclick = () => $('memoryPanel').classList.add('hidden');
-$<HTMLFormElement>('memoryForm').onsubmit = (e) => {
-  e.preventDefault();
-  const v = $<HTMLInputElement>('memoryInput').value.trim();
-  if (!v) return;
-  $<HTMLInputElement>('memoryInput').value = '';
-  saveMemory([...memoryNotes, v]);
-};
 
 function clearTranscript() {
   closeQuestionnaire();
-  closeLivePanel();
-  closeAgentPanel();
+  closePanelsOfPane();
   agentViews.clear();
   agentContext.clear();
   renderMemory([]);
@@ -818,7 +901,7 @@ function renderWelcome() {
     </div>
     <p class="welcome-hint muted"></p>`;
   transcript.appendChild(el);
-  document.querySelector<HTMLElement>('.chat')!.classList.add('fresh');
+  chat.classList.add('fresh');
   $('welcomePicker').onclick = (e) => {
     e.stopPropagation();
     if ($('welcomeMenu').classList.contains('hidden')) openWelcomeMenu(); else closeWelcomeMenu();
@@ -834,7 +917,7 @@ function renderWelcomeProject() {
   picker.querySelector<HTMLElement>('.picker-icon')!.innerHTML = key ? projectGlyph(key) : '';
   picker.querySelector<HTMLElement>('.picker-name')!.textContent = key ? projectLabel(key) : 'Choisir un projet…';
   picker.title = key && key !== OFF_KEY ? key : '';
-  document.querySelector<HTMLElement>('#empty .welcome-hint')!.textContent = key === OFF_KEY
+  chat.querySelector<HTMLElement>('#empty .welcome-hint')!.textContent = key === OFF_KEY
     ? 'Hors projet : les fichiers de l’agent restent dans un dossier propre à cette conversation.'
     : '';
 }
@@ -860,8 +943,10 @@ function openWelcomeMenu() {
   $('welcomePicker').classList.add('open');
 }
 function closeWelcomeMenu() {
-  $('welcomeMenu')?.classList.add('hidden');
-  $('welcomePicker')?.classList.remove('open');
+  for (const p of panes) {
+    p.root.querySelector('#welcomeMenu')?.classList.add('hidden');
+    p.root.querySelector('#welcomePicker')?.classList.remove('open');
+  }
 }
 document.addEventListener('click', closeWelcomeMenu);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeWelcomeMenu(); });
@@ -885,7 +970,7 @@ function fillUserBubble(bubble: HTMLElement, text: string) {
 }
 
 function addUserMessage(text: string, turnId?: string) {
-  document.querySelectorAll<HTMLElement>('.retry-row').forEach((r) => r.remove()); // (taken up, or a new message)
+  transcript.querySelectorAll<HTMLElement>('.retry-row').forEach((r) => r.remove()); // (taken up, or a new message)
   if (!target) planBlock = null; // a plan is the plan of one request
   const m = div('msg user');
   fillUserBubble(m.appendChild(div('bubble')), text);
@@ -985,14 +1070,14 @@ async function resumeFromAction(id: number, { ask = true } = {}) {
 
 function replayTranscript(events: AgentEvent[]) {
   closeQuestionnaire(); // (drawn again with the approvals, if it still waits)
-  closeLivePanel(); // (the answers are drawn again)
-  const shownAgent = panelAgent;
+  if (livePane === pane) closeLivePanel(); // (the answers are drawn again)
+  const agentShown = shownAgent();
   agentViews.clear();
   agentContext.clear();
   planBlock = null;
   renderMemory([]); // (same for the memory)
   transcript.innerHTML = '';
-  document.querySelector<HTMLElement>('.chat')!.classList.remove('fresh');
+  chat.classList.remove('fresh');
   bubbles.clear();
   cards.clear();
   if (!events.length) renderWelcome();
@@ -1004,16 +1089,17 @@ function replayTranscript(events: AgentEvent[]) {
   }
   transcript.scrollTop = transcript.scrollHeight;
   // The side panel showed a sub-agent: shown again from the redrawn conversation, or closed.
-  if (shownAgent && agentViews.has(shownAgent)) openAgentPanel(shownAgent);
-  else closeAgentPanel();
+  if (agentShown && agentViews.has(agentShown)) openAgentPanel(agentShown);
+  else if (panelPane === pane) closeAgentPanel();
 }
 
 // ---------- the text of the input, kept as the conversation's draft ----------
-let draftTimer: ReturnType<typeof setTimeout> | undefined;
+let draftTimer: Timer | undefined;
 let draftChanged = false;
 /** Sends the main process what is typed, now (before leaving the conversation). */
 function flushDraft() {
   clearTimeout(draftTimer);
+  draftTimer = undefined;
   if (!draftChanged) return;
   draftChanged = false;
   return window.api.setDraft(input.value);
@@ -1021,9 +1107,10 @@ function flushDraft() {
 function noteDraft() {
   draftChanged = true;
   clearTimeout(draftTimer);
-  const c = lastConversations.find((x) => x.id === currentConversation);
+  const c = lastConversations.find((x) => x.id === currentConversation());
+  const p = pane;
   // (a card that changes follows the keys, without waiting for the list: a new conversation's title, a draft begun or erased)
-  if (c && !c.titleFromDraft && c.draft === Boolean(input.value.trim())) draftTimer = setTimeout(flushDraft, 250);
+  if (c && !c.titleFromDraft && c.draft === Boolean(input.value.trim())) draftTimer = setTimeout(() => inPane(p, flushDraft), 250);
   else {
     if (c?.titleFromDraft) showDraftTitle(c);
     flushDraft();
@@ -1032,7 +1119,7 @@ function noteDraft() {
 /** The title of a conversation named by its input, as typed now (the list may be a key behind). */
 function showDraftTitle(c: ConversationSummary) {
   c.title = input.value.replace(/\s+/g, ' ').trim().slice(0, 80) || c.title;
-  const title = document.querySelector<HTMLElement>('.conv-card.active .title');
+  const title = document.querySelector<HTMLElement>(`#convList .title[data-conv="${CSS.escape(c.id)}"]`);
   if (title) title.textContent = c.title;
   renderConvHead();
 }
@@ -1042,7 +1129,6 @@ function setInput(text: string) {
   input.value = text;
   autosize();
 }
-input.addEventListener('input', noteDraft);
 
 // ---------- sending ----------
 async function submit() {
@@ -1080,7 +1166,7 @@ async function submit() {
 async function sendMessage(text: string) {
   const turnId = crypto.randomUUID();
   rememberProject();
-  const startsHere = document.querySelector<HTMLElement>('.chat')!.classList.contains('fresh');
+  const startsHere = chat.classList.contains('fresh');
   const top = composer.getBoundingClientRect().top;
   addUserMessage(text, turnId);
   if (startsHere) { // (from the middle of the page to its place at the bottom)
@@ -1099,17 +1185,8 @@ async function sendMessage(text: string) {
   }
 }
 
-sendBtn.onclick = submit;
-input.addEventListener('keydown', (e) => {
-  if (skillKey(e)) return;
-  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
-    e.preventDefault();
-    submit();
-  }
-});
 
 // ---------- /skill: suggestions while typing ----------
-const skillMenu = document.querySelector<HTMLElement>('.composer-box')!.appendChild(div('skill-menu hidden'));
 let skillMatches: ListedSkill[] = [];
 let skillPick = 0;
 let skillList: ListedSkill[] | null = null;
@@ -1165,22 +1242,14 @@ function skillKey(e: KeyboardEvent) {
   e.preventDefault();
   return true;
 }
-input.addEventListener('input', updateSkillMenu);
-input.addEventListener('blur', hideSkillMenu);
-skillMenu.addEventListener('mousedown', (e) => {
-  e.preventDefault(); // (the input keeps the focus)
-  const row = (e.target as HTMLElement).closest<HTMLElement>('.skill-row');
-  if (row) acceptSkill(Number(row.dataset.i));
-});
 function autosize() {
   input.style.height = 'auto';
   input.style.height = `${Math.min(input.scrollHeight, 220)}px`;
   input.style.overflowY = input.scrollHeight > 220 ? 'auto' : 'hidden';
 }
-input.addEventListener('input', autosize);
 
 // Links in the answers: web pages in the browser, never in this window.
-for (const area of [transcript, $('agentPanelBody')]) {
+for (const area of [...panes.map((p) => p.transcript), $('agentPanelBody')]) {
   area.addEventListener('click', (e) => {
     const a = (e.target as HTMLElement).closest<HTMLElement>('.bubble a[href]');
     if (!a) return;
@@ -1221,21 +1290,8 @@ function hideQuoteBtn() {
   quoteRange = null;
 }
 
-transcript.addEventListener('mouseup', () => setTimeout(() => {
-  const sel = window.getSelection();
-  if (!sel || sel.isCollapsed || !sel.rangeCount) return hideQuoteBtn();
-  const range = sel.getRangeAt(0);
-  if (!transcript.contains(range.commonAncestorContainer) || !sel.toString().trim()) return hideQuoteBtn();
-  quoteRange = range.cloneRange();
-  const rects = range.getClientRects();
-  const r = rects[rects.length - 1] || range.getBoundingClientRect();
-  quoteBtn.classList.remove('hidden');
-  const w = quoteBtn.offsetWidth;
-  quoteBtn.style.left = `${Math.max(8, Math.min(window.innerWidth - w - 8, r.right - w / 2))}px`;
-  quoteBtn.style.top = `${Math.min(window.innerHeight - 40, r.bottom + 6)}px`;
-}, 0));
 document.addEventListener('mousedown', (e) => { if (e.target !== quoteBtn) hideQuoteBtn(); });
-transcript.addEventListener('scroll', hideQuoteBtn);
+for (const p of panes) p.transcript.addEventListener('scroll', hideQuoteBtn);
 quoteBtn.addEventListener('mousedown', (e) => e.preventDefault()); // keep the selection
 quoteBtn.onclick = () => quoteRange && quote(quoteRange);
 
@@ -1275,7 +1331,7 @@ function statsDetails(s: TurnStats) {
 }
 
 // Progress of the prompt reading (before the first token), when the server reports it.
-let promptProgress: { id: number | string; value: number; t0: number } | null = null; // { id, value, t0 }
+let promptProgress: Pane['promptProgress'] = null; // { id, value, t0 }
 let modelStatus = ''; // what the call waits for: its turn, the model
 
 function promptProgressText() {
@@ -1323,14 +1379,15 @@ function liveGenText() {
 }
 
 // Live timer for the whole answer, in the status line.
-let runTimer: ReturnType<typeof setInterval> | undefined;
+let runTimer: Pane['runTimer'];
 function startRunTimer() {
   const t0 = performance.now();
+  const p = pane;
   clearInterval(runTimer);
-  const tick = () => {
+  const tick = () => inPane(p, () => {
     const extra = modelStatus || promptProgressText() || liveGenText();
     $('status').textContent = `L’agent travaille… ${fmtDuration(performance.now() - t0)}${extra ? ` · ${extra}` : ''}`;
-  };
+  });
   tick();
   runTimer = setInterval(tick, 100);
 }
@@ -1426,11 +1483,17 @@ function drawStreaming() {
   }
   dirty.clear();
   drawCost = performance.now() - t0;
-  scrollDown();
+  forPanes(() => scrollDown());
 }
 
 // ---------- a file being written or edited, followed live in the side panel ----------
 let liveBubble: Bubble | null = null;
+let livePane: Pane | null = null; // (the pane of the answer followed)
+/** The side panels of the pane worked in are closed (its conversation is drawn again, or another one shown). */
+function closePanelsOfPane() {
+  if (livePane === pane) closeLivePanel();
+  if (panelPane === pane) closeAgentPanel();
+}
 
 function liveCard(b: Bubble) {
   const a = b.live;
@@ -1452,6 +1515,7 @@ async function openLivePanel(b: Bubble) {
   closeViewer();
   closeAgentPanel();
   liveBubble = b;
+  livePane = pane;
   $('livePanelBody').dataset.scrolled = '';
   $('livePanel').classList.remove('hidden');
   // An edit: the file as it is, to show the block found and its replacement.
@@ -1467,6 +1531,7 @@ async function openLivePanel(b: Bubble) {
 
 function closeLivePanel() {
   liveBubble = null;
+  livePane = null;
   $('livePanel').classList.add('hidden');
   $('livePanelBody').replaceChildren();
 }
@@ -1526,7 +1591,7 @@ function onEvent(ev: SessionEvent) {
       // Its own context: on its card, and in the panel when it is the one shown.
       agentContext.set(ev.agentId, ev);
       renderGauge(ev, card.querySelector<HTMLElement>('.sub-gauge')!, { sub: true });
-      if (panelAgent === ev.agentId) renderGauge(ev, $('agentPanelGauge'), { sub: true });
+      if (shownAgent() === ev.agentId) renderGauge(ev, $('agentPanelGauge'), { sub: true });
       return;
     }
     if (ev.type === 'delta') {
@@ -1698,7 +1763,7 @@ function onEvent(ev: SessionEvent) {
           agentContext.set(ev.id, m.context);
           renderGauge(m.context, card.querySelector<HTMLElement>('.sub-gauge')!, { sub: true });
         }
-        if (panelAgent === ev.id) renderAgentPanelHead();
+        if (shownAgent() === ev.id) renderAgentPanelHead();
         break;
       }
       const body = card.querySelector<HTMLElement>('.card-body')!;
@@ -1848,20 +1913,20 @@ function onEvent(ev: SessionEvent) {
       break;
     case 'keep_start':
       if (replaying) break;
-      document.querySelector<HTMLElement>('.compaction.pending')?.remove();
+      (target ?? transcript).querySelector<HTMLElement>('.compaction.pending')?.remove();
       add(div('compaction pending', '<span class="spin">◌</span> Avant le compactage : ce qui mérite d’être retenu…'));
       break;
     case 'kept':
-      document.querySelector<HTMLElement>('.compaction.pending')?.remove();
+      (target ?? transcript).querySelector<HTMLElement>('.compaction.pending')?.remove();
       if (ev.memory.length || ev.project.length || ev.update) add(keptCard(ev));
       break;
     case 'compaction_start':
-      document.querySelector<HTMLElement>('.compaction.pending')?.remove();
+      (target ?? transcript).querySelector<HTMLElement>('.compaction.pending')?.remove();
       add(div('compaction pending', '<span class="spin">◌</span> Compactage du contexte : résumé des anciens messages…'));
       break;
     case 'compaction': {
       if (promptProgress?.id === 'compaction') promptProgress = null;
-      document.querySelector<HTMLElement>('.compaction.pending')?.remove();
+      (target ?? transcript).querySelector<HTMLElement>('.compaction.pending')?.remove();
       const d = document.createElement('details');
       d.className = 'compaction';
       d.innerHTML = `<summary>🗜 Contexte compacté : ${fmtTokens(ev.before)} → ${fmtTokens(ev.after)} tokens (${ev.removed} messages résumés)${ev.fallback ? ' · résumé de secours' : ''}</summary>${ev.fallback ? `<p class="compaction-why">Le modèle n’a pas pu écrire le résumé (${esc(ev.failure || 'raison inconnue')}) : un résumé de secours a été construit à partir des demandes, du résumé précédent et des dernières notes de l’agent.</p>` : ''}<pre></pre>`;
@@ -1897,7 +1962,7 @@ function onEvent(ev: SessionEvent) {
       setRunning(false);
       refreshUsage();
       for (const b of bubbles.values()) b.bubble.classList.remove('cursor');
-      input.focus();
+      if (pane === focused) input.focus();
       break;
   }
 }
@@ -1907,7 +1972,7 @@ function onApproval(req: SessionApproval) {
   if (!card) return;
   if (req.questions) return showQuestionnaire(card, req.id, req.questions);
   // A sub-agent's command: its view is shown, or the question would go unseen.
-  for (const [id, view] of agentViews) if (view.contains(card) && panelAgent !== id) openAgentPanel(id);
+  for (const [id, view] of agentViews) if (view.contains(card) && shownAgent() !== id) openAgentPanel(id);
   card.classList.add('open');
   setTimeout(markWaiting);
   const bar = div('approval');
@@ -1946,16 +2011,17 @@ function onApproval(req: SessionApproval) {
 // One question at a time, with a stepper: going back keeps the answers, and so does
 // drawing the conversation again (another one shown, then this one).
 // (by its questions: a questionnaire asked again, resumed or after a restart, has another id)
-const askDrafts = new Map<string, { answers: QuestionAnswer[]; step: number }>();
+let askDrafts = new Map<string, AskState>();
 const askKey = (questions: Question[]) => JSON.stringify(questions);
-const askAnswers = new Map<number, QuestionAnswer[]>(); // the answers given, by card (resuming from it starts from them)
-let askSaveTimer: ReturnType<typeof setTimeout> | undefined;
+let askAnswers = new Map<number, QuestionAnswer[]>(); // the answers given, by card (resuming from it starts from them)
+let askSaveTimer: Timer | undefined;
 
 /** The questionnaire's state, kept with the conversation (soon, not at each key). */
 function saveAskDraft(draft: AskDraft | null) {
   clearTimeout(askSaveTimer);
   if (!draft) return void window.api.setAskDraft(null);
-  askSaveTimer = setTimeout(() => window.api.setAskDraft(draft), 300);
+  const p = pane;
+  askSaveTimer = setTimeout(() => inPane(p, () => window.api.setAskDraft(draft)), 300);
 }
 
 function showQuestionnaire(card: HTMLElement, id: number, questions: Question[]) {
@@ -2049,13 +2115,13 @@ function showQuestionnaire(card: HTMLElement, id: number, questions: Question[])
     if (e.key === 'Escape' && step > 0) { e.preventDefault(); go(step - 1); }
   };
   input.before(form);
-  document.querySelector<HTMLElement>('.composer-box')!.classList.add('asking');
+  chat.querySelector<HTMLElement>('.composer-box')!.classList.add('asking');
   go(step);
   scrollDown(true);
 }
 
 /** A questionnaire waiting is given up (its turn stops), so that the conversation can be rewound or resumed. */
-const asking = () => Boolean(document.querySelector('.composer .questionnaire'));
+const asking = () => Boolean(chat.querySelector('.composer .questionnaire'));
 
 async function stopAsking(): Promise<boolean> {
   if (!running) return true;
@@ -2071,20 +2137,20 @@ async function stopAsking(): Promise<boolean> {
 
 /** The message field back (answered, or another conversation shown). */
 function closeQuestionnaire(id?: number) {
-  const form = document.querySelector<HTMLElement>('.composer .questionnaire');
+  const form = chat.querySelector<HTMLElement>('.composer .questionnaire');
   if (!form || (id !== undefined && form.dataset.id !== String(id))) return;
   form.remove();
-  document.querySelector<HTMLElement>('.composer-box')!.classList.remove('asking');
+  chat.querySelector<HTMLElement>('.composer-box')!.classList.remove('asking');
   autosize(); // (its height, measured while hidden, was none)
   fitComposer();
 }
 
-// Only the events of the conversation shown are drawn (the others are replayed when opened).
-const shown = (x: { session?: string }) => !x.session || x.session === settings.active?.session;
-window.api.onEvent((ev) => { if (shown(ev)) onEvent(ev); });
+// Only the events of the conversations shown are drawn, each in its pane (the others are replayed when opened).
+const paneOf = (x: { session?: string }) => (!x.session ? focused : shownPanes().find((p) => sessionOf(p) === x.session));
+window.api.onEvent((ev) => { const p = paneOf(ev); if (p) inPane(p, () => onEvent(ev)); });
 window.api.onConversationsChanged(() => refreshConversations());
 window.api.onSessionsChanged(() => refreshConversations());
-window.api.onApproval((req) => { if (shown(req)) onApproval(req); });
+window.api.onApproval((req) => { const p = paneOf(req); if (p) inPane(p, () => onApproval(req)); });
 
 // ---------- project actions: context menu and shortcuts ----------
 // The same actions from a right click on the sidebar (or a project's dot) and
@@ -2225,12 +2291,12 @@ window.api.onContextMenu((p) => {
   if (!p.selectionText?.trim()) return;
   const sel = window.getSelection();
   const range = sel?.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
-  const inConversation = range && transcript.contains(range.commonAncestorContainer);
+  const where = range && panes.find((x) => x.transcript.contains(range.commonAncestorContainer));
   hideQuoteBtn();
   showContextMenu(p.x, p.y, null, [
     ...editing,
     '-',
-    { label: 'Citer dans le message', kbd: '❝', disabled: !inConversation, run: () => range && quote(range) },
+    { label: 'Citer dans le message', kbd: '❝', disabled: !where, run: () => { if (range && where) { focusPane(where); quote(range); } } },
   ]);
 });
 
@@ -2527,7 +2593,7 @@ window.addEventListener('blur', hideTip);
 const toasts = document.body.appendChild(div('toasts'));
 const ALERT_LABELS: Record<AppAlert['kind'], string> = { done: 'Terminé', error: 'Erreur', approval: 'Autorisation demandée', question: 'Questions de l’agent' };
 function showAlert(a: AppAlert) {
-  if (a.session === currentConversation) return;
+  if (shownPanes().some((p) => sessionOf(p) === a.session)) return;
   for (const old of toasts.querySelectorAll<HTMLElement>(`[data-session="${CSS.escape(a.session)}"]`)) old.remove(); // (its latest news)
   const t = div(`toast toast-${a.kind}`, `<span class="toast-kind"></span><b></b><span class="toast-body"></span><button class="toast-close" aria-label="Fermer">×</button>`);
   t.dataset.session = a.session;
@@ -2556,7 +2622,8 @@ window.api.onOpenConversation((id) => openConversation(id)); // (a notification 
 
 // ---------- sidebar ----------
 let replaying = false;
-let currentConversation: string | null = null;
+/** The conversation of the pane worked in (its id, as its session's). */
+const currentConversation = () => settings.active?.session ?? null;
 
 $<HTMLButtonElement>('sidebarBtn').onclick = () => projectActions.toggleSidebar(projectFilter);
 // The conversations and the files, as a deck of two cards (the one in front: remembered).
@@ -2634,6 +2701,8 @@ const CATEGORIES = [
   { key: 'archived', label: 'Archivées', foldable: true },
 ];
 // (the conversation shown stays where it is: its text is a draft once the user leaves it)
+// Two conversations side by side make one card, in the most pressing of their two places.
+const PRIORITY = ['waiting', 'failed', 'busy', 'sleeping', 'done', 'drafts', 'archived'];
 const category = (c: ConversationSummary) => c.draft ? 'drafts' : c.approvals ? 'waiting' : c.sleeping ? 'sleeping' : c.running ? 'busy' : c.failed ? 'failed' : c.unread || c.finished ? 'done' : 'archived';
 let collapsedCategories = new Set<string>();
 try { collapsedCategories = new Set(JSON.parse(localStorage.getItem('collapsedCategories') || '[]') as string[]); } catch {}
@@ -2808,8 +2877,9 @@ document.addEventListener('click', closeViewMenu);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeViewMenu(); });
 
 let shownSession: string | null | undefined; // (undefined: before the first conversation)
-/** The files card on the project it should show; the chat greyed when it is not the conversation's. */
-async function syncView() {
+/** The files card on the project it should show (the focused conversation's); the chat greyed when it is not the conversation's. */
+const syncView = () => inPane(focused, syncFocusedView);
+async function syncFocusedView() {
   const session = settings.active?.session ?? null;
   const own = activeProject();
   if (session !== shownSession) {
@@ -2835,13 +2905,12 @@ async function syncView() {
 function endObserving() {
   if (observed) setProjectFilter(activeProject() ?? ALL);
 }
-const chat = document.querySelector<HTMLElement>('.chat')!;
 /** Greyed, out of reach of the keyboard: a click on it only brings it back (its controls wait for the next one). */
 function greyChat(on: boolean) {
   document.body.classList.toggle('observing', on);
-  for (const el of chat.children) (el as HTMLElement).inert = on;
+  for (const p of panes) for (const el of p.root.children) (el as HTMLElement).inert = on;
 }
-chat.addEventListener('mousedown', () => endObserving());
+for (const p of panes) p.root.addEventListener('mousedown', () => endObserving());
 
 $<HTMLButtonElement>('projectPicker').onclick = (e) => {
   e.stopPropagation();
@@ -2870,24 +2939,30 @@ window.addEventListener('wheel', (e) => {
   deckSwipe.wheel(e.deltaX, e.deltaY, e.timeStamp);
 }, { passive: true });
 
-/** At the top of the window: the project and the title of the conversation shown. */
+/** At the top of the window: the project and the title of the conversation shown (of each pane, in a split view). */
 function renderConvHead() {
-  const c = lastConversations.find((x) => x.id === currentConversation);
+  if (split) return renderSplitHeads();
+  inPane(focused, () => fillHead($('convHead')));
+  $<HTMLButtonElement>('headRename').classList.toggle('hidden', !lastConversations.some((x) => x.id === sessionOf(focused)));
+}
+/** A head: the project and the title of the conversation of the pane worked in. */
+function fillHead(head: HTMLElement) {
+  const c = lastConversations.find((x) => x.id === currentConversation());
   const off = c ? c.offProject : offMode();
   const dir = c ? c.workspace : activeDir();
   const key = off ? OFF_KEY : dir;
-  const project = $('convHead').querySelector<HTMLElement>('.head-project')!;
+  const project = head.querySelector<HTMLElement>('.head-project')!;
   project.innerHTML = off || dir ? `${projectGlyph(key)} ${esc(projectLabel(key))}` : '';
   const title = c?.title || 'Nouvelle conversation';
-  $('convHead').querySelector<HTMLElement>('.head-title')!.textContent = title;
-  $('convHead').title = title;
-  $<HTMLButtonElement>('headRename').classList.toggle('hidden', !c);
+  head.querySelector<HTMLElement>('.head-title')!.textContent = title;
+  head.title = title;
 }
 const renameTip = () => `Renommer (${MAC ? '⌘R' : 'Ctrl+R'})`;
-/** Renames the conversation shown, in place at the top of the window. */
+/** Renames the conversation shown (the focused one), in place at the top of the window. */
 function renameCurrent() {
-  const c = lastConversations.find((x) => x.id === currentConversation);
-  if (c && !document.querySelector<HTMLElement>('dialog[open]')) startRename($('convHead'), c, $('convHead').querySelector<HTMLElement>('.head-title')!);
+  const c = lastConversations.find((x) => x.id === sessionOf(focused));
+  const head = split ? splitHead(focused) : $('convHead');
+  if (c && !document.querySelector<HTMLElement>('dialog[open]')) startRename(head, c, head.querySelector<HTMLElement>('.head-title')!);
 }
 $('convHead').querySelector<HTMLElement>('.head-title')!.ondblclick = renameCurrent;
 $<HTMLButtonElement>('headRename').onclick = renameCurrent;
@@ -2896,17 +2971,26 @@ window.api.onRenameConversation(renameCurrent); // (the application menu, ⌘R)
 
 async function refreshConversations({ slide = 0 } = {}) {
   if (renaming || !settings) return;
-  const { current, all: every } = await window.api.listConversations();
-  currentConversation = current;
+  const { all: every } = await window.api.listConversations();
+  const current = sessionOf(focused);
   everyConversation = every;
   lastConversations = every.filter((c) => !isHiddenProject(projectOf(c)));
-  const named = lastConversations.find((c) => c.id === current && c.titleFromDraft);
-  if (named) showDraftTitle(named);
-  else renderConvHead();
+  renderConvHead();
+  for (const p of shownPanes()) {
+    const named = lastConversations.find((c) => c.id === sessionOf(p) && c.titleFromDraft);
+    if (named) inPane(p, () => showDraftTitle(named));
+  }
   const keys = projectKeys();
   if (!keys.includes(projectFilter)) projectFilter = ALL;
   renderProjectBar(keys);
-  const all = projectFilter === ALL ? lastConversations : lastConversations.filter((c) => projectOf(c) === projectFilter);
+  const inList = (c: ConversationSummary) => projectFilter === ALL || projectOf(c) === projectFilter;
+  // A split view: its two conversations, left then right, as one card where the more recent would be.
+  const pair = split ? [leftPane, otherPane(leftPane)].map((p) => lastConversations.find((c) => c.id === sessionOf(p))) : [];
+  const paired = pair.filter((c): c is ConversationSummary => Boolean(c));
+  const lead = paired.some(inList) ? paired.reduce((a, b) => (b.updatedAt > a.updatedAt ? b : a)) : undefined;
+  const pairCategory = PRIORITY.find((k) => paired.some((c) => category(c) === k));
+  const all = lastConversations.filter((c) => inList(c) ? !paired.includes(c) || c === lead : c === lead);
+  const placeOf = (c: ConversationSummary) => (c === lead ? pairCategory : category(c));
   const list = $('convList');
   const before = slide ? null : sidebarPlaces();
   list.innerHTML = '';
@@ -2920,10 +3004,11 @@ async function refreshConversations({ slide = 0 } = {}) {
   const key = window.api.platform === 'darwin' ? '⌘' : 'Ctrl+';
   const addButton = add.firstChild as HTMLElement;
   addButton.querySelector<HTMLElement>('.kbd')!.textContent = `${key}N`;
-  addButton.onclick = newConversationHere;
+  addButton.onclick = () => newConversationHere();
+  middleClick(addButton, () => openBeside(null));
   list.appendChild(add);
   for (const cat of CATEGORIES) {
-    const items = all.filter((c) => category(c) === cat.key);
+    const items = all.filter((c) => placeOf(c) === cat.key);
     if (!items.length) continue;
     const collapsed = cat.foldable && collapsedCategories.has(cat.key);
     const li = document.createElement('li');
@@ -2940,7 +3025,7 @@ async function refreshConversations({ slide = 0 } = {}) {
       };
     }
     const ul = li.querySelector<HTMLElement>('ul')!;
-    for (const c of items) ul.appendChild(conversationItem(c, current));
+    for (const c of items) ul.appendChild(c === lead ? pairItem(pair, placeOf(c) ?? '') : conversationItem(c, current));
     list.appendChild(li);
   }
   if (!all.length) {
@@ -2988,10 +3073,7 @@ function moveCards(before: Places) {
 }
 
 /** A new conversation in the default project (see defaultProject). */
-const newConversationHere = () => {
-  const key = defaultProject();
-  return newConversationIn(key === OFF_KEY ? null : key);
-};
+const newConversationHere = (key = defaultProject()) => newConversationIn(key === OFF_KEY ? null : key);
 
 /** A new conversation in a project folder, or outside any project (dir null). */
 async function newConversationIn(dir: string | null, { keepText = false } = {}) {
@@ -3009,7 +3091,7 @@ async function newConversationIn(dir: string | null, { keepText = false } = {}) 
     else settings = await window.api.reset();
   } catch (e) {
     $('status').textContent = errorText(e);
-    return;
+    return false;
   }
   renderSettings();
   setRunning(false); // a new conversation is idle
@@ -3023,25 +3105,13 @@ async function newConversationIn(dir: string | null, { keepText = false } = {}) 
   setInput(text);
   if (text) noteDraft();
   input.focus();
+  return true;
 }
 
 const CLOCK_ICON = '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6.2"/><path d="M8 4.6V8l2.3 1.5"/></svg>';
 
-function conversationItem(c: ConversationSummary, current: string | null) {
-  const li = document.createElement('li');
-  li.className = `conv-card ${category(c)}`;
-  li.dataset.place = c.id;
-  li.dataset.project = projectOf(c);
-  li.classList.toggle('active', c.id === current);
-  li.innerHTML = '<div class="card-top"><span class="title"></span><span class="state"></span><span class="pill"></span><span class="card-actions"><button class="ren">✎</button><button class="del" title="Supprimer">✕</button></span></div><div class="card-meta"><span class="project"></span><span class="when"></span><span class="card-engine"></span></div>';
-  li.querySelector<HTMLElement>('.title')!.textContent = c.title;
-  if (c.draft) { // (the card shows its prompt on hover, instead of the title in full)
-    li.dataset.tip = c.draftText;
-    li.dataset.tipSide = '';
-  } else li.querySelector<HTMLElement>('.title')!.title = c.title;
-  // How many things wait for the user: approvals (orange), answers to read (blue, or red after an error).
-  // Asleep, nothing does: a clock in the same place.
-  const pill = li.querySelector<HTMLElement>('.pill')!;
+/** How many things wait for the user: approvals (orange), answers to read (blue, or red after an error). Asleep, nothing does: a clock in the same place. */
+function fillPill(pill: HTMLElement, c: ConversationSummary) {
   if (c.approvals) {
     pill.textContent = String(c.approvals);
     pill.classList.add('warn');
@@ -3055,6 +3125,22 @@ function conversationItem(c: ConversationSummary, current: string | null) {
     pill.title = category(c) === 'failed' ? (c.unread > 1 ? `${c.unread} messages à consulter` : 'Un message à consulter')
       : c.unread > 1 ? `${c.unread} réponses à lire` : 'Une réponse à lire';
   } else pill.remove();
+}
+
+function conversationItem(c: ConversationSummary, current: string | null) {
+  const li = document.createElement('li');
+  li.className = `conv-card ${category(c)}`;
+  li.dataset.place = c.id;
+  li.dataset.project = projectOf(c);
+  li.classList.toggle('active', c.id === current);
+  li.innerHTML = '<div class="card-top"><span class="title"></span><span class="state"></span><span class="pill"></span><span class="card-actions"><button class="ren">✎</button><button class="del" title="Supprimer">✕</button></span></div><div class="card-meta"><span class="project"></span><span class="when"></span><span class="card-engine"></span></div>';
+  li.querySelector<HTMLElement>('.title')!.textContent = c.title;
+  li.querySelector<HTMLElement>('.title')!.dataset.conv = c.id;
+  if (c.draft) { // (the card shows its prompt on hover, instead of the title in full)
+    li.dataset.tip = c.draftText;
+    li.dataset.tipSide = '';
+  } else li.querySelector<HTMLElement>('.title')!.title = c.title;
+  fillPill(li.querySelector<HTMLElement>('.pill')!, c);
   const project = li.querySelector<HTMLElement>('.project')!;
   project.innerHTML = `${projectGlyph(projectOf(c))} ${esc(projectLabel(projectOf(c) || ''))}`;
   project.title = c.offProject ? 'Conversation sans dossier de projet' : c.workspace || '';
@@ -3067,6 +3153,17 @@ function conversationItem(c: ConversationSummary, current: string | null) {
     when.textContent = workTime(Date.now() - c.workingSince);
   } else when.textContent = relativeTime(c.updatedAt);
   li.onclick = () => openConversation(c.id);
+  // A click with the wheel, or the card dropped on one side of the chat: beside the one shown.
+  middleClick(li, () => openBeside(c.id));
+  li.draggable = true;
+  li.addEventListener('dragstart', (e) => {
+    if (li.classList.contains('editing') || !e.dataTransfer) return e.preventDefault();
+    dragged = c.id;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', c.title);
+    hideTip();
+  });
+  li.addEventListener('dragend', () => { dragged = null; showDropZone(null); });
   li.querySelector<HTMLElement>('.ren')!.dataset.tip = renameTip();
   li.querySelector<HTMLElement>('.ren')!.onclick = (e) => { e.stopPropagation(); startRename(li, c); };
   li.querySelector<HTMLElement>('.title')!.ondblclick = (e) => { e.stopPropagation(); startRename(li, c); };
@@ -3076,7 +3173,12 @@ function conversationItem(c: ConversationSummary, current: string | null) {
     e.preventDefault();
     e.stopPropagation();
     closeProjectMenu();
+    const here = !split && c.id === current;
+    const beside = split ? sideOf(otherPane(focused)) : 'right';
     showContextMenu(e.clientX, e.clientY, esc(c.title), [
+      { label: split ? 'Remplacer la conversation de gauche' : 'Ouvrir à gauche', kbd: beside === 'left' ? 'clic molette' : '', disabled: here, run: () => openAside(c.id, 'left') },
+      { label: split ? 'Remplacer la conversation de droite' : 'Ouvrir à droite', kbd: beside === 'right' ? 'clic molette' : '', disabled: here, run: () => openAside(c.id, 'right') },
+      '-',
       { label: 'Marquer comme lue', disabled: !(c.unread || c.finished), run: () => window.api.markConversationsRead([c.id]) },
       { label: 'Renommer', run: () => startRename(li, c) },
       '-',
@@ -3177,7 +3279,8 @@ function showSession(view: SessionView) {
 }
 
 async function openConversation(id: string) {
-  if (id === currentConversation) return;
+  const there = shownPanes().find((p) => sessionOf(p) === id);
+  if (there) return void focusPane(there); // (already shown)
   rememberScroll(); // (the conversation shown goes on in the background)
   await flushDraft();
   let view;
@@ -3185,7 +3288,7 @@ async function openConversation(id: string) {
     view = await window.api.openConversation(id);
   } catch (e) {
     $('status').textContent = errorText(e);
-    return;
+    return false;
   }
   const moved = view.settings.active?.cwd !== activeDir();
   settings = view.settings;
@@ -3202,7 +3305,289 @@ async function openConversation(id: string) {
   refreshPromptBadge();
   refreshGauge();
   input.focus();
+  return true;
 }
+
+// ---------- the split view: two conversations side by side ----------
+// A conversation opens beside the one shown (a click with the wheel on its card, or on
+// « Nouvelle conversation »; its card's menu; the card dropped on one side of the chat),
+// each pane with its own input. Two shown, a card dropped on one replaces it. Their two
+// titles are at the top of the window, each with its ✕; in the sidebar, the two make one
+// card until one is closed. The side panels float over one pane instead of taking room.
+type Side = 'left' | 'right';
+let leftPane = panes[0];
+let splitAt = 0.5; // the left pane's share of the room
+let panelSide: Side = 'right'; // the pane the side panels float over
+let panelPlaced = false; // (put there by the user: it stays)
+let dragged: string | null = null; // the conversation whose card is dragged
+const chats = $('chats');
+const sideOf = (p: Pane): Side => (p === leftPane ? 'left' : 'right');
+const paneAt = (side: Side) => (side === 'left' ? leftPane : otherPane(leftPane));
+
+/** A click with the wheel (no scrolling cursor on the way). */
+function middleClick(el: HTMLElement, run: () => unknown) {
+  el.addEventListener('mousedown', (e) => { if (e.button === 1) e.preventDefault(); });
+  el.addEventListener('auxclick', (e) => {
+    if (e.button !== 1) return;
+    e.preventDefault();
+    e.stopPropagation();
+    run();
+  });
+}
+
+/** The pane the user works in: its input, its model, the files of its project. */
+function focusPane(p: Pane) {
+  if (p === focused || !split) return;
+  inPane(focused, rememberScroll);
+  usePane(p);
+  focused = p;
+  for (const x of panes) x.root.classList.toggle('focused', x === p);
+  renderSettings();
+  renderConvHead();
+  refreshPromptBadge();
+  refreshGauge();
+}
+
+/** Beside the conversation shown: in a second pane, or in place of the other one. */
+const openBeside = (id: string | null, project?: string) => (split ? openAside(id, sideOf(otherPane(focused)), project) : openAside(id, 'right', project));
+
+/** A conversation (null: a new one, in this project or the default one) in the pane on that side, a second pane if there is one. */
+async function openAside(id: string | null, side: Side, project?: string) {
+  const open = () => (id !== null ? openConversation(id) : project && project !== ALL ? newConversationHere(project) : newConversationHere());
+  if (split) {
+    focusPane(paneAt(side));
+    return open();
+  }
+  if (id !== null && id === sessionOf(focused)) return;
+  const kept = focused;
+  rememberScroll();
+  await flushDraft();
+  await window.api.split();
+  const fresh = otherPane(kept);
+  fresh.active = { ...settings.active, session: null, started: false };
+  leftPane = side === 'left' ? fresh : kept;
+  setSplit(true);
+  focused = kept; // (focusPane works from the one shown)
+  focusPane(fresh);
+  if (!(await open())) await closePane(fresh);
+}
+
+/** A pane closed: the other one takes the whole room, and the conversation goes back to the sidebar as a card of its own. */
+async function closePane(p: Pane) {
+  if (!split) return;
+  const keep = otherPane(p);
+  await inPane(p, () => { rememberScroll(); return flushDraft(); });
+  focusPane(keep);
+  settings = await window.api.unsplit(sessionOf(keep));
+  inPane(p, () => {
+    clearTranscript();
+    setRunning(false);
+    setInput('');
+    $('status').textContent = '';
+  });
+  p.active = null;
+  setSplit(false);
+  renderSettings();
+  refreshConversations();
+}
+
+function setSplit(on: boolean) {
+  split = on;
+  document.body.classList.toggle('split', on);
+  for (const p of panes) {
+    p.root.classList.toggle('hidden', !on && p !== focused);
+    p.root.classList.toggle('focused', on && p === focused);
+  }
+  splitDivider.classList.toggle('hidden', !on);
+  leftPane.root.style.order = '0';
+  otherPane(leftPane).root.style.order = '2';
+  panelPlaced = false;
+  applySplitAt();
+  renderConvHead();
+}
+
+function applySplitAt() {
+  leftPane.root.style.flexGrow = split ? String(splitAt) : '';
+  otherPane(leftPane).root.style.flexGrow = split ? String(1 - splitAt) : '';
+}
+// The divider moves the room between the two (a double click shares it again).
+splitDivider.addEventListener('pointerdown', (down) => {
+  if (down.button) return;
+  down.preventDefault();
+  splitDivider.setPointerCapture(down.pointerId);
+  splitDivider.classList.add('dragging');
+  const move = (e: PointerEvent) => {
+    const box = chats.getBoundingClientRect();
+    const min = Math.min(0.45, 340 / box.width);
+    splitAt = Math.max(min, Math.min(1 - min, (e.clientX - box.left) / box.width));
+    applySplitAt();
+  };
+  const up = () => {
+    splitDivider.removeEventListener('pointermove', move);
+    splitDivider.classList.remove('dragging');
+  };
+  splitDivider.addEventListener('pointermove', move);
+  splitDivider.addEventListener('pointerup', up, { once: true });
+  splitDivider.addEventListener('pointercancel', up, { once: true });
+});
+splitDivider.ondblclick = () => { splitAt = 0.5; applySplitAt(); };
+
+// The two titles, at the top of the window above their panes.
+const splitHeads = new Map(panes.map((p) => {
+  const head = $('splitHeads').appendChild(div('conv-head split-head', '<span class="head-project"></span><span class="head-title"></span><button class="head-close" type="button" aria-label="Fermer">✕</button>'));
+  head.querySelector<HTMLElement>('.head-close')!.dataset.tip = 'Fermer cette conversation (elle continue en arrière-plan)';
+  head.querySelector<HTMLElement>('.head-close')!.onclick = (e) => { e.stopPropagation(); closePane(p); };
+  head.addEventListener('mousedown', () => focusPane(p));
+  head.querySelector<HTMLElement>('.head-title')!.ondblclick = () => { focusPane(p); renameCurrent(); };
+  return [p, head];
+}));
+const splitHead = (p: Pane) => splitHeads.get(p)!;
+function renderSplitHeads() {
+  for (const p of panes) {
+    inPane(p, () => fillHead(splitHead(p)));
+    splitHead(p).classList.toggle('focused', p === focused);
+  }
+  placeHeads();
+}
+/** Each title centered above its pane, between the buttons of the bar. */
+function placeHeads() {
+  if (!split) return;
+  const bar = topbar.getBoundingClientRect();
+  const lo = document.querySelector<HTMLElement>('.brand')!.getBoundingClientRect().right + 14;
+  const hi = $('convSettingsBtn').getBoundingClientRect().left - 14;
+  for (const p of panes) {
+    const head = splitHead(p);
+    const r = p.root.getBoundingClientRect();
+    const a = Math.max(r.left + 10, lo);
+    const b = Math.min(r.right - 10, hi);
+    head.style.maxWidth = `${Math.max(0, b - a)}px`;
+    const w = head.offsetWidth;
+    head.style.left = `${Math.max(a, Math.min(b - w, r.left + r.width / 2 - w / 2)) - bar.left}px`;
+  }
+}
+
+/** The card of the two conversations side by side: left, then right; a click goes to one. */
+function pairItem(pair: (ConversationSummary | undefined)[], cat: string) {
+  const li = document.createElement('li');
+  li.className = `conv-card pair active ${cat}`;
+  li.dataset.place = 'pair';
+  const sides: [Side, ConversationSummary | undefined][] = [['left', pair[0]], ['right', pair[1]]];
+  for (const [side, c] of sides) {
+    const row = li.appendChild(div(`card-top pair-row${c ? ` ${category(c)}` : ''}${paneAt(side) === focused ? ' focused' : ''}`, `<span class="pair-side ${side}"></span><span class="title"></span><span class="state"></span><span class="pill"></span>`));
+    const title = row.querySelector<HTMLElement>('.title')!;
+    title.textContent = c?.title ?? 'Nouvelle conversation';
+    title.title = title.textContent;
+    if (c) {
+      title.dataset.conv = c.id;
+      fillPill(row.querySelector<HTMLElement>('.pill')!, c);
+    } else row.querySelector<HTMLElement>('.pill')!.remove();
+    row.onclick = () => focusPane(paneAt(side));
+  }
+  const meta = li.appendChild(div('card-meta', '<span class="project"></span><span class="when"></span>'));
+  const projects = [...new Set(pair.flatMap((c) => (c ? [projectOf(c)] : [])))];
+  meta.querySelector<HTMLElement>('.project')!.innerHTML = projects.map((k) => `${projectGlyph(k)} ${esc(projectLabel(k || ''))}`).join(' · ');
+  const latest = Math.max(...pair.map((c) => c?.updatedAt ?? 0));
+  meta.querySelector<HTMLElement>('.when')!.textContent = latest ? relativeTime(latest) : '';
+  li.dataset.tip = 'Côte à côte : fermez l’une des deux pour les séparer';
+  li.dataset.tipSide = '';
+  li.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    closeProjectMenu();
+    const name = (c?: ConversationSummary) => `« ${c?.title ?? 'Nouvelle conversation'} »`;
+    showContextMenu(e.clientX, e.clientY, 'Côte à côte', [
+      { label: 'Marquer comme lues', disabled: !pair.some((c) => c && (c.unread || c.finished)), run: () => window.api.markConversationsRead(pair.flatMap((c) => (c ? [c.id] : []))) },
+      '-',
+      { label: `Fermer ${name(pair[0])}`, run: () => closePane(paneAt('left')) },
+      { label: `Fermer ${name(pair[1])}`, run: () => closePane(paneAt('right')) },
+    ]);
+  });
+  return li;
+}
+
+// A card dragged over the chat: the side it would open on (one pane: a half of it; two: the pane under it, replaced).
+function dropSide(e: DragEvent): Side {
+  const box = (split ? splitDivider : chats).getBoundingClientRect();
+  return e.clientX < box.left + box.width / 2 ? 'left' : 'right';
+}
+function showDropZone(side: Side | null) {
+  const zone = $('dropZone');
+  zone.classList.toggle('shown', Boolean(side));
+  if (!side) return;
+  const box = chats.getBoundingClientRect();
+  const r = split ? paneAt(side).root.getBoundingClientRect() : { left: box.left + (side === 'left' ? 0 : box.width / 2), width: box.width / 2 };
+  zone.style.left = `${r.left - box.left}px`;
+  zone.style.width = `${r.width}px`;
+  const title = split ? lastConversations.find((c) => c.id === sessionOf(paneAt(side)))?.title : null;
+  zone.querySelector<HTMLElement>('span')!.textContent = split ? `Remplacer « ${title ?? 'Nouvelle conversation'} »` : side === 'left' ? 'Ouvrir à gauche' : 'Ouvrir à droite';
+}
+chats.addEventListener('dragover', (e) => {
+  if (!dragged || (!split && dragged === sessionOf(focused)) || (split && dragged === sessionOf(paneAt(dropSide(e))))) return showDropZone(null);
+  e.preventDefault();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+  showDropZone(dropSide(e));
+});
+chats.addEventListener('dragleave', (e) => { if (!(e.relatedTarget instanceof Node && chats.contains(e.relatedTarget))) showDropZone(null); });
+chats.addEventListener('drop', (e) => {
+  e.preventDefault();
+  showDropZone(null);
+  const id = dragged;
+  dragged = null;
+  if (id) openAside(id, dropSide(e));
+});
+
+// The side panels, in a split view: over one pane, the one not focused when they open, or the
+// one they were dragged over (by their head).
+const SIDE_PANELS = ['viewer', 'agentPanel', 'diffPanel', 'livePanel'].map((id) => $(id));
+const layout = document.querySelector<HTMLElement>('.layout')!;
+function placePanels() {
+  if (!split) return;
+  const box = layout.getBoundingClientRect();
+  const r = paneAt(panelSide).root.getBoundingClientRect();
+  layout.style.setProperty('--panel-left', `${r.left - box.left}px`);
+  layout.style.setProperty('--panel-width', `${r.width}px`);
+}
+let panelsOpen = false;
+const watchPanels = new MutationObserver(() => {
+  const open = SIDE_PANELS.some((el) => !el.classList.contains('hidden'));
+  if (open && !panelsOpen && split && !panelPlaced) {
+    panelSide = sideOf(otherPane(focused));
+    for (const el of SIDE_PANELS) el.classList.add('placing'); // (where it opens: no slide from elsewhere)
+    placePanels();
+    requestAnimationFrame(() => { for (const el of SIDE_PANELS) el.classList.remove('placing'); });
+  }
+  panelsOpen = open;
+});
+for (const el of SIDE_PANELS) {
+  watchPanels.observe(el, { attributes: true, attributeFilter: ['class'] });
+  el.querySelector<HTMLElement>('.viewer-head')!.addEventListener('pointerdown', (down) => {
+    if (!split || down.button || (down.target as HTMLElement).closest('button, input, select, a')) return;
+    const from = parseFloat(layout.style.getPropertyValue('--panel-left')) || 0;
+    let moving = false;
+    const move = (e: PointerEvent) => {
+      const dx = e.clientX - down.clientX;
+      if (!moving && Math.abs(dx) < 5) return;
+      moving = true;
+      el.classList.add('dragging');
+      el.style.left = `${from + dx}px`;
+    };
+    const up = (e: PointerEvent) => {
+      document.removeEventListener('pointermove', move);
+      document.removeEventListener('pointerup', up);
+      if (!moving) return;
+      const r = splitDivider.getBoundingClientRect();
+      panelSide = e.clientX < r.left + r.width / 2 ? 'left' : 'right';
+      panelPlaced = true;
+      placePanels();
+      void el.offsetWidth;
+      el.classList.remove('dragging');
+      el.style.left = ''; // (it slides from where it was let go)
+    };
+    document.addEventListener('pointermove', move);
+    document.addEventListener('pointerup', up);
+  });
+}
+for (const el of [...panes.map((p) => p.root), topbar]) new ResizeObserver(() => { placePanels(); placeHeads(); }).observe(el);
 
 // ---------- file tree ----------
 const expanded = new Set<string>(); // expanded directory paths
@@ -3972,8 +4357,9 @@ const resetDate = (iso: string | number) => {
 };
 async function refreshUsage() {
   const g = $('usageGauge');
-  const usage = usesClaude() ? await window.api.claudeUsage().catch(() => null) : null;
-  g.classList.toggle('hidden', !usage || !usesClaude());
+  const claude = usesClaude();
+  const usage = claude ? await window.api.claudeUsage().catch(() => null) : null;
+  g.classList.toggle('hidden', !usage || !claude);
   if (!usage) return;
   const used = Math.round(usage.utilization);
   g.querySelector<HTMLElement>('.gauge-fill')!.style.width = `${Math.min(100, used)}%`;
@@ -3982,36 +4368,119 @@ async function refreshUsage() {
   g.querySelector<HTMLElement>('.gauge-text')!.textContent = `session ${used} %`;
   g.dataset.tip = `Session de votre abonnement : ${used} % utilisés${usage.resetsAt ? `. Remise à zéro le ${resetDate(usage.resetsAt)}` : ''}`;
 }
-setInterval(refreshUsage, 5 * 60 * 1000);
+setInterval(() => forPanes(refreshUsage), 5 * 60 * 1000);
 
 async function refreshGauge() {
   refreshUsage();
+  const g = $('ctxGauge'); // (of this pane, whichever is worked in when the figures come)
   try {
-    renderGauge(await window.api.getContext());
+    renderGauge(await window.api.getContext(), g);
   } catch {
-    renderGauge(null);
+    renderGauge(null, g);
   }
 }
 
-$<HTMLButtonElement>('ctxGauge').onclick = async () => {
-  if (running || usesClaude()) return; // (the Claude harness compacts by itself)
-  if (!confirm('Compacter maintenant ? Les anciens messages seront remplacés par un résumé (le fil affiché reste intact).')) return;
-  setRunning(true);
-  stopRunTimer();
-  $('status').textContent = 'Compactage…';
-  let message = '';
-  try {
-    const r = await window.api.compactContext();
-    if (!r.compacted) message = r.reason || 'Rien à compacter.';
-  } catch (e) {
-    document.querySelector<HTMLElement>('.compaction.pending')?.remove();
-    add(div('error', esc(errorText(e))));
-  } finally {
-    setRunning(false);
-    $('status').textContent = message;
-    refreshGauge();
+
+// ---------- each pane's controls ----------
+// Bound in each pane, worked in when they are used: a press or the focus in a pane makes it the focused one.
+function bindPane(p: Pane) {
+  p.root.addEventListener('pointerdown', () => focusPane(p), true);
+  p.root.addEventListener('focusin', () => focusPane(p), true);
+  $<HTMLSelectElement>('effortSelect').addEventListener('change', (e) => setChoice({ effort: (e.target as HTMLInputElement).value as Effort }));
+  $<HTMLSelectElement>('modeSelect').addEventListener('change', (e) => setChoice({ mode: (e.target as HTMLInputElement).value }));
+
+  $<HTMLButtonElement>('modelPicker').onclick = async (e) => {
+    e.stopPropagation();
+    if (!$('modelMenu').classList.contains('hidden')) return closeModelMenu();
+    settings = await window.api.getSettings(); // (has it started since?)
+    if (claude.accounts.some((a) => !a.loggedIn)) claude = await window.api.claudeStatus().catch(() => claude); // (logged in since?)
+    openModelMenu();
+    refreshModels(); // (a server started or stopped since)
+  };
+  $('modelMenu').onclick = (e) => e.stopPropagation();
+
+  $<HTMLInputElement>('autoApprove').onchange = async (e) => {
+    settings = await window.api.setConfig({ approval: (e.target as HTMLInputElement).checked ? 'auto' : 'ask' });
+    renderSettings();
+  };
+  for (const flag of ['webEnabled', 'shellEnabled', 'torEnabled', 'subagentsEnabled']) {
+    $(flag).onchange = async (e) => {
+      settings = await window.api.setConfig({ [flag]: (e.target as HTMLInputElement).checked });
+      renderSettings();
+    };
   }
-};
+
+  $<HTMLButtonElement>('memoryBtn').onclick = () => $('memoryPanel').classList.toggle('hidden');
+  $<HTMLButtonElement>('memoryClose').onclick = () => $('memoryPanel').classList.add('hidden');
+  $<HTMLFormElement>('memoryForm').onsubmit = (e) => {
+    e.preventDefault();
+    const v = $<HTMLInputElement>('memoryInput').value.trim();
+    if (!v) return;
+    $<HTMLInputElement>('memoryInput').value = '';
+    saveMemory([...memoryNotes, v]);
+  };
+
+  input.addEventListener('input', noteDraft);
+
+  sendBtn.onclick = submit;
+  input.addEventListener('keydown', (e) => {
+    if (skillKey(e)) return;
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      submit();
+    }
+  });
+
+  input.addEventListener('input', updateSkillMenu);
+  input.addEventListener('blur', hideSkillMenu);
+  skillMenu.addEventListener('mousedown', (e) => {
+    e.preventDefault(); // (the input keeps the focus)
+    const row = (e.target as HTMLElement).closest<HTMLElement>('.skill-row');
+    if (row) acceptSkill(Number(row.dataset.i));
+  });
+
+  input.addEventListener('input', autosize);
+
+  transcript.addEventListener('mouseup', () => setTimeout(() => {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.rangeCount) return hideQuoteBtn();
+    const range = sel.getRangeAt(0);
+    if (!transcript.contains(range.commonAncestorContainer) || !sel.toString().trim()) return hideQuoteBtn();
+    quoteRange = range.cloneRange();
+    const rects = range.getClientRects();
+    const r = rects[rects.length - 1] || range.getBoundingClientRect();
+    quoteBtn.classList.remove('hidden');
+    const w = quoteBtn.offsetWidth;
+    quoteBtn.style.left = `${Math.max(8, Math.min(window.innerWidth - w - 8, r.right - w / 2))}px`;
+    quoteBtn.style.top = `${Math.min(window.innerHeight - 40, r.bottom + 6)}px`;
+  }, 0));
+
+  $<HTMLButtonElement>('ctxGauge').onclick = async () => {
+    if (running || usesClaude()) return; // (the Claude harness compacts by itself)
+    if (!confirm('Compacter maintenant ? Les anciens messages seront remplacés par un résumé (le fil affiché reste intact).')) return;
+    const p = pane;
+    setRunning(true);
+    stopRunTimer();
+    $('status').textContent = 'Compactage…';
+    let message = '';
+    try {
+      const r = await window.api.compactContext();
+      if (!r.compacted) message = r.reason || 'Rien à compacter.';
+    } catch (e) {
+      inPane(p, () => {
+        transcript.querySelector<HTMLElement>('.compaction.pending')?.remove();
+        add(div('error', esc(errorText(e))));
+      });
+    } finally {
+      inPane(p, () => {
+        setRunning(false);
+        $('status').textContent = message;
+        refreshGauge();
+      });
+    }
+  };
+}
+for (const p of panes) inPane(p, () => bindPane(p));
 
 // ---------- init ----------
 document.body.classList.add(`platform-${window.api.platform}`);
@@ -4025,10 +4494,24 @@ refreshGauge();
 // Window reloaded (after a crash) while a conversation was open: draw it again.
 const session = await window.api.currentSession();
 settings = session.settings;
-if (session.events.length || session.partial) showSession(session);
+const { partner } = await window.api.listConversations();
+if (session.events.length || session.partial || partner) showSession(session);
 else if (activeProject() !== defaultProject()) await newConversationHere(); // (the same page as a new conversation)
 else {
   clearTranscript();
   setInput(session.draft || '');
 }
+// (and the other one of a split view, on the right)
+const beside = partner ? await window.api.sessionView(partner).catch(() => null) : null;
+if (beside) {
+  const p = otherPane(focused);
+  p.active = beside.settings.active;
+  setSplit(true);
+  inPane(p, () => {
+    showSession(beside);
+    renderPaneSettings();
+    refreshGauge();
+  });
+  refreshConversations();
+} else if (partner) await window.api.unsplit(session.session);
 input.focus();

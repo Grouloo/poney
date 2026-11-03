@@ -142,13 +142,17 @@ function saveSettings() {
 
 // ---------- sessions ----------
 // Each open conversation is a session: its agent, its transcript, its pending
-// approvals. The window shows the active one; the others go on in the background
+// approvals. The window shows the active one, and in a split view its partner beside
+// it (active is then the one the user works in); the others go on in the background
 // (a generation is not stopped by switching), and keep their state for when the
 // user comes back.
 let win: BrowserWindow | null = null;
 let store!: ConversationStore; // (from the app's start on)
 const sessions = new Map<string, Session>(); // key (the conversation id, chosen up front) -> Session
 let active: Session | null = null;
+let partner: Session | null = null; // the other conversation of a split view
+/** In the window: the active session, or its partner in a split view. */
+const shown = (s: Session) => s === active || s === partner;
 const MAX_IDLE_SESSIONS = 8; // sessions kept in memory while idle (the others are reloaded from disk)
 
 const send = (channel: string, payload?: unknown) => win && !win.isDestroyed() && win.webContents.send(channel, payload);
@@ -218,7 +222,7 @@ class Session {
       this.agent?.reset();
       const approve = (req: ApprovalRequest) => new Promise<ApprovalAnswer>((resolve) => {
         this.approvals.set(req.id, { req, resolve });
-        if (this === active) send('agent:approval', { ...req, session: this.key });
+        if (shown(this)) send('agent:approval', { ...req, session: this.key });
         send('sessions:changed');
         updateBadge();
         if (req.questions) alertUser(this, 'question', req.questions.map((q) => q.question).join(' · '));
@@ -276,7 +280,7 @@ class Session {
       else if (ev.type === 'delta' && this.partial?.id === ev.id && ev.kind !== 'tool') this.partial[ev.kind === 'thinking' ? 'thinking' : 'text'] += ev.text;
       else if (ev.type === 'assistant_end') this.partial = null;
     }
-    if (this === active) send('agent:event', { ...ev, session: this.key });
+    if (shown(this)) send('agent:event', { ...ev, session: this.key });
     if (!ev.agentId && ev.type === 'final') this.lastAnswer = ev.text;
     if (!ev.agentId && ev.type === 'error') this.lastError = ev.message;
     if (ev.type === 'turn_start') this.lastAnswer = this.lastError = '';
@@ -285,7 +289,7 @@ class Session {
       this.finished = ev.type === 'turn_end';
       this.failed = ev.type === 'turn_end' && ev.reason === 'error';
       this.workingSince = ev.type === 'turn_start' ? Date.now() : null;
-      if (this.finished && this !== active) this.unread++;
+      if (this.finished && !shown(this)) this.unread++;
       send('sessions:changed');
     }
     if (!this.conv) return;
@@ -404,7 +408,7 @@ const notifications = new Map<Notification, string>(); // shown -> its session (
 function alertUser(s: Session, kind: AppAlert['kind'], body: string) {
   if (settings.config.notifications === false) return;
   const focused = Boolean(win && !win.isDestroyed() && win.isFocused());
-  if (focused && s === active) return; // (in view)
+  if (focused && shown(s)) return; // (in view)
   const title = s.conv?.title || 'Nouvelle conversation';
   if (focused) return void send('ui:alert', { session: s.key, kind, title, body } satisfies AppAlert);
   if (!Notification.isSupported()) return;
@@ -465,10 +469,19 @@ function activate(s: Session) {
   const prev = active;
   active = s;
   sessions.set(s.key, s);
-  if (prev && prev !== s) {
-    prev.finished = false; // left: read, it goes to the archived ones
-    prev.keepDraft();
-  }
+  if (s === partner) partner = prev; // (the other pane's conversation, opened in this one: they swap)
+  else if (prev && prev !== s) leave(prev);
+  seen(s);
+  observed = null; // (the files card follows the conversation shown)
+  // Idle sessions beyond the limit: saved and dropped (reloaded from disk when opened).
+  const idle = [...sessions.values()].filter((x) => !shown(x) && !x.running && !x.approvals.size).sort((a, b) => b.usedAt - a.usedAt);
+  for (const x of idle.slice(MAX_IDLE_SESSIONS)) x.close();
+  send('sessions:changed');
+  return s;
+}
+
+/** A session in view: its answers are read. */
+function seen(s: Session) {
   if (s.unread && s.conv) {
     s.conv.unread = 0;
     store.save(s.conv, { touch: false });
@@ -476,13 +489,13 @@ function activate(s: Session) {
   s.unread = 0;
   s.usedAt = Date.now();
   clearNotifications(s.key);
-  observed = null; // (the files card follows the conversation shown)
-  if (prev && prev !== s && !prev.conv && !prev.running) prev.close();
-  // Idle sessions beyond the limit: saved and dropped (reloaded from disk when opened).
-  const idle = [...sessions.values()].filter((x) => x !== active && !x.running && !x.approvals.size).sort((a, b) => b.usedAt - a.usedAt);
-  for (const x of idle.slice(MAX_IDLE_SESSIONS)) x.close();
-  send('sessions:changed');
-  return s;
+}
+
+/** A session out of the window. It goes on; if it was empty and idle, it goes away. */
+function leave(s: Session) {
+  s.finished = false; // left: read, it goes to the archived ones
+  s.keepDraft();
+  if (!s.conv && !s.running) s.close();
 }
 
 const activeCwd = () => active?.cwd ?? settings.workspace;
@@ -495,14 +508,14 @@ const viewScratch = () => (!observed && active && active.choice.engine !== 'clau
 const current = () => active ?? activate(new Session({ cwd: settings.workspace }));
 const saveAll = () => { for (const s of sessions.values()) s.keepDraft(); };
 
-/** The settings, plus where the agent works now (for the window). */
-const publicSettings = (): PublicSettings => ({
+/** The settings, plus where the agent works now (for the window): the active session, or another one shown. */
+const publicSettings = (s = active): PublicSettings => ({
   ...settings,
   active: {
-    offProject: Boolean(active?.offProject), cwd: activeCwd() || '', session: active?.key ?? null,
-    choice: active?.choice ?? { engine: 'local', model: null },
-    blocked: unavailable(providerOf(settings.providers, active?.choice ?? { engine: 'local' })),
-    started: Boolean(active?.started),
+    offProject: Boolean(s?.offProject), cwd: (s ? s.cwd : settings.workspace) || '', session: s?.key ?? null,
+    choice: s?.choice ?? { engine: 'local', model: null },
+    blocked: unavailable(providerOf(settings.providers, s?.choice ?? { engine: 'local' })),
+    started: Boolean(s?.started),
   },
 });
 
@@ -526,7 +539,7 @@ function sessionView(s: Session): SessionView {
     draft: s.draft,
     askDraft: s.askDraft,
     session: s.key,
-    settings: publicSettings(),
+    settings: publicSettings(s),
   };
 }
 
@@ -759,6 +772,34 @@ handle('agent:rewind', [isString], (turnId) => {
   s.save();
   return { events: conv.events };
 });
+// The split view: the pane the user works in (its calls go to that session), a second
+// pane (the active session stays in view, the next one opened goes beside it), and back
+// to one pane (the other session leaves the window).
+handle('session:focus', [isString], (key) => {
+  if (partner?.key !== key || !active) return;
+  [active, partner] = [partner, active];
+  seen(active);
+});
+handle('session:split', [], () => {
+  partner = current();
+  active = null;
+  send('sessions:changed');
+});
+handle('session:unsplit', [orNull(isString)], (keep) => {
+  const kept = partner && (keep === partner.key || !active) ? partner : active;
+  const gone = kept === active ? partner : active;
+  active = kept;
+  partner = null;
+  if (gone && gone !== kept) leave(gone);
+  send('sessions:changed');
+  return publicSettings();
+});
+// A conversation in view, drawn again (the window was reloaded).
+handle('session:view', [isString], (key) => {
+  const s = sessions.get(key);
+  if (!s || !shown(s)) throw new Error('Cette conversation n’est plus affichée.');
+  return sessionView(s);
+});
 handle('agent:stop', [], () => {
   if (!active) return;
   active.resolveApprovals(false);
@@ -826,7 +867,7 @@ handle('conversations:list', [], () => {
     c.workingSince = s.workingSince;
     c.engine = s.choice.engine;
   }
-  return { current: active?.key ?? null, all };
+  return { current: active?.key ?? null, partner: partner?.key ?? null, all };
 });
 // A new conversation outside any project (the agent works in a folder of its own).
 handle('conversations:newOffProject', [], () => {
@@ -997,6 +1038,7 @@ handle('conversations:rename', [isString, isString], (id, title) => {
 handle('conversations:delete', [isString], (id) => {
   const s = sessions.get(id);
   if (s?.running) throw new Error('Cette conversation est en cours : arrêtez-la d’abord.');
+  if (s && s === partner) throw new Error('Cette conversation est affichée à côté d’une autre : fermez-la d’abord.');
   let removed = null;
   try { removed = store.load(id); } catch {}
   if (s) {
@@ -1051,13 +1093,14 @@ handle('conversations:markRead', [isStringArray], (ids) => {
 handle('project:delete', [isString], (dir) => {
   const ids = store.listAll().filter((c) => !c.offProject && c.workspace === dir).map((c) => c.id);
   if (ids.some((id) => sessions.get(id)?.running)) throw new Error('Une conversation de ce projet est en cours : arrêtez-la d’abord.');
-  let shown = false;
+  let shownHere = false;
   for (const s of [...sessions.values()]) {
     if (s.offProject || s.cwd !== dir) continue;
     if (s.running) throw new Error('Une conversation de ce projet est en cours : arrêtez-la d’abord.');
     s.resolveApprovals(false);
     sessions.delete(s.key);
-    if (s === active) shown = true;
+    if (s === active) shownHere = true;
+    if (s === partner) partner = null;
   }
   for (const id of ids) {
     store.delete(id);
@@ -1072,7 +1115,7 @@ handle('project:delete', [isString], (dir) => {
   settings.projectOrder = settings.projectOrder.filter((d) => d !== dir);
   if (settings.workspace === dir) settings.workspace = settings.recent[0] || '';
   saveSettings();
-  if (shown) {
+  if (shownHere) {
     // The window was in that project: a new conversation elsewhere (outside projects if none is left).
     active = null;
     if (settings.workspace) activate(new Session({ cwd: settings.workspace }));
@@ -1236,8 +1279,8 @@ handle('agent:approve', [isObject], ({ id, ok, always, reason, answers }) => {
     saveSettings();
     for (const s of sessions.values()) if (s.agent) s.applyConfig();
   }
-  // (the approval may belong to any session)
-  for (const s of sessions.values()) {
+  // (the approval may belong to any session: the one the window works in first, as ids are each agent's own)
+  for (const s of new Set([...(active ? [active] : []), ...sessions.values()])) {
     const p = s.approvals.get(id);
     if (!p) continue;
     // (a questionnaire's answers are narrowed by the agent, against its questions)
@@ -1246,6 +1289,7 @@ handle('agent:approve', [isObject], ({ id, ok, always, reason, answers }) => {
     else p.resolve(!ok && reason?.trim() ? { ok: false, reason: String(reason).slice(0, 2000) } : ok);
     s.approvals.delete(id);
     send('sessions:changed');
+    break;
   }
   updateBadge();
   return publicSettings();
@@ -1276,7 +1320,7 @@ function createWindow() {
     if (details.reason !== 'clean-exit' && win && !win.isDestroyed()) win.reload();
   });
   // Back to the window: what it shows is seen.
-  window.on('focus', () => { if (active) clearNotifications(active.key); });
+  window.on('focus', () => { for (const s of [active, partner]) if (s) clearNotifications(s.key); });
   window.on('unresponsive', () => {
     logError('unresponsive', 'window not responding');
     saveAll();

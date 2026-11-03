@@ -3,8 +3,13 @@ import type { QuestionAnswer } from './types.ts' with { 'resolution-mode': 'impo
 
 const { contextBridge, ipcRenderer } = require('electron') as typeof Electron;
 
+// Before each call: the window says which conversation it comes from (its split view's pane).
+let beforeCall = () => {};
 /** A call to the main process, typed by the contract of src/ipc.ts (which main.ts checks). */
-const call = <C extends Channel>(channel: C) => (...args: Args<C>) => ipcRenderer.invoke(channel, ...args) as Promise<Reply<C>>;
+const call = <C extends Channel>(channel: C) => (...args: Args<C>) => {
+  beforeCall();
+  return ipcRenderer.invoke(channel, ...args) as Promise<Reply<C>>;
+};
 
 /** Tells when the main process says something on this channel. */
 const on = (channel: string) => (fn: () => void) => ipcRenderer.on(channel, () => fn());
@@ -38,12 +43,17 @@ const api = {
   stop: call('agent:stop'),
   reset: call('agent:reset'),
   newOffProject: call('conversations:newOffProject'),
-  approve: (id: number, ok: boolean, always?: boolean, reason?: string) => ipcRenderer.invoke('agent:approve', { id, ok, always, reason }) as Promise<Reply<'agent:approve'>>,
-  answer: (id: number, answers: QuestionAnswer[] | null) => ipcRenderer.invoke('agent:approve', { id, ok: Boolean(answers), answers: answers ?? undefined }) as Promise<Reply<'agent:approve'>>,
+  approve: (id: number, ok: boolean, always?: boolean, reason?: string) => call('agent:approve')({ id, ok, always, reason }),
+  answer: (id: number, answers: QuestionAnswer[] | null) => call('agent:approve')({ id, ok: Boolean(answers), answers: answers ?? undefined }),
   onEvent: onValue<SessionEvent>('agent:event'),
   onApproval: onValue<SessionApproval>('agent:approval'),
 
   currentSession: call('session:current'),
+  sessionView: call('session:view'),
+  focusSession: (key: string) => ipcRenderer.invoke('session:focus', key) as Promise<Reply<'session:focus'>>, // (itself not preceded)
+  beforeCalls: (fn: () => void) => { beforeCall = fn; },
+  split: call('session:split'),
+  unsplit: call('session:unsplit'),
   listConversations: call('conversations:list'),
   openConversation: call('conversations:open'),
   renameConversation: call('conversations:rename'),
