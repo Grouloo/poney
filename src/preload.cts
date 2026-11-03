@@ -99,6 +99,10 @@ const api = {
   openFileExternal: call('files:openExternal'),
   revealFile: call('files:reveal'),
   appsToOpen: call('files:apps'),
+  projectBusy: call('files:busy'),
+  renameFile: call('files:rename'),
+  trashFile: call('files:trash'),
+  desktopPath: call('app:desktop'),
   openFileWith: call('files:openWith'),
 
   gitStatus: call('git:status'),

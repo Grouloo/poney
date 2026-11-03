@@ -1211,6 +1211,20 @@ handle('files:list', [optional(isString)], (rel) => listDir(viewCwd(), rel, view
 handle('files:read', [isString], (rel) => readFileForViewer(viewCwd(), rel, viewScratch()));
 handle('files:openExternal', [isString], (rel) => shell.openPath(resolveInside(viewCwd(), rel, viewScratch()).abs));
 handle('files:reveal', [isString], (rel) => shell.showItemInFolder(resolveInside(viewCwd(), rel, viewScratch()).abs));
+// A file renamed in its folder, or put in the trash; busy: an agent works in the project meanwhile.
+handle('files:busy', [], () => [...sessions.values()].some((x) => x.running && x.cwd === viewCwd()));
+handle('files:rename', [isString, isString], async (rel, name) => {
+  const clean = name.trim();
+  if (!clean || clean === '.' || clean === '..' || /[\\/]/.test(clean)) throw new Error('Nom de fichier invalide.');
+  const from = resolveInside(viewCwd(), rel, viewScratch());
+  const to = resolveInside(viewCwd(), path.join(path.dirname(from.rel), clean), viewScratch());
+  if (to.abs === from.abs) return from.rel;
+  if (fs.existsSync(to.abs) && to.abs.toLowerCase() !== from.abs.toLowerCase()) throw new Error(`« ${clean} » existe déjà dans ce dossier.`);
+  await fs.promises.rename(from.abs, to.abs);
+  return to.rel;
+});
+handle('files:trash', [isString], (rel) => shell.trashItem(resolveInside(viewCwd(), rel, viewScratch()).abs));
+handle('app:desktop', [], () => app.getPath('desktop'));
 const openerIcons = new Map<string, Promise<string>>();
 const withIcon = async (a: OpeningApp) => {
   let icon = openerIcons.get(a.path);

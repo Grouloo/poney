@@ -3695,6 +3695,20 @@ async function renderDir(rel: string, ul: HTMLElement) {
     } else {
       node.onclick = () => openFile(e.path);
       node.addEventListener('auxclick', (ev) => { if (ev.button === 1) openFile(e.path, { tab: true }); });
+      node.ondblclick = () => startFileRename(node.querySelector<HTMLElement>('.name')!, e.path, null);
+      node.addEventListener('contextmenu', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation(); // (not the sidebar's menu)
+        showContextMenu(ev.clientX, ev.clientY, esc(e.name), [
+          { label: 'Ouvrir', run: () => openFile(e.path) },
+          { label: 'Ouvrir avec…', run: () => openWithMenu(e.path, null, ev.clientX, ev.clientY) },
+          '-',
+          { label: 'Renommer…', run: () => startFileRename(node.querySelector<HTMLElement>('.name')!, e.path, null) },
+          { label: `Afficher dans ${FILE_MANAGER}`, run: () => window.api.revealFile(e.path) },
+          '-',
+          { label: 'Mettre à la corbeille', danger: true, run: () => trashFile(e.path) },
+        ]);
+      });
       // (dropped on a pane of the conversations: the file opens over it)
       node.draggable = true;
       node.addEventListener('dragstart', (ev) => {
@@ -3711,6 +3725,7 @@ async function renderDir(rel: string, ul: HTMLElement) {
 let treeRefresh: ReturnType<typeof setTimeout> | undefined;
 let treeStates: FileStates = {}; // the git state of each path, for its color
 async function refreshTree() {
+  if (document.querySelector('#fileTree .rename-file')) return; // (a name being typed: drawn again after)
   listedDir = viewDir();
   renderFilesHead();
   refreshGit();
@@ -4007,13 +4022,13 @@ const cloneTarget = () => {
 };
 const showCloneTarget = () => {
   const target = cloneTarget();
-  $('cloneTarget').textContent = target || ($<HTMLInputElement>('clonePlace').value.trim() ? 'l’adresse du dépôt manque' : 'l’emplacement manque');
+  $('cloneTargetLine').classList.toggle('hidden', !$<HTMLInputElement>('cloneUrl').value.trim()); // (once there is an address)
+  $('cloneTarget').textContent = target || (repoName($<HTMLInputElement>('cloneUrl').value) ? 'l’emplacement manque' : 'cette adresse ne donne pas de nom de dossier');
   $('cloneTarget').classList.toggle('muted', !target);
 };
-function openCloneDialog() {
-  const here = activeDir();
+async function openCloneDialog() {
   $<HTMLInputElement>('cloneUrl').value = '';
-  if (!$<HTMLInputElement>('clonePlace').value) $<HTMLInputElement>('clonePlace').value = here ? here.replace(/[\\/][^\\/]+[\\/]?$/, '') : '';
+  $<HTMLInputElement>('clonePlace').value = await window.api.desktopPath().catch(() => '');
   $('cloneError').textContent = '';
   $<HTMLButtonElement>('cloneSubmit').disabled = false;
   showCloneTarget();
@@ -4265,6 +4280,7 @@ let viewerTabs: { path: string; pane: Pane | null; scroll: number; dir: string |
 
 function renderTabs() {
   const bar = $('viewerTabs');
+  if (bar.querySelector('.rename-file')) return; // (a name being typed: drawn again after)
   bar.classList.toggle('hidden', viewerTabs.length < 2);
   bar.innerHTML = '';
   for (const t of viewerTabs) {
@@ -4276,6 +4292,18 @@ function renderTabs() {
     tab.onclick = () => { if (t.path !== openPath) openFile(t.path); };
     tab.addEventListener('auxclick', (e) => { if (e.button === 1) closeTab(t.path); });
     tab.querySelector('button')!.onclick = (e) => { e.stopPropagation(); closeTab(t.path); };
+    tab.ondblclick = () => startFileRename(tab.querySelector<HTMLElement>('.name')!, t.path, t.pane);
+    tab.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      showContextMenu(e.clientX, e.clientY, esc(name), [
+        { label: 'Renommer…', run: () => startFileRename(tab.querySelector<HTMLElement>('.name')!, t.path, t.pane) },
+        { label: 'Fermer l’onglet', run: () => closeTab(t.path) },
+        '-',
+        { label: `Afficher dans ${FILE_MANAGER}`, run: () => inFilePane(t.pane, () => window.api.revealFile(t.path)) },
+        { label: 'Ouvrir avec…', run: () => openWithMenu(t.path, t.pane, e.clientX, e.clientY) },
+      ]);
+    });
     bar.appendChild(tab);
   }
   bar.querySelector('.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
@@ -4469,15 +4497,32 @@ $<HTMLButtonElement>('viewerOpen').onclick = () => openPath && inPane(viewerPane
 
 // ---------- the applications that open the file shown: the default one's icon on "Ouvrir", the others in a menu ----------
 const openers = new Map<string, Promise<OpeningApps>>(); // (by extension: they rarely change)
-let openersShown: OpeningApps | null = null;
-async function showOpeners(rel: string) {
+/** The applications that open a file (through the pane its project is read in, or the one worked in). */
+function appsFor(rel: string, p: Pane | null) {
   const name = rel.split('/').pop() ?? rel;
   const key = name.includes('.') ? name.split('.').pop()!.toLowerCase() : rel;
   let apps = openers.get(key);
-  if (!apps) openers.set(key, apps = inPane(viewerPane ?? focused, () => window.api.appsToOpen(rel)).catch(() => ({ default: null, others: [] })));
-  const found = await apps;
+  if (!apps) openers.set(key, apps = inFilePane(p, () => window.api.appsToOpen(rel)).catch(() => ({ default: null, others: [] })));
+  return apps;
+}
+/** A call through a pane, or through the one worked in. */
+function inFilePane<T>(p: Pane | null, fn: () => T): T {
+  return p ? inPane(p, fn) : fn();
+}
+/** The menu of the applications that open a file, at (x, y). */
+async function openWithMenu(rel: string, p: Pane | null, x: number, y: number) {
+  const apps = await appsFor(rel, p);
+  const open = (app: string | null) => inFilePane(p, () => window.api.openFileWith(rel, app)).catch((err: unknown) => { $('status').textContent = errorText(err); });
+  const items: (MenuItem | '-')[] = [];
+  if (apps.default) items.push({ label: `${apps.default.name} (par défaut)`, icon: apps.default.icon, strong: true, run: () => open(apps.default!.path) });
+  if (apps.others.length) items.push('-', ...apps.others.map((a) => ({ label: a.name, icon: a.icon, run: () => open(a.path) })));
+  if (items.length) items.push('-');
+  items.push({ label: 'Autre application…', run: () => open(null) });
+  showContextMenu(x, y, 'Ouvrir avec', items);
+}
+async function showOpeners(rel: string) {
+  const found = await appsFor(rel, viewerPane ?? focused);
   if (rel !== openPath) return; // (another file since)
-  openersShown = found;
   const btn = $<HTMLButtonElement>('viewerOpen');
   btn.innerHTML = found.default?.icon ? `<img class="app-icon" src="${esc(found.default.icon)}" alt="">Ouvrir` : 'Ouvrir';
   btn.title = found.default ? `Ouvrir avec ${found.default.name}` : 'Ouvrir avec l’application par défaut';
@@ -4486,18 +4531,72 @@ async function showOpeners(rel: string) {
 $<HTMLButtonElement>('viewerOpenWith').innerHTML = CHEVRON;
 $<HTMLButtonElement>('viewerOpenWith').onclick = (e) => {
   e.stopPropagation();
-  const rel = openPath;
-  if (!rel) return;
-  const open = (app: string | null) => inPane(viewerPane ?? focused, () => window.api.openFileWith(rel, app)).catch((err: unknown) => { $('status').textContent = errorText(err); });
-  const apps = openersShown;
-  const items: (MenuItem | '-')[] = [];
-  if (apps?.default) items.push({ label: `${apps.default.name} (par défaut)`, icon: apps.default.icon, strong: true, run: () => open(apps.default!.path) });
-  if (apps?.others.length) items.push('-', ...apps.others.map((a) => ({ label: a.name, icon: a.icon, run: () => open(a.path) })));
-  if (items.length) items.push('-');
-  items.push({ label: 'Autre application…', run: () => open(null) });
+  if (!openPath) return;
   const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-  showContextMenu(r.right - 220, r.bottom + 4, 'Ouvrir avec', items);
+  openWithMenu(openPath, viewerPane ?? focused, r.right - 220, r.bottom + 4);
 };
+
+// ---------- renaming and deleting a file (the tree, the tabs) ----------
+const BUSY = 'Un agent travaille dans ce projet en ce moment';
+/** Its name becomes a field: Enter or leaving it renames, Escape gives up. */
+function startFileRename(nameEl: HTMLElement, rel: string, p: Pane | null) {
+  const old = rel.split('/').pop() ?? rel;
+  const field = document.createElement('input');
+  field.className = 'rename-file';
+  field.value = old;
+  field.spellcheck = false;
+  nameEl.replaceWith(field);
+  field.focus();
+  const dot = old.lastIndexOf('.');
+  field.setSelectionRange(0, dot > 0 ? dot : old.length); // (the name, not its extension)
+  let done = false;
+  const finish = (keep: boolean) => {
+    if (done) return;
+    done = true;
+    field.replaceWith(nameEl);
+    const name = field.value.trim();
+    if (keep && name && name !== old) renameFile(rel, name, p);
+    else { renderTabs(); refreshTree(); } // (what was not drawn meanwhile)
+  };
+  field.onkeydown = (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); finish(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+  };
+  field.onblur = () => finish(true);
+  for (const type of ['click', 'dblclick', 'mousedown', 'auxclick'] as const) field.addEventListener(type, (e) => e.stopPropagation());
+  field.draggable = false;
+}
+async function renameFile(rel: string, name: string, p: Pane | null) {
+  if (await inFilePane(p, () => window.api.projectBusy()).catch(() => false)
+    && !confirm(`${BUSY} : renommer « ${rel.split('/').pop()} » peut gêner son travail. Renommer quand même ?`)) return renderTabs();
+  let to: string;
+  try {
+    to = await inFilePane(p, () => window.api.renameFile(rel, name));
+  } catch (e) {
+    alert(errorText(e));
+    return renderTabs();
+  }
+  for (const t of viewerTabs) if (t.path === rel) t.path = to;
+  if (openPath === rel) {
+    openPath = to;
+    openFile(to, { keepScroll: true });
+  }
+  renderTabs();
+  refreshTree();
+}
+async function trashFile(rel: string) {
+  const busy = await window.api.projectBusy().catch(() => false);
+  if (!confirm(`Mettre « ${rel.split('/').pop()} » à la corbeille ?${busy ? `\n\n${BUSY} : il pourrait en avoir besoin.` : ''}`)) return;
+  try {
+    await window.api.trashFile(rel);
+  } catch (e) {
+    alert(errorText(e));
+    return;
+  }
+  closeTab(rel);
+  refreshTree();
+}
 $('viewerReveal').innerHTML = `${FILE_MANAGER_ICON}${FILE_MANAGER_NAME}`;
 $('viewerReveal').title = `Afficher dans ${FILE_MANAGER}`;
 $<HTMLButtonElement>('viewerReveal').onclick = () => openPath && window.api.revealFile(openPath);

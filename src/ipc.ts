@@ -187,6 +187,10 @@ export interface Channels {
   'files:openExternal': [[rel: string], string];
   'files:reveal': [[rel: string], void];
   'files:apps': [[rel: string], OpeningApps];
+  'files:busy': [[], boolean];
+  'files:rename': [[rel: string, name: string], string];
+  'files:trash': [[rel: string], void];
+  'app:desktop': [[], string];
   'files:openWith': [[rel: string, app: string | null], void];
   'git:status': [[], GitRepoStatus];
   'git:fileStates': [[], FileStates];

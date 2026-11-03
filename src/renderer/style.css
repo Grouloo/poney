@@ -379,7 +379,8 @@ details.thinking div { white-space: pre-wrap; border-left: 2px solid var(--borde
 /* context menu (right click): actions and their shortcuts */
 .ctx-menu {
   position: fixed; inset: auto; margin: 0; z-index: 90; min-width: 240px; padding: 4px; border-radius: 10px; color: var(--text);
-  background: var(--sheet-solid); border: 1px solid var(--glass-edge); box-shadow: var(--float); font: 14px var(--ui);
+  background: color-mix(in srgb, var(--sheet-solid) 52%, transparent); border: 1px solid var(--glass-edge); box-shadow: var(--float); font: 14px var(--ui);
+  backdrop-filter: blur(14px) saturate(170%); /* (translucent: what is under it shows, blurred) */
 }
 .ctx-title { padding: 5px 9px 6px; color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 280px; }
 .ctx-item {
@@ -736,6 +737,10 @@ img.proj-icon { width: 1.15em; height: 1.15em; object-fit: contain; vertical-ali
 .clone-place input { flex: 1; min-width: 0; }
 .clone-target { font: 12.5px var(--mono); overflow-wrap: anywhere; color: var(--text); }
 .clone-target.muted { color: var(--muted); }
+.rename-file {
+  flex: 1; min-width: 60px; font: inherit; color: var(--text); padding: 0 4px; margin: -2px 0;
+  border: 1px solid var(--accent); border-radius: 4px; background: var(--sheet-solid); outline: none;
+}
 .pm-sep { height: 1px; margin: 4px 6px; background: var(--border); }
 .remote-body .git-error, #remotesError, #projectRemoteError { margin: 0; }
 .github-line { margin: 0; font-size: 14px; }
