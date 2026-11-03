@@ -9,5 +9,6 @@ const dist = path.join(root, 'dist');
 const COPIED = ['renderer/index.html', 'renderer/style.css', 'skills'];
 
 fs.rmSync(dist, { recursive: true, force: true });
-execFileSync(path.join(root, 'node_modules', '.bin', 'tsc'), ['-p', 'tsconfig.build.json'], { cwd: root, stdio: 'inherit' });
+// tsc's own script, run by this Node: node_modules/.bin/tsc is a shell script, which Windows cannot start.
+execFileSync(process.execPath, [path.join(root, 'node_modules', 'typescript', 'bin', 'tsc'), '-p', 'tsconfig.build.json'], { cwd: root, stdio: 'inherit' });
 for (const file of COPIED) fs.cpSync(path.join(root, 'src', file), path.join(dist, file), { recursive: true });
