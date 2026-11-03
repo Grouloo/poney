@@ -274,29 +274,32 @@ export function conversationDigest(messages: Message[], { maxChars = 6000, outpu
   const partial = left || archived.length || said.some((t) => t.length > 3000);
   if (outputs && partial) {
     const range = parts.length > 1 ? `<read path="${conversationPath(1)}" /> to <read path="${conversationPath(parts.length)}" />` : `<read path="${conversationPath(1)}" />`;
-    out.push(`[This is only part of the conversation. All of it, in ${parts.length} part(s): ${range}. If your task is about the conversation, read every part, one <read> per message, and write down what you need from each part before reading the next (in the file of your task if it has one): only the last part read stays in your context.]`);
+    out.push(`[This is only part of the conversation. All of it, in ${parts.length} part(s): ${range}. If your task is about the conversation, read every part, one <read> per message, and write down what you need from each part as you go (in the file of your task if it has one): when your context is full, the parts read leave it.]`);
   }
   return out.join('\n\n');
 }
 
-// A sub-agent reads the parts of the conversation one at a time: each is a fifth
-// of its window, and kept in view they filled it after three or four (then a
-// slow compaction, with little left of what was read). So only the last part
-// read stays in view, and the next one waits for notes on it (see agent.ts).
+// A sub-agent reads the parts of the conversation one after the other: each is a
+// fifth of its window, and kept in view they filled it after three or four (then
+// a slow compaction, with little left of what was read). So when the next part
+// would not fit, it replaces those in view, and waits for notes on the last one
+// (see agent.ts). While they fit, they all stay: to search or compare them.
 const PART_RESULT_RE = /(<result tool="read" path="(@conversation\/\d+)"[^>]*>\n)([\s\S]*?)(\n<\/result>)/g;
 const PART_REMOVED = '[This part was read earlier, and removed from your context to make room for the next one: what you wrote down about it is what is left.]';
 const PART_WAITS = 'Not read yet: ';
 const NOTE_CHARS = 300; // (less is a sentence, not notes)
 export const isConversationPart = (p: string) => /^@conversation\/\d+$/.test(p);
 
-/** The part of the conversation whose content is in view last, and the index of its message. */
-export function partInView(messages: Message[]): { path: string; at: number } | null {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role !== 'user') continue;
-    const found = [...messages[i].content.matchAll(PART_RESULT_RE)].filter((m) => !m[3].startsWith(PART_REMOVED) && !m[3].startsWith(PART_WAITS));
-    if (found.length) return { path: found[found.length - 1][2], at: i };
-  }
-  return null;
+/** The parts of the conversation whose content is in view, in the order read, and the index of their message. */
+export function partsInView(messages: Message[]): { path: string; at: number }[] {
+  const seen: { path: string; at: number }[] = [];
+  messages.forEach((m, i) => {
+    if (m.role !== 'user') return;
+    for (const r of m.content.matchAll(PART_RESULT_RE)) {
+      if (!r[3].startsWith(PART_REMOVED) && !r[3].startsWith(PART_WAITS)) seen.push({ path: r[2], at: i });
+    }
+  });
+  return seen;
 }
 
 /** Whether the agent wrote down something after message `at`: prose of its own, or a file. */
@@ -312,7 +315,10 @@ export function notedSince(messages: Message[], at: number): boolean {
 }
 
 /** The result of a read of the next part before notes on the last one. */
-export const partWaits = (seen: string, part: string) => `${PART_WAITS}${seen} leaves your context when you read ${part}. First write down what your task needs from ${seen} (facts, names, dates, decisions, in order), in your message or in your file, then read ${part} again.`;
+export function partWaits(seen: string[], part: string): string {
+  const these = seen.length > 1 ? `${seen.slice(0, -1).join(', ')} and ${seen[seen.length - 1]}` : seen[0];
+  return `${PART_WAITS}your context is full: ${these} ${seen.length > 1 ? 'leave' : 'leaves'} it when you read ${part}. First write down what your task needs from ${seen.length > 1 ? 'them' : 'it'} (facts, names, dates, decisions, in order), in your message or in your file, then read ${part} again.`;
+}
 
 /** Takes the content of the parts read out of the history, except `keep`'s. Returns how many. */
 export function dropParts(messages: Message[], keep: string): number {

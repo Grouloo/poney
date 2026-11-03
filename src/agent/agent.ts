@@ -14,7 +14,7 @@ import { recall, autoRecall, recalledBlock, keywordsOf, outOfContext } from './h
 import { linksToRead, readLinks } from './autofetch.ts';
 import { TRIAGE_SCHEMA, TRIAGE_ATTEMPTS, TRIAGE_RETRY, TRIAGE_RETRY_CUT, fallbackTriage, ROUTE_SOURCES, SOURCE_TOOLS, MAX_REFUSALS, triageRequest, triageInstruction, triageUpdateInstruction, needsUpdate, parseTriage, triageBlock, triageReminder, triageRefusal, askNudge, asksInProse } from './triage.ts';
 import { parseQuestions, askResult, answersText, cleanAnswers, ASK_FORMAT } from './ask.ts';
-import { parsePlan, taskParts, mergePlan, carryPlan, nextGroup, setStatus, formatPlan, subAgentTask, turnDigest, conversationDigest, stoppedPlanText, isConversationPart, partInView, notedSince, dropParts, partWaits } from './plan.ts';
+import { parsePlan, taskParts, mergePlan, carryPlan, nextGroup, setStatus, formatPlan, subAgentTask, turnDigest, conversationDigest, stoppedPlanText, isConversationPart, partsInView, notedSince, dropParts, partWaits } from './plan.ts';
 import {
   summaryTokens, summaryWords, mechanicalSummary, DEFAULT_CHARS_PER_TOKEN,
   makeEstimator, contextPlan, answerTokens, isValidSample, historyTokens, splitForCompaction, extractFacts, buildSummaryRequest, cleanSummary,
@@ -1722,15 +1722,18 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
             results.push(out.result);
             continue;
           }
-          // A part of the conversation (a sub-agent's): one in view at a time, the next
-          // one after notes on the last (asked once per part, then read all the same).
+          // A part of the conversation (a sub-agent's) that would not fit with those in view:
+          // it replaces them, after notes on the last (asked once per part, then read all the same).
           const part = action.tool === 'read' ? String(action.args.path ?? '').trim() : '';
-          if (isConversationPart(part) && this.virtualFiles?.has(part)) {
-            const seen = partInView(this.messages);
-            if (seen && seen.path !== part && !notedSince(this.messages, seen.at) && !partsRefused.has(part)) {
+          const partText = isConversationPart(part) ? this.virtualFiles?.get(part) : undefined;
+          // (its numbered lines: a tenth more)
+          const fits = partText !== undefined && historyTokens(this.messages, this.est) + this.est(results.join('\n')) + Math.ceil(this.est(partText) * 1.1) <= this.plan(system).budget;
+          if (partText !== undefined && !fits) {
+            const seen = partsInView(this.messages).filter((p) => p.path !== part);
+            if (seen.length && !notedSince(this.messages, seen[seen.length - 1].at) && !partsRefused.has(part)) {
               partsRefused.add(part);
               this.emit('event', { type: 'action_end', id: actId, ok: false, output: `Lecture de ${part} différée : le sous-agent note d’abord ce qu’il a lu.`, meta: { path: part } });
-              results.push(formatResult('read', { path: part }, partWaits(seen.path, part)));
+              results.push(formatResult('read', { path: part }, partWaits([...new Set(seen.map((p) => p.path))], part)));
               continue;
             }
             dropParts(this.messages, part);

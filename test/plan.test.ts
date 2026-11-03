@@ -442,10 +442,9 @@ test('taskParts gives back a step and its commands, for display', async () => {
   assert.deepEqual(taskParts('Read the code'), { head: 'Read the code', parts: [] });
 });
 
-test('a sub-agent reading the whole conversation keeps one part in view at a time, and notes each before the next', async () => {
+async function readAllParts(exchanges: number) {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'lcx-plan-'));
-  // A conversation several times the window, compacted: a synthesis has to read it all.
-  const archived: Message[] = Array.from({ length: 40 }, (_, i): Message[] => [
+  const archived: Message[] = Array.from({ length: exchanges }, (_, i): Message[] => [
     { role: 'user', content: `[Fri 2026-10-30 09:${String(i).padStart(2, '0')}] question ${i} ${'q '.repeat(400)}` },
     { role: 'assistant', content: `answer ${i} ${'a '.repeat(800)}` },
   ]).flat();
@@ -457,9 +456,10 @@ test('a sub-agent reading the whole conversation keeps one part in view at a tim
     if (isSub(r)) {
       const parts = Number(r.messages.map((m) => m.content).join('\n').match(/in (\d+) part\(s\)/)![1]);
       // Like the small models of the report: one part after the other, without a word.
-      if (next === 1) return `<read path="@conversation/${next++}" />`;
-      if (r.messages.at(-1)!.content.includes('Not read yet')) return `Notes on part ${next - 1}: ${'detail '.repeat(60)}\n<read path="@conversation/${next++}" />`;
-      return next <= parts ? `<read path="@conversation/${next}" />` : 'The synthesis.';
+      const last = r.messages.at(-1)!.content;
+      if (new RegExp(`<result tool="read" path="@conversation/${next}"[^>]*>\\n(?!Not read yet)`).test(last)) next++;
+      if (next > parts) return 'The synthesis.';
+      return last.includes('Not read yet') ? `Notes on part ${next - 1}: ${'detail '.repeat(60)}\n<read path="@conversation/${next}" />` : `<read path="@conversation/${next}" />`;
     }
     main++;
     return main === 1 ? '<plan>\n- Write a synthesis of the conversation\n</plan>' : 'Done.';
@@ -475,31 +475,46 @@ test('a sub-agent reading the whole conversation keeps one part in view at a tim
   }
   const subs = f.requests.filter(isSub);
   const parts = Number(subs[0].messages.at(-1)!.content.match(/in (\d+) part\(s\)/)![1]);
-  assert.ok(parts >= 5, `${parts} parts`);
+  return { f, subs, parts, next, numCtx };
+}
+const partsInView = (r: ModelRequest) => r.messages.map((m) => m.content).join('\n').match(/<result tool="read" path="@conversation\/\d+"[^>]*>\n(?!\[This part was read earlier|Not read yet)/g) ?? [];
+
+test('a sub-agent reading a conversation larger than its window: when the next part does not fit, it replaces those in view, after notes on them', async () => {
+  // A conversation several times the window, compacted: a synthesis has to read it all.
+  const { f, subs, parts, next, numCtx } = await readAllParts(40);
+  assert.ok(parts >= 8, `${parts} parts`);
   assert.equal(next, parts + 1); // all of them read
+  // Kept in view, the parts filled the window (then slow compactions that kept little): no more.
   const chars = (r: ModelRequest) => r.messages.reduce((n, m) => n + m.content.length, 0);
-  // Kept in view, the parts filled the window (then compactions): now well within it.
-  assert.ok(Math.max(...subs.map(chars)) < numCtx * 3.2 * 0.5, `${Math.max(...subs.map(chars))} characters`);
+  assert.ok(Math.max(...subs.map(chars)) < numCtx * 3.2, `${Math.max(...subs.map(chars))} characters`);
   assert.ok(!f.requests.some((r) => r.messages[0].content.startsWith('You summarize') || r.messages.at(-1)!.content.includes('PAUSE THE TASK')));
-  for (const r of subs) {
-    const inView = r.messages.map((m) => m.content).join('\n').match(/<result tool="read" path="@conversation\/\d+"[^>]*>\n(?!\[This part was read earlier|Not read yet)/g) ?? [];
-    assert.ok(inView.length <= 1);
-  }
-  // Each next part waited for notes on the last, and the notes stay.
-  const last = subs.at(-1)!.messages.map((m) => m.content).join('\n');
-  for (let k = 1; k < parts; k++) assert.match(last, new RegExp(`Notes on part ${k}: `));
-  assert.equal(subs.filter((r) => r.messages.at(-1)!.content.includes('Not read yet')).length, parts - 1);
+  // Several in view while they fit; the next one waited for notes, then replaced them.
+  const waits = subs.filter((r) => r.messages.at(-1)!.content.includes('Not read yet'));
+  assert.ok(waits.length >= 2 && waits.length < parts - 1, `${waits.length} waits`);
+  assert.match(waits[0].messages.at(-1)!.content, /your context is full: @conversation\/1, @conversation\/2, [^.]* and @conversation\/\d+ leave it when you read/);
+  for (const r of waits) assert.ok(partsInView(r).length >= 2);
+  const after = subs[subs.indexOf(waits[0]) + 1];
+  assert.equal(partsInView(after).length, 1);
+  assert.match(subs.at(-1)!.messages.map((m) => m.content).join('\n'), /Notes on part \d+: [\s\S]*Notes on part \d+: /); // (the notes stay)
+});
+
+test('parts of the conversation that fit together all stay in view, without notes asked', async () => {
+  const { subs, parts, next } = await readAllParts(6);
+  assert.equal(parts, 2);
+  assert.equal(next, parts + 1);
+  assert.equal(partsInView(subs.at(-1)!).length, 2); // (to search or compare them)
+  assert.ok(!subs.some((r) => r.messages.at(-1)!.content.includes('Not read yet')));
 });
 
 test('the parts of the conversation: the one in view, notes since, the others taken out', async () => {
-  const { partInView, notedSince, dropParts } = await import('../src/agent/plan.ts');
+  const { partsInView, notedSince, dropParts } = await import('../src/agent/plan.ts');
   const messages: Message[] = [
     { role: 'user', content: 'task' },
     { role: 'assistant', content: '<read path="@conversation/1" />' },
     { role: 'user', content: '<result tool="read" path="@conversation/1" lines="1-3">\npart one\n</result>' },
     { role: 'assistant', content: '<reasoning>long thoughts</reasoning><read path="@conversation/2" />' },
   ];
-  assert.deepEqual(partInView(messages), { path: '@conversation/1', at: 2 });
+  assert.deepEqual(partsInView(messages), [{ path: '@conversation/1', at: 2 }]);
   assert.equal(notedSince(messages, 2), false); // (its reasoning is not notes)
   assert.equal(notedSince([...messages, { role: 'assistant', content: '<write path="n.md">\nx\n</write>' }], 2), true);
   assert.equal(notedSince([...messages, { role: 'assistant', content: `Notes: ${'x'.repeat(300)}` }], 2), true);
@@ -507,5 +522,5 @@ test('the parts of the conversation: the one in view, notes since, the others ta
   assert.equal(dropParts(messages, '@conversation/2'), 1);
   assert.doesNotMatch(messages[2].content, /part one/);
   assert.match(messages[4].content, /part two/);
-  assert.deepEqual(partInView(messages), { path: '@conversation/2', at: 4 });
+  assert.deepEqual(partsInView(messages), [{ path: '@conversation/2', at: 4 }]);
 });
