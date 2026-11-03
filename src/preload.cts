@@ -98,6 +98,8 @@ const api = {
   readFile: call('files:read'),
   openFileExternal: call('files:openExternal'),
   revealFile: call('files:reveal'),
+  appsToOpen: call('files:apps'),
+  openFileWith: call('files:openWith'),
 
   gitStatus: call('git:status'),
   gitFileStates: call('git:fileStates'),

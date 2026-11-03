@@ -10,7 +10,7 @@ import { EMOJIS, ICONS, ICON_COLORS, iconSvg } from './project-icons.ts';
 import { fileIconSvg, folderIconSvg, privateFolderIconSvg } from './file-icons.ts';
 import DOMPurify from '../../node_modules/dompurify/dist/purify.es.mjs';
 import type { Api } from '../preload.cts';
-import type { AppAlert, ClaudeAccount, ClaudeStatus, FileStates, GithubStatus, ListedSkill, ModelGroup, SessionApproval, SessionEvent, SessionView, SystemPromptView } from '../ipc.ts';
+import type { AppAlert, ClaudeAccount, ClaudeStatus, FileStates, GithubStatus, ListedSkill, ModelGroup, OpeningApps, SessionApproval, SessionEvent, SessionView, SystemPromptView } from '../ipc.ts';
 import type { TorStatus } from '../agent/tor.ts';
 import type { GitFile, GitRepoStatus } from '../git.ts';
 import type { ViewedFile } from '../files.ts';
@@ -54,6 +54,7 @@ interface MenuItem {
   danger?: boolean;
   strong?: boolean;
   disabled?: boolean;
+  icon?: string; // (an image's URL)
 }
 
 type Viewed = ViewedFile | { path: string; kind: 'error'; message: string; size?: undefined };
@@ -2234,7 +2235,7 @@ function showContextMenu(x: number, y: number, title: string | null, items: (Men
     row.type = 'button';
     row.className = `ctx-item${it.danger ? ' danger' : ''}${it.strong ? ' strong' : ''}`;
     row.disabled = Boolean(it.disabled);
-    row.innerHTML = `<span class="ctx-label"></span><span class="ctx-kbd">${it.kbd ?? (it.action && SHORTCUTS[it.action] ? shortcutText(SHORTCUTS[it.action]) : '')}</span>`;
+    row.innerHTML = `${it.icon !== undefined ? `<img class="ctx-icon" src="${esc(it.icon)}" alt="">` : ''}<span class="ctx-label"></span><span class="ctx-kbd">${it.kbd ?? (it.action && SHORTCUTS[it.action] ? shortcutText(SHORTCUTS[it.action]) : '')}</span>`;
     row.querySelector<HTMLElement>('.ctx-label')!.textContent = it.label;
     row.onclick = () => { hideContextMenu(); it.run(); };
   }
@@ -4187,7 +4188,8 @@ function renderTabs() {
     const tab = document.createElement('div');
     tab.className = 'viewer-tab' + (t.path === openPath ? ' active' : '');
     tab.title = t.path;
-    tab.innerHTML = `<span class="name">${esc(t.path.split('/').pop() ?? t.path)}</span><button class="ghost icon" title="Fermer">✕</button>`;
+    const name = t.path.split('/').pop() ?? t.path;
+    tab.innerHTML = `${fileIconSvg(name)}<span class="name">${esc(name)}</span><button class="ghost icon" title="Fermer">✕</button>`;
     tab.onclick = () => { if (t.path !== openPath) openFile(t.path); };
     tab.addEventListener('auxclick', (e) => { if (e.button === 1) closeTab(t.path); });
     tab.querySelector('button')!.onclick = (e) => { e.stopPropagation(); closeTab(t.path); };
@@ -4263,6 +4265,7 @@ async function openFile(rel: string, { keepScroll = false, over, tab = false }: 
   $('viewer').classList.remove('hidden');
   $('viewerPath').textContent = `\u200e${f.path}`; // (the mark keeps a leading dot first in the right-to-left line)
   $('viewerPath').title = f.path;
+  if (f.path !== shown) showOpeners(f.path);
   document.querySelectorAll<HTMLElement>('.tree .node').forEach((n) => n.classList.toggle('active', n.dataset.path === f.path));
 
   const markdownFile = f.kind === 'text' && /\.(md|markdown|mdx)$/i.test(f.path);
@@ -4360,7 +4363,39 @@ function showDocument(body: HTMLElement, f: ViewedFile & { kind: 'text' }) {
 
 $<HTMLButtonElement>('viewerClose').onclick = closeViewer;
 $<HTMLButtonElement>('viewerReload').onclick = () => openPath && openFile(openPath, { keepScroll: true });
-$<HTMLButtonElement>('viewerOpen').onclick = () => openPath && window.api.openFileExternal(openPath);
+$<HTMLButtonElement>('viewerOpen').onclick = () => openPath && inPane(viewerPane ?? focused, () => window.api.openFileExternal(openPath!));
+
+// ---------- the applications that open the file shown: the default one's icon on "Ouvrir", the others in a menu ----------
+const openers = new Map<string, Promise<OpeningApps>>(); // (by extension: they rarely change)
+let openersShown: OpeningApps | null = null;
+async function showOpeners(rel: string) {
+  const name = rel.split('/').pop() ?? rel;
+  const key = name.includes('.') ? name.split('.').pop()!.toLowerCase() : rel;
+  let apps = openers.get(key);
+  if (!apps) openers.set(key, apps = inPane(viewerPane ?? focused, () => window.api.appsToOpen(rel)).catch(() => ({ default: null, others: [] })));
+  const found = await apps;
+  if (rel !== openPath) return; // (another file since)
+  openersShown = found;
+  const btn = $<HTMLButtonElement>('viewerOpen');
+  btn.innerHTML = found.default?.icon ? `<img class="app-icon" src="${esc(found.default.icon)}" alt="">Ouvrir` : 'Ouvrir';
+  btn.title = found.default ? `Ouvrir avec ${found.default.name}` : 'Ouvrir avec l’application par défaut';
+  $('viewerOpenWith').classList.toggle('hidden', window.api.platform !== 'darwin');
+}
+$<HTMLButtonElement>('viewerOpenWith').innerHTML = CHEVRON;
+$<HTMLButtonElement>('viewerOpenWith').onclick = (e) => {
+  e.stopPropagation();
+  const rel = openPath;
+  if (!rel) return;
+  const open = (app: string | null) => inPane(viewerPane ?? focused, () => window.api.openFileWith(rel, app)).catch((err: unknown) => { $('status').textContent = errorText(err); });
+  const apps = openersShown;
+  const items: (MenuItem | '-')[] = [];
+  if (apps?.default) items.push({ label: `${apps.default.name} (par défaut)`, icon: apps.default.icon, strong: true, run: () => open(apps.default!.path) });
+  if (apps?.others.length) items.push('-', ...apps.others.map((a) => ({ label: a.name, icon: a.icon, run: () => open(a.path) })));
+  if (items.length) items.push('-');
+  items.push({ label: 'Autre application…', run: () => open(null) });
+  const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  showContextMenu(r.right - 220, r.bottom + 4, 'Ouvrir avec', items);
+};
 $('viewerReveal').innerHTML = `${FILE_MANAGER_ICON}${FILE_MANAGER_NAME}`;
 $('viewerReveal').title = `Afficher dans ${FILE_MANAGER}`;
 $<HTMLButtonElement>('viewerReveal').onclick = () => openPath && window.api.revealFile(openPath);

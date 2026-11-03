@@ -700,6 +700,10 @@ img.proj-icon { width: 1.15em; height: 1.15em; object-fit: contain; vertical-ali
 .branch-error:hover { background: none; }
 /* the system's file manager: its logo */
 .fm-icon { width: 15px; height: 15px; display: block; flex: none; }
+.app-icon { width: 16px; height: 16px; display: block; flex: none; }
+#viewerOpen:has(.app-icon) { padding-right: 4px; }
+.viewer-head .open-with { width: 18px; margin-left: -4px; padding: 0; color: var(--muted); }
+.ctx-icon { width: 16px; height: 16px; flex: none; margin-right: -10px; }
 .reveal-root { display: inline-flex; align-items: center; justify-content: center; padding: 4px 7px; }
 .tree, .tree ul { list-style: none; margin: 0; padding: 0; }
 .tree ul { padding-left: 12px; }
@@ -716,7 +720,7 @@ img.proj-icon { width: 1.15em; height: 1.15em; object-fit: contain; vertical-ali
 .tree .node.gs-U .name { color: var(--err); }
 .tree .node.flash { animation: flash 1.6s ease-out; }
 @keyframes flash { from { background: color-mix(in srgb, var(--ok) 35%, transparent); } }
-.tree .file-icon { width: 15px; height: 15px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; }
+.tree .file-icon, .viewer-tab .file-icon { width: 15px; height: 15px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; }
 .git-sync { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; padding: 8px 12px; margin-bottom: 12px; border-radius: 10px; color: var(--text); font-weight: 600; }
 .git-sync:disabled, #convSettingsBtn:disabled { opacity: 0.55; cursor: default; }
 .prompt-dialog.remote-dialog { width: min(480px, 92vw); height: fit-content; min-height: 0; }

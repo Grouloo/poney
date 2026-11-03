@@ -5,7 +5,7 @@ import type { claudeModels, claudeUsage } from './agent/claude.ts';
 import type { Skill } from './agent/skills.ts';
 import type { TorStatus } from './agent/tor.ts';
 import type { ModelEngine } from './engine/engine.ts';
-import type { listDir, ViewedFile } from './files.ts';
+import type { listDir, OpeningApp, ViewedFile } from './files.ts';
 import type { GitBranches, GitRepoStatus, gitFileStates } from './git.ts';
 import type { AgentEvent, ApprovalRequest, AskDraft, Choice, Config, ContextStats, ConversationSummary, EngineSettings, ProjectIcon, Provider, ProviderType, PublicSettings, QuestionAnswer, Steps, Viewing } from './types.ts';
 
@@ -115,6 +115,9 @@ export interface ContextMenuParams {
 
 export type ListedSkill = Pick<Skill, 'name' | 'description' | 'author' | 'origin'>;
 export type FileEntries = Awaited<ReturnType<typeof listDir>>;
+/** The applications that can open a file, each with its icon (a data URL). */
+export type OpeningApps = { default: OpeningAppView | null; others: OpeningAppView[] };
+export type OpeningAppView = OpeningApp & { icon: string };
 export type FileStates = Awaited<ReturnType<typeof gitFileStates>>;
 
 /** Each channel: [its arguments, its reply]. */
@@ -183,6 +186,8 @@ export interface Channels {
   'files:read': [[rel: string], ViewedFile];
   'files:openExternal': [[rel: string], string];
   'files:reveal': [[rel: string], void];
+  'files:apps': [[rel: string], OpeningApps];
+  'files:openWith': [[rel: string, app: string | null], void];
   'git:status': [[], GitRepoStatus];
   'git:fileStates': [[], FileStates];
   'git:diff': [[file: string, opts?: { staged?: boolean; oldPath?: string }], { diff: string; truncated: boolean }];

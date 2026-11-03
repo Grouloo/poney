@@ -1,7 +1,10 @@
 // Read-only file access for the file browser and viewer.
+import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { IGNORED_DIRS, SCRATCH, resolveInside } from './agent/tools.ts';
+import { isRecord, isString, list, parseJson } from './unknown.ts';
 
 const IMAGE_TYPES: Record<string, string | undefined> = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
@@ -59,4 +62,35 @@ export async function readFileForViewer(cwd: string, rel: string, scratch: strin
   } finally {
     await handle.close();
   }
+}
+
+// The applications that open a file (macOS asks Launch Services; elsewhere, none is known).
+const APPS_SCRIPT = `function run(argv) {
+  ObjC.import('AppKit');
+  const ws = $.NSWorkspace.sharedWorkspace, fm = $.NSFileManager.defaultManager;
+  const url = $.NSURL.fileURLWithPath(argv[0]);
+  const app = (u) => ({ path: u.path.js, name: fm.displayNameAtPath(u.path).js.replace(/\\.app$/, '') });
+  const first = ws.URLForApplicationToOpenURL(url), all = ws.URLsForApplicationsToOpenURL(url), apps = [];
+  for (let i = 0; i < all.count; i++) apps.push(app(all.objectAtIndex(i)));
+  return JSON.stringify({ default: first.isNil() ? null : app(first), apps });
+}`;
+export type OpeningApp = { path: string; name: string };
+const isApp = (v: unknown): v is OpeningApp => isRecord(v) && isString(v.path) && isString(v.name);
+
+/** The default application of a file, then the others that can open it. */
+export async function appsToOpen(abs: string): Promise<{ default: OpeningApp | null; others: OpeningApp[] }> {
+  if (process.platform !== 'darwin') return { default: null, others: [] };
+  const { stdout } = await promisify(execFile)('osascript', ['-l', 'JavaScript', '-e', APPS_SCRIPT, abs], { timeout: 5000 });
+  const r = parseJson(stdout);
+  const first = isRecord(r) && isApp(r.default) ? r.default : null;
+  const apps = list(isRecord(r) ? r.apps : null).filter(isApp);
+  return { default: first, others: apps.filter((a) => a.path !== first?.path && !a.path.includes('.app/')).sort((a, b) => a.name.localeCompare(b.name)) }; // (not the helpers inside an app)
+}
+
+/** Opens a file with an application (macOS). */
+export async function openWith(abs: string, appPath: string) {
+  if (process.platform !== 'darwin') throw new Error('Indisponible sur ce système.');
+  if (!appPath.endsWith('.app')) throw new Error('Application inconnue.');
+  await fs.stat(appPath);
+  await promisify(execFile)('open', ['-a', appPath, '--', abs]);
 }

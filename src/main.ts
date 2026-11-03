@@ -15,7 +15,7 @@ import { scanModels, sameModelFile } from './engine/models.ts';
 import type { LocalModel } from './types.ts';
 import { addClaudeAccount, addServer, CLAUDE, claudeAccountOf, loadProviders, modelConfig, providerOf, removeProvider, savedConfig, unavailable, updateProvider } from './providers.ts';
 import { ConversationStore, moveAppData } from './conversations.ts';
-import { listDir, readFileForViewer } from './files.ts';
+import { appsToOpen, listDir, openWith, readFileForViewer, type OpeningApp } from './files.ts';
 import { resolveInside } from './agent/tools.ts';
 import { gitFileStates, gitBranches, gitSwitch, gitCreateBranch, createGithubRepo, findGh, GITHUB_TOKEN_PAGE, gitChangeRemote, githubAccount, gitStatus, gitConnect, gitDiff, gitFetch, gitRemote, gitRemoveRemote, gitSync, readyGh } from './git.ts';
 import { migrateLegacy, rebuildHistory, rebuildForAction } from './agent/rebuild.ts';
@@ -1210,6 +1210,26 @@ handle('files:list', [optional(isString)], (rel) => listDir(viewCwd(), rel, view
 handle('files:read', [isString], (rel) => readFileForViewer(viewCwd(), rel, viewScratch()));
 handle('files:openExternal', [isString], (rel) => shell.openPath(resolveInside(viewCwd(), rel, viewScratch()).abs));
 handle('files:reveal', [isString], (rel) => shell.showItemInFolder(resolveInside(viewCwd(), rel, viewScratch()).abs));
+const openerIcons = new Map<string, Promise<string>>();
+const withIcon = async (a: OpeningApp) => {
+  let icon = openerIcons.get(a.path);
+  if (!icon) openerIcons.set(a.path, icon = nativeImage.createThumbnailFromPath(a.path, { width: 32, height: 32 }).then((i) => i.toDataURL(), () => ''));
+  return { ...a, icon: await icon };
+};
+handle('files:apps', [isString], async (rel) => {
+  const apps = await appsToOpen(resolveInside(viewCwd(), rel, viewScratch()).abs).catch(() => ({ default: null, others: [] }));
+  return { default: apps.default && await withIcon(apps.default), others: await Promise.all(apps.others.map(withIcon)) };
+});
+handle('files:openWith', [isString, orNull(isString)], async (rel, chosen) => {
+  const abs = resolveInside(viewCwd(), rel, viewScratch()).abs;
+  let appPath = chosen;
+  if (!appPath) {
+    const r = await pickFrom({ title: 'Ouvrir avec…', defaultPath: '/Applications', properties: ['openFile'], filters: [{ name: 'Applications', extensions: ['app'] }] });
+    if (r.canceled || !r.filePaths[0]) return;
+    appPath = r.filePaths[0];
+  }
+  await openWith(abs, appPath);
+});
 // (git goes through the network like a terminal command: the same Tor setting)
 const gitEnv = async () => settings.config.torEnabled && settings.config.torShell ? proxyEnv(await requireTor(settings.config.torProxy)) : {};
 handle('git:status', [], () => gitStatus(viewCwd()));
