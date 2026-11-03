@@ -23,6 +23,20 @@ export function searchTerms(query: unknown): string[] {
   return [...new Set(terms)].filter(Boolean);
 }
 
+const escape = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * What <recall> looks for: a quoted term as whole words (so "R" is the language,
+ * not every r; its spaces stand for any space), other words by their root, anywhere.
+ */
+function patterns(query: unknown): { term: string; re: RegExp }[] {
+  const quoted = new Set([...String(query ?? '').matchAll(/"([^"]+)"/g)].map((m) => fold(m[1].trim())));
+  return [...new Set(searchTerms(query).map((t) => (quoted.has(t) ? t : stem(t))))].map((term) => ({
+    term,
+    re: new RegExp(quoted.has(term) ? `(?<![\\p{L}\\p{N}_])${escape(term).replace(/\s+/g, '\\s+')}(?![\\p{L}\\p{N}_])` : escape(term), 'gu'),
+  }));
+}
+
 /**
  * Messages of the archives that are no longer in the current history, oldest
  * first, each once: [{ n, role, text }] (n: its position in the conversation).
@@ -43,11 +57,11 @@ export function outOfContext(archives: Archives, current: Message[]) {
 }
 
 /** Excerpts around the first matches of a message (±radius characters, at most two). */
-function excerpts(text: string, terms: string[], radius: number) {
+function excerpts(text: string, terms: { re: RegExp }[], radius: number) {
   const low = fold(text);
   const spots: number[] = [];
-  for (const t of terms) {
-    const i = low.indexOf(t);
+  for (const { re } of terms) {
+    const i = low.search(re);
     if (i >= 0) spots.push(i);
   }
   spots.sort((a, b) => a - b);
@@ -65,21 +79,21 @@ function excerpts(text: string, terms: string[], radius: number) {
 
 /** The result of <recall>: the best matching messages (in conversation order), as excerpts. */
 export function recall(archives: Archives, current: Message[], query: unknown, { maxChars = 3000, maxMessages = 6, assistant = 'you' } = {}) {
-  const terms = [...new Set(searchTerms(query).map(stem))];
-  if (!terms.length) return { ok: false, text: 'Give keywords to search for, like <recall>database migration</recall>.' };
+  const terms = patterns(query);
+  if (!terms.length) return { ok: false, text: 'Give keywords to search for, like <recall>database migration</recall>, or an exact term in quotes, like <recall>"R"</recall>.' };
   const pool = outOfContext(archives, current);
   if (!pool.length) return { ok: true, text: 'Nothing is out of context yet: the whole conversation is still in view.' };
   const scored = pool.map((m) => {
     const low = fold(m.text);
     let hits = 0;
     let count = 0;
-    for (const t of terms) {
-      const k = low.split(t).length - 1;
+    for (const { re } of terms) {
+      const k = low.match(re)?.length ?? 0;
       if (k) { hits++; count += k; }
     }
     return { m, score: hits * 10 + Math.min(count, 10) };
   }).filter((x) => x.score > 0);
-  if (!scored.length) return { ok: true, text: `No earlier message matches: ${terms.join(', ')}. Try other words.` };
+  if (!scored.length) return { ok: true, text: `No earlier message matches: ${terms.map((t) => t.term).join(', ')}. Try other words.` };
   const best = scored.sort((a, b) => b.score - a.score).slice(0, maxMessages).map((x) => x.m).sort((a, b) => a.n - b.n);
   const radius = Math.max(120, Math.floor(maxChars / best.length / 3));
   let out = `${best.length} earlier message(s) out of ${pool.length} match:`;
@@ -146,7 +160,7 @@ export function autoRecall(archives: Archives, current: Message[], userText: unk
   const radius = Math.floor(maxChars / max / 2) - 10;
   const inView = view.join('\n');
   for (const { m, hit } of scored) {
-    const excerpt = excerpts(m.text, hit.map((x) => x.t), radius);
+    const excerpt = excerpts(m.text, hit.map((x) => ({ re: new RegExp(escape(x.t), 'u') })), radius);
     if (!excerpt || inView.includes(fold(excerpt.replace(/^…|…$/g, '').slice(0, 80)))) continue; // already attached
     out.push({ n: m.n, role: m.role, excerpt });
     if (out.length >= max) break;

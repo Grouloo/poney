@@ -24,6 +24,20 @@ test('recall searches only what is out of context, and brings back excerpts in o
   assert.match(recall([], current, 'base').text, /Nothing is out of context yet/);
 });
 
+test('recall: a quoted term matches whole words only, its spaces any space', () => {
+  const said: Message[] = [
+    { role: 'user', content: 'Je travaille sur un script en R, pour les statistiques.' },
+    { role: 'assistant', content: 'Le serveur répond, la correction est faite.' },
+    { role: 'user', content: 'Le langage\nR est lent, le langage Ruby non.' },
+  ];
+  const r = recall([said], [], '" R "');
+  assert.match(r.text, /^2 earlier message\(s\) out of 3 match:/);
+  assert.doesNotMatch(r.text, /serveur/);
+  assert.match(recall([said], [], '"langage R"').text, /^1 earlier message\(s\) out of 3 match:\n\[message 3, user\] Le langage R est lent/);
+  assert.match(recall([said], [], 'R').text, /exact term in quotes/); // (too short without quotes)
+  assert.match(recall([said], [], 'statisti').text, /script en R/); // (unquoted words still match inside words)
+});
+
 test('the summary is sized from the window and suits a conversation', () => {
   assert.equal(summaryWords(16384), 492);
   const req = buildSummaryRequest(old, 5000, { words: 492 });
