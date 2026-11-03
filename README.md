@@ -64,7 +64,9 @@ node src/cli.ts --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   messages are about to leave its view and asks what, in the whole conversation, must not be lost (3 items at
   most, restatements and banal items rejected). The app writes them where the model says: the conversation's
   memory, or, for lasting facts about the project, its notes file (AGENTS.md), at the end of the section the model
-  names among the file's headings (a new one if none fits).
+  names among the file's headings (a new one if none fits). A doc of the project to update is left to a
+  sub-agent, run before the summary: its task is written while the model still sees the details, and it starts
+  with an empty window, with room to read the file and edit it. Its report is noted in the summary.
 - **Reasoning kept as a short note**: the end of the model's reasoning (~600 characters, whole sentences, each
   sentence once) is given back in a `<reasoning>` block before its messages, so it does not start over after each
   tool result. Not the whole reasoning: with Gemma, that made the model produce only invisible tokens. Not a prose

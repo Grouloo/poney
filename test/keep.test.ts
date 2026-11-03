@@ -5,7 +5,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { Agent } from '../src/agent/agent.ts';
-import { addProjectNote, insertNote, noteHeadings, parseKeep } from '../src/agent/keep.ts';
+import { addProjectNote, insertNote, noteHeadings, parseKeep, projectPath } from '../src/agent/keep.ts';
 import { port } from './helpers.ts';
 import type { ModelRequest } from './helpers.ts';
 import type { AgentEvent, EventOf } from '../src/types.ts';
@@ -35,6 +35,15 @@ test('what to keep is cleaned: no restatement, nothing banal, a project fact onl
     .map((fact) => ({ fact, where: 'memory' }));
   assert.equal(parseKeep(json([many[0], many[0], ...many.slice(1)]))!.length, 3);
   assert.equal(parseKeep('no json'), null);
+
+  // Another file: one, inside the project, with a task; only when sub-agents may run.
+  const doc = { fact: 'The export format changed', where: 'file', path: './docs/export.md', task: 'Say that exports are CSV only, since v2 (the user asked).' };
+  assert.deepEqual(parseKeep(json([doc, { ...doc, path: 'docs/other.md' }]), { files: true }), [{ ...doc, path: 'docs/export.md', section: '' }]);
+  assert.deepEqual(parseKeep(json([doc])), []); // (sub-agents off, or outside a project)
+  assert.deepEqual(parseKeep(json([{ ...doc, path: '../elsewhere.md' }, { ...doc, path: '/etc/hosts' }, { ...doc, task: 'short' }]), { files: true }), []);
+  assert.deepEqual(parseKeep(json([{ ...doc, fact: 'Exports are CSV only since v2.', path: 'AGENTS.md' }]), { files: true }), [{ fact: 'Exports are CSV only since v2.', where: 'project', section: '' }]); // (the app's own)
+  assert.equal(projectPath('.poney/notes.md'), null);
+  assert.equal(projectPath('docs\\a.md'), 'docs/a.md');
   assert.deepEqual(parseKeep('{"keep": []}'), []);
 });
 
@@ -58,7 +67,7 @@ test('a project line goes at the end of the section the model names, or under a 
   assert.match(await fs.readFile(path.join(cwd, 'AGENTS.md'), 'utf8'), /- `npm start`: run\.\n- Node 24\n/);
 });
 
-async function compactWith(keepReply: string, config: Record<string, unknown> = {}) {
+async function compactWith(keepReply: string, config: Record<string, unknown> = {}, other = (_: ModelRequest) => 'Goal: g\nNext step: s') {
   const requests: ModelRequest[] = [];
   const server = http.createServer((req, res) => {
     let body = '';
@@ -67,7 +76,7 @@ async function compactWith(keepReply: string, config: Record<string, unknown> = 
       const data = JSON.parse(body) as ModelRequest;
       requests.push(data);
       const keep = data.messages.at(-1)!.content.includes('BEFORE THE SUMMARY.');
-      res.end(`${JSON.stringify({ message: { content: keep ? keepReply : 'Goal: g\nNext step: s' }, done: true, done_reason: 'stop' })}\n`);
+      res.end(`${JSON.stringify({ message: { content: keep ? keepReply : other(data) }, done: true, done_reason: 'stop' })}\n`);
     });
   });
   await new Promise<void>((r) => server.listen(0, r));
@@ -119,4 +128,28 @@ test('no keep step without memory, and an unreadable answer only skips it', asyn
   assert.deepEqual(bad.agent.memory, []);
   const kept = bad.events.find((e): e is EventOf<'kept'> => e.type === 'kept')!;
   assert.deepEqual([kept.memory, kept.project], [[], []]);
+});
+
+test('a doc to update is left to a sub-agent, before the summary, with what it needs', async () => {
+  const task = 'Add that exports are CSV only since v2, at the end of the Export section.';
+  const { events, requests, r, cwd } = await compactWith(json([{ fact: 'Exports are CSV only', where: 'file', path: 'docs/export.md', task }]), {}, (d) => {
+    const last = d.messages.at(-1)!.content;
+    if (/Update the file docs\/export\.md/.test(last)) return '<write path="docs/export.md">\n# Export\n\nCSV only since v2.\n</write>';
+    if (/tool="write"/.test(last)) return 'Added the CSV line to docs/export.md.';
+    return 'Goal: g\nNext step: s';
+  });
+  assert.equal(r.compacted, true);
+  assert.equal(await fs.readFile(path.join(cwd, 'docs/export.md'), 'utf8'), '# Export\n\nCSV only since v2.\n');
+  // Its own window: the task, not the conversation.
+  const sub = requests.find((d) => /Update the file docs\/export\.md/.test(d.messages.at(-1)!.content))!;
+  assert.ok(sub.messages.at(-1)!.content.includes(task));
+  assert.ok(!sub.messages.some((m) => m.content.includes('p11.py')));
+  const kept = events.find((e): e is EventOf<'kept'> => e.type === 'kept')!;
+  assert.equal(kept.update, 'docs/export.md');
+  const start = events.find((e): e is EventOf<'action_start'> => e.type === 'action_start' && e.tool === 'agent' && !e.agentId)!;
+  assert.equal(start.auto, true); // (the app's, not a tag of the model: no "resume from here")
+  // Before the summary, which says it is done.
+  assert.ok(events.indexOf(start) < events.findIndex((e) => e.type === 'compaction_start'));
+  const c = events.find((e): e is EventOf<'compaction'> => e.type === 'compaction')!;
+  assert.match(c.summary, /FILE UPDATED: docs\/export\.md \(updated before this summary by a helper\): Added the CSV line/);
 });

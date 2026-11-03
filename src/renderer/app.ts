@@ -1288,12 +1288,13 @@ function promptProgressText() {
 function keptCard(ev: EventOf<'kept'>): HTMLElement {
   const d = div('kept');
   d.appendChild(div('kept-title', '🧠 Retenu avant le compactage'));
-  const row = (text: string, where: string, title: string) => {
+  const row = (text: string, where: string, title: string, quoted = true) => {
     const r = d.appendChild(div('kept-row'));
     r.title = title;
-    r.append(div('kept-text', `« ${esc(text)} »`), div('kept-where', esc(where)));
+    r.append(div('kept-text', quoted ? `« ${esc(text)} »` : `<code>${esc(text)}</code>`), div('kept-where', esc(where)));
   };
   for (const note of ev.memory) row(note, 'dans la mémoire', 'Gardé pour toute la conversation. Retirable via 🧠 sous la zone de saisie.');
+  if (ev.update) row(ev.update, 'confié à un sous-agent', 'Mis à jour par un sous-agent avant le résumé : il reçoit tout ce qu’il faut savoir, et a la place de lire le fichier.', false);
   for (const { fact, section } of ev.project) row(fact, `ajouté à ${ev.file} › ${section}`, `Ajouté à ${ev.file}, section « ${section} » : lu au début de chaque conversation de ce projet.`);
   return d;
 }
@@ -1838,7 +1839,7 @@ function onEvent(ev: SessionEvent) {
       break;
     case 'kept':
       document.querySelector<HTMLElement>('.compaction.pending')?.remove();
-      if (ev.memory.length || ev.project.length) add(keptCard(ev));
+      if (ev.memory.length || ev.project.length || ev.update) add(keptCard(ev));
       break;
     case 'compaction_start':
       document.querySelector<HTMLElement>('.compaction.pending')?.remove();

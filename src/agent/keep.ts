@@ -2,7 +2,10 @@
 // and leave the model's view, so it is asked once (a dedicated call on the cached
 // conversation, like the assessment) what in the whole conversation must not be
 // lost. The app writes each item where the model says: the conversation's memory,
-// or, for a lasting fact about the project, its notes file (AGENTS.md).
+// or, for a lasting fact about the project, its notes file (AGENTS.md). Another
+// file of the project (a doc to update) is left to a sub-agent, run before the
+// summary: its task is written now, while the model still sees the details, and
+// it starts with an empty window, with room to read the file and edit it.
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -11,13 +14,17 @@ import { list, rec } from '../unknown.ts';
 export const MAX_KEPT = 3;
 const MIN_CHARS = 15;
 
-export type KeepWhere = 'memory' | 'project';
+export type KeepWhere = 'memory' | 'project' | 'file';
 export interface KeepItem {
   fact: string;
   where: KeepWhere;
   /** For the project: the heading of the notes file to put it under (empty: the model gave none). */
   section: string;
+  /** For a file: its path in the project, and the sub-agent's task. */
+  path?: string;
+  task?: string;
 }
+const MAX_TASK_CHARS = 2000;
 
 export const KEEP_SCHEMA = {
   type: 'object',
@@ -29,8 +36,10 @@ export const KEEP_SCHEMA = {
         type: 'object',
         properties: {
           fact: { type: 'string', maxLength: 200 },
-          where: { type: 'string', enum: ['memory', 'project', 'none'] },
+          where: { type: 'string', enum: ['memory', 'project', 'file', 'none'] },
           section: { type: 'string', maxLength: 60 },
+          path: { type: 'string', maxLength: 200 },
+          task: { type: 'string', maxLength: MAX_TASK_CHARS },
         },
         required: ['fact', 'where'],
       },
@@ -40,7 +49,7 @@ export const KEEP_SCHEMA = {
 };
 
 /** The instruction: which messages leave the view, and what may be kept where. */
-export function keepInstruction({ until, project, file, headings = [] }: { until: string; project: boolean; file: string; headings?: string[] }): string {
+export function keepInstruction({ until, project, file, headings = [], files = false }: { until: string; project: boolean; file: string; headings?: string[]; files?: boolean }): string {
   const part = until
     ? `Everything above the message that starts with « ${until} » is about to be summarized: its details will leave your view.`
     : 'The conversation above is about to be summarized: its details will leave your view.';
@@ -49,6 +58,7 @@ export function keepInstruction({ until, project, file, headings = [] }: { until
     `Before that: what in the WHOLE conversation must not be lost? At most ${MAX_KEPT} items, one short sentence each, that are NOT already in your MEMORY${project ? ` or in ${file}` : ''}: a decision, a preference or constraint of the user, a result found, a name or value needed later.`,
     `"where": "memory" to keep it for this conversation${project ? `; "project" for a lasting fact about working on this project, needed in the next conversations too (how to run or test it, a convention, a pitfall): it will be added to ${file}` : ''}; "none" if it is not worth it.`,
     ...(project ? [`"section", for "project": ${headings.length ? `the heading of ${file} it belongs under (${headings.map((h) => `"${h}"`).join(', ')}), or a new short heading if none fits` : `a short heading for it in ${file}`}.`] : []),
+    ...(files ? ['"file" when it belongs in another file of the project (a doc to update; at most one): give its "path", and in "task" everything a helper who cannot see this conversation needs to update it: what to add or correct, with the details (names, values, reasons), and where in the file.'] : []),
     'Nothing new or important: an empty list. Answer with the JSON only.',
   ].join('\n');
 }
@@ -75,7 +85,7 @@ const BANAL = /^(the )?(user|conversation|discussion|task|assistant|i|we)\b[^.]{
  * banal, not already in memory or in the project notes, not twice. Null when the
  * answer cannot be read.
  */
-export function parseKeep(text: string, { memory = [], notes = '', project = true }: { memory?: string[]; notes?: string; project?: boolean } = {}): KeepItem[] | null {
+export function parseKeep(text: string, { memory = [], notes = '', project = true, files = false, notesFile = 'AGENTS.md' }: { memory?: string[]; notes?: string; project?: boolean; files?: boolean; notesFile?: string } = {}): KeepItem[] | null {
   const m = String(text ?? '').match(/\{[\s\S]*\}/);
   if (!m) return null;
   let raw: unknown;
@@ -86,6 +96,16 @@ export function parseKeep(text: string, { memory = [], notes = '', project = tru
   for (const x of items) {
     const r = rec(x);
     const fact = String(r.fact ?? '').replace(/\s+/g, ' ').trim().slice(0, 200);
+    if (r.where === 'file') {
+      // (one, inside the project; the notes file is the app's own)
+      const file = projectPath(r.path);
+      const task = String(r.task ?? '').trim().slice(0, MAX_TASK_CHARS);
+      if (!files || !file || out.some((o) => o.where === 'file') || task.length < MIN_CHARS) continue;
+      if (file.toLowerCase() === notesFile.toLowerCase()) { if (fact.length >= MIN_CHARS) out.push({ fact, where: 'project', section: '' }); continue; }
+      out.push({ fact: fact || task.slice(0, 200), where: 'file', section: '', path: file, task });
+      if (out.length >= MAX_KEPT) break;
+      continue;
+    }
     const where = r.where === 'project' && project ? 'project' : r.where === 'memory' || r.where === 'project' ? 'memory' : null;
     if (!where || fact.length < MIN_CHARS || BANAL.test(fact)) continue;
     if (restates(fact, [...memory, ...noteLines, ...out.map((o) => o.fact)])) continue;
@@ -94,6 +114,18 @@ export function parseKeep(text: string, { memory = [], notes = '', project = tru
   }
   return out;
 }
+
+/** A path given by the model, if it stays inside the project: relative, cleaned. */
+export function projectPath(raw: unknown): string | null {
+  const p = String(raw ?? '').trim().replace(/^\.\//, '').replace(/\\/g, '/');
+  if (!p || path.isAbsolute(p) || /^[a-z]:/i.test(p)) return null;
+  const n = path.posix.normalize(p);
+  return n.startsWith('..') || n === '.' || n.startsWith('.git/') || n.startsWith('.poney/') ? null : n;
+}
+
+/** The sub-agent's task for a file to update before a compaction. */
+export const fileTask = (file: string, task: string) =>
+  `Update the file ${file} of the project with what follows. Read it first; put the information where it belongs, in the style of the file, and change nothing else (create the file if it does not exist).\n\n${task}`;
 
 /** The start of a message, to point at it in the instruction (without its date stamp). */
 export const messageStart = (content: string) => content.replace(/^\[[^\]]+\]\s*/, '').replace(/\s+/g, ' ').trim().slice(0, 60);

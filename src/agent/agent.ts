@@ -6,7 +6,7 @@ import os from 'node:os';
 import { streamChat, complete, serverContextLength } from './llm.ts';
 import { callOrigins, calledAs, liveAction, partialEditPairs, TOOLS, buildSystemPrompt, parseActions, splitThinking, formatResult, isToolEnabled, withReasoning, findRepetition, normalizeToolCalls, stripReasoning, legacyReasoningToNotes, stripChannelMarkers, toolSchemas, answerInReasoning } from './protocol.ts';
 import { executeAction, runShell, truncateMiddle, checkOldBlock, type SharedFiles } from './tools.ts';
-import { KEEP_SCHEMA, addProjectNote, keepInstruction, messageStart, noteHeadings, parseKeep } from './keep.ts';
+import { KEEP_SCHEMA, addProjectNote, fileTask, keepInstruction, messageStart, noteHeadings, parseKeep } from './keep.ts';
 import { remember, forget, memoryBlock, standingInstructions, instructionNote, replacedAutoNote } from './memory.ts';
 import { loadSkills, skillDirs, mentionedSkills, matchingSkills, skillBlock, type Skill } from './skills.ts';
 import { recall, autoRecall, recalledBlock, keywordsOf, outOfContext } from './history.ts';
@@ -506,7 +506,7 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
     const { old, recent } = splitForCompaction(this.messages, keepTokens, est);
     if (old.length < 2) return { compacted: false, reason: 'Pas assez de messages anciens à résumer.' };
 
-    await this.keepBeforeCompaction(system, signal, recent);
+    const updated = await this.keepBeforeCompaction(system, signal, recent);
     this.emit('event', { type: 'compaction_start' });
     const turnStart = this.turnStartIndex ?? this.messages.length;
     // The request of the current task, if it is about to be summarized. After a
@@ -570,6 +570,7 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
     if (topic || dates) this.chapters = capChapters([...this.chapters, [dates, topic].filter(Boolean).join(' — ')]);
     let content = buildSummaryMessage({ summary: split.summary, facts: extractFacts(old), task, chapters: this.chapters });
     if (this.taskPlan?.tasks.length) content += `\n\nCURRENT PLAN:\n${formatPlan(this.taskPlan)}`;
+    if (updated) content += `\n\nFILE UPDATED: ${updated}`;
     if (this.memory.length) content += `\n\n${memoryBlock(this.memory)}`; // the notes survive the compaction, word for word
     // Keep the history being replaced: for <recall>, and for the rewind points that point into it.
     const k = this.archives.push(this.messages) - 1;
@@ -585,17 +586,21 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
 
   /**
    * Before a compaction (see keep.ts): what the model wants kept from the whole
-   * conversation: notes for its memory, and lasting facts about the project for
-   * its notes file. A failure is ignored: the compaction goes on without it.
+   * conversation: notes for its memory, lasting facts about the project for its
+   * notes file, and a doc to update, by a sub-agent run now (it starts with an
+   * empty window). Returns what that sub-agent did, for the summary. A failure is
+   * ignored: the compaction goes on without it.
    */
-  async keepBeforeCompaction(system: string, signal: AbortSignal, recent: Message[]) {
-    if (this.role !== 'main' || this.config.memoryEnabled === false) return;
+  async keepBeforeCompaction(system: string, signal: AbortSignal, recent: Message[]): Promise<string | null> {
+    if (this.role !== 'main' || this.config.memoryEnabled === false) return null;
     const prompt = this.buildPrompt(system);
-    if (this.cfg.numCtx - historyTokens(prompt, this.est) - this.plan(system).margin < 600) return; // no room to answer
+    const room = this.cfg.numCtx - historyTokens(prompt, this.est) - this.plan(system).margin;
+    if (room < 600) return null; // no room to answer
     const { projectNotes, notesFile } = await this.loadProjectNotes();
     const project = !this.offProject;
+    const files = project && this.config.subagentsEnabled !== false;
     const file = notesFile ?? 'AGENTS.md';
-    const instruction = keepInstruction({ until: recent.length ? messageStart(stripReasoning(recent[0].content)) : '', project, file, headings: noteHeadings(projectNotes) });
+    const instruction = keepInstruction({ until: recent.length ? messageStart(stripReasoning(recent[0].content)) : '', project, file, headings: noteHeadings(projectNotes), files });
     this.emit('event', { type: 'keep_start' });
     let text = '';
     for (const jsonSchema of [KEEP_SCHEMA, undefined]) {
@@ -604,7 +609,7 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
           ...this.cfg,
           toolSchemas: toolSchemas(this.config, { subagentRole: false }), // (the cached prompt's tools)
           temperature: 0.2,
-          maxTokens: 400,
+          maxTokens: Math.min(files ? 1200 : 400, room - 100), // (a sub-agent's task takes room)
           noThinking: true,
           messages: triageRequest(prompt, instruction),
           jsonSchema,
@@ -619,7 +624,7 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
         text = ''; // (a server without structured output: the JSON only asked for)
       }
     }
-    const items = parseKeep(text, { memory: this.memory, notes: projectNotes, project }) ?? [];
+    const items = parseKeep(text, { memory: this.memory, notes: projectNotes, project, files, notesFile: file }) ?? [];
     const memory: string[] = [];
     for (const it of items) {
       if (it.where !== 'memory') continue;
@@ -635,7 +640,11 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
         lines.push({ fact: it.fact, section: await addProjectNote(this.cwd, file, it.fact, it.section) });
       } catch {} // (a read-only project: that line is lost, not the compaction)
     }
-    this.emit('event', { type: 'kept', id: `kept-${Date.now()}`, memory, project: lines, file });
+    const doc = items.find((it) => it.where === 'file');
+    this.emit('event', { type: 'kept', id: `kept-${Date.now()}`, memory, project: lines, file, ...(doc?.path ? { update: doc.path } : {}) });
+    if (!doc?.path || !doc.task) return null;
+    const report = await this.runSubAgent({ tool: 'agent', args: { title: `Mise à jour de ${doc.path}`.slice(0, 60), task: fileTask(doc.path, doc.task) } }, signal, 1500, nextId++, { auto: true });
+    return `${doc.path} (updated before this summary by a helper): ${truncateMiddle(report.replace(/<\/?result[^>]*>/g, '').replace(/\s+/g, ' ').trim(), 400)}`;
   }
 
   /** Manual compaction, from the UI. */
@@ -675,10 +684,11 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
     return results;
   }
 
-  async runSubAgent(action: Action, signal: AbortSignal, maxReportChars: number, id = nextId++): Promise<string> {
+  async runSubAgent(action: Action, signal: AbortSignal, maxReportChars: number, id = nextId++, { auto = false } = {}): Promise<string> {
     const title = String(action.args.title || 'sous-agent').slice(0, 60);
     const task = String(action.args.task || '').trim();
-    this.emit('event', { type: 'action_start', id, tool: 'agent', args: { title, task }, calledAs: action.calledAs });
+    // (auto: launched by the app itself, not by a tag of the model)
+    this.emit('event', { type: 'action_start', id, tool: 'agent', args: { title, task }, calledAs: action.calledAs, ...(auto ? { auto } : {}) });
     if (!task) {
       this.emit('event', { type: 'action_end', id, ok: false, output: 'Tâche vide.', meta: { title } });
       return formatResult('agent', { title }, 'Empty task: write the task between <agent> and </agent>.');
