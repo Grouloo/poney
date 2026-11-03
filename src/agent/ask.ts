@@ -1,13 +1,14 @@
 // The questionnaire (<ask>): the model asks the user a few questions, each with
-// proposed answers (one or several to pick) and room for their own words. Asking
-// puts the conversation on hold like a command waiting for approval (the same
-// path in main.ts); the answers come back as the tool's result.
+// proposed answers (several can be picked, unless the question says one only) and
+// room for their own words. Asking puts the conversation on hold like a command
+// waiting for approval (the same path in main.ts); the answers come back as the
+// tool's result.
 //
 //   <ask>
-//   ? Which database should I use?
+//   ? Which database should I use? @single
 //   - PostgreSQL
 //   - SQLite
-//   ? Which features do you want? @multiple
+//   ? Which features do you want?
 //   - login
 //   - export
 //   </ask>
@@ -19,8 +20,15 @@ export const MAX_QUESTIONS = 6;
 const MAX_OPTIONS = 8;
 
 const clean = (s: unknown, n = 300) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, n);
-// "@multiple", "(several)", "[multiple choice]": more than one answer can be picked.
+// Several answers can be picked unless "@single", "(one choice)", "[pick one]"… says
+// otherwise: small models leave most questions single when they need the marker for
+// several, even with answers that do not exclude each other. ("@multiple" is the old
+// marker, still removed from the question.)
+const SINGLE = /\s*(@(single|one|unique)\b|[([](single( choice)?|one( choice)?|one only|choose one|pick one)[)\]])\s*/i;
 const MULTIPLE = /\s*(@(multiple|multi|several|many)\b|[([](multiple( choice)?|several|choose several|pick several)[)\]])\s*/i;
+const MARKS = new RegExp(`${SINGLE.source}|${MULTIPLE.source}`, 'gi');
+// An "Other" answer: the free field is already there for it.
+const OTHER = /^(other|others|autre|autres|autre chose|autre réponse|something else|anything else)\b\s*(\(.*\)|[:…-].*|\.{3}.*)?$/i;
 const OPTION = /^\s*(?:[-*•+]|\[\s?\]|[a-h][).]|\d+[).])\s+(.+)$/i;
 const QUESTION = /^\s*(?:\?|q\d*\s*[:.)]|question\s*\d*\s*[:.)]|#+)\s*(.+)$/i;
 
@@ -33,15 +41,16 @@ export function parseQuestions(body: unknown): Question[] {
     const q = line.match(QUESTION);
     const o = q ? null : line.match(OPTION);
     // (a list line that asks something is a question: "1. Which database?")
-    const asks = o && /\?$/.test(o[1].replace(MULTIPLE, ' ').trim());
+    const asks = o && /\?$/.test(o[1].replace(MARKS, ' ').trim());
     if (o && !asks) {
       const last = out[out.length - 1];
-      if (last && last.options.length < MAX_OPTIONS) last.options.push(clean(o[1], 200));
+      const option = clean(o[1], 200);
+      if (last && last.options.length < MAX_OPTIONS && !OTHER.test(option)) last.options.push(option);
       continue;
     }
-    const text = q ? q[1] : o ? o[1] : line.endsWith('?') || MULTIPLE.test(line) ? line : '';
+    const text = q ? q[1] : o ? o[1] : line.endsWith('?') || SINGLE.test(line) || MULTIPLE.test(line) ? line : '';
     if (!text) continue;
-    out.push({ question: clean(text.replace(MULTIPLE, ' ')), options: [], multiple: MULTIPLE.test(text) });
+    out.push({ question: clean(text.replace(MARKS, ' ')), options: [], multiple: !SINGLE.test(text) });
   }
   return out.filter((q) => q.question).slice(0, MAX_QUESTIONS);
 }
@@ -77,4 +86,4 @@ export const askStarted = (d: AskDraft | null | undefined) => Boolean(d?.answers
 /** What a draft conversation's card says when hovered: its text, or the questionnaire under way. */
 export const draftTip = (text: string, ask: AskDraft | null | undefined) => (text.trim() ? text.slice(0, 600) : askStarted(ask) ? 'Questionnaire en cours' : '');
 
-export const ASK_FORMAT = 'Write each question on a line starting with "?" (add @multiple when several answers can be picked), and its proposed answers below it, one per line starting with "-".';
+export const ASK_FORMAT = 'Write each question on a line starting with "?" (add @single when only one answer can be picked), and its proposed answers below it, one per line starting with "-".';

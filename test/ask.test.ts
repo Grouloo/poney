@@ -26,24 +26,31 @@ function fake(reply: Reply<string>) {
   return new Promise<Fake>((ok) => server.listen(0, () => ok({ server, requests, url: `http://localhost:${port(server)}` })));
 }
 
-const ASK = '<ask>\n? Which database should I use?\n- PostgreSQL\n- SQLite\n? Which features do you want? @multiple\n- login\n- export\n? Anything else?\n</ask>';
+const ASK = '<ask>\n? Which database should I use? @single\n- PostgreSQL\n- SQLite\n? Which features do you want?\n- login\n- export\n? Anything else?\n</ask>';
 
 test('the questionnaire is read from its tag, loosely written ones too', () => {
   assert.deepEqual(parseQuestions(ASK.replace(/<\/?ask>/g, '')), [
     { question: 'Which database should I use?', options: ['PostgreSQL', 'SQLite'], multiple: false },
     { question: 'Which features do you want?', options: ['login', 'export'], multiple: true },
-    { question: 'Anything else?', options: [], multiple: false },
+    { question: 'Anything else?', options: [], multiple: true },
   ]);
-  // Numbered questions, lettered answers, a marker in parentheses.
-  assert.deepEqual(parseQuestions('1. Which port? (multiple choice)\na) 3000\nb) 8080\n2. Which host?\n* localhost'), [
-    { question: 'Which port?', options: ['3000', '8080'], multiple: true },
-    { question: 'Which host?', options: ['localhost'], multiple: false },
+  // Numbered questions, lettered answers, a marker in parentheses (the old one for several, still removed).
+  assert.deepEqual(parseQuestions('1. Which port? (pick one)\na) 3000\nb) 8080\n2. Which host? @multiple\n* localhost'), [
+    { question: 'Which port?', options: ['3000', '8080'], multiple: false },
+    { question: 'Which host?', options: ['localhost'], multiple: true },
   ]);
   assert.deepEqual(parseQuestions('just some text'), []);
   // Native calls become the same tag.
   const [a] = parseActions('<tool_call>{"name": "ask_user", "arguments": {"questions": [{"question": "Which OS?", "options": ["macOS", "Linux"], "multiple": true}]}}</tool_call>').actions;
   assert.equal(a.tool, 'ask');
   assert.deepEqual(parseQuestions(a.args.body), [{ question: 'Which OS?', options: ['macOS', 'Linux'], multiple: true }]);
+  const [b] = parseActions('<tool_call>{"name": "ask", "arguments": {"questions": [{"question": "Which OS?", "options": ["macOS", "Linux"], "single": true}]}}</tool_call>').actions;
+  assert.equal(parseQuestions(b.args.body)[0].multiple, false);
+});
+
+test('an "Other" answer is dropped: the free field is there for it', () => {
+  const [q] = parseQuestions('? Which editor?\n- VS Code\n- Other\n- Autre (préciser)\n- Something else: tell me\n- Other tools I use\n- Vim');
+  assert.deepEqual(q.options, ['VS Code', 'Other tools I use', 'Vim']);
 });
 
 test('answers are kept only among the proposed ones, one for a single choice', () => {

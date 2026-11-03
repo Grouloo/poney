@@ -117,7 +117,7 @@ export function toolSchemas(config: Partial<Config> = {}, { subagentRole = false
                 properties: {
                   question: { type: 'string' },
                   options: { type: 'array', items: { type: 'string' }, description: 'proposed answers' },
-                  multiple: { type: 'boolean', description: 'several answers can be picked' },
+                  single: { type: 'boolean', description: 'only one answer can be picked' },
                 },
                 required: ['question', 'options'],
               },
@@ -226,7 +226,7 @@ export function buildSystemPrompt({ cwd, offProject = false, scratch = false, me
     : subagents
       ? '<plan>\n- first task (goal, files)\n- next task\n</plan>                                 a plan: each task is done by a sub-agent, in order'
     : '<plan>\n- first task\n- next task\n</plan>                                 your task list');
-  if (!subagentRole) tools.push('<ask>\n? a question @multiple (when several answers fit)\n- a proposed answer\n- another\n</ask>                                  ask the user (they pick or write their own)');
+  if (!subagentRole) tools.push('<ask>\n? a question @single (when only one answer fits)\n- a proposed answer\n- another\n</ask>                                  ask the user (they pick or write their own)');
   if (subagents) {
     tools.push('<agent title="short name">\ncomplete task, with all the context it needs\n</agent>                                delegate an independent task to a sub-agent');
   }
@@ -505,7 +505,7 @@ function jsonToTag(name: string, a: LooseArgs = {}): string | null {
       const qs: unknown[] | null = Array.isArray(a.questions) ? a.questions : null;
       if (!qs) return `<ask>\n${show(a.body ?? a.question)}\n</ask>`;
       return `<ask>\n${qs.map((q) => (typeof q === 'string' ? { question: q } : rec(q)))
-        .map((q: LooseArgs) => `? ${show(q.question ?? q.text)}${q.multiple || q.multiSelect ? ' @multiple' : ''}\n${list(q.options ?? q.choices).map((o) => `- ${typeof o === 'string' ? o : show(rec(o).label ?? rec(o).text)}`).join('\n')}`).join('\n')}\n</ask>`;
+        .map((q: LooseArgs) => `? ${show(q.question ?? q.text)}${q.single || q.multiple === false || q.multiSelect === false ? ' @single' : ''}\n${list(q.options ?? q.choices).map((o) => `- ${typeof o === 'string' ? o : show(rec(o).label ?? rec(o).text)}`).join('\n')}`).join('\n')}\n</ask>`;
     }
     case 'search': return a.query || a.keywords ? `<search${quoteAttr('path', a.path)}>${show(a.query ?? a.keywords)}</search>` : `<search${quoteAttr('pattern', a.pattern)}${quoteAttr('path', a.path)} />`;
     default: return `<${tool}${['path', 'start', 'end', 'pattern', 'depth'].map((k) => quoteAttr(k, a[k])).join('')} />`;

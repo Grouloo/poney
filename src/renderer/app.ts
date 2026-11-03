@@ -2208,7 +2208,7 @@ function showQuestionnaire(card: HTMLElement, id: number, questions: Question[])
   form.dataset.id = String(id);
   const n = questions.length;
   const key = askKey(questions);
-  form.innerHTML = questions.map((q, i) => `<fieldset class="q" data-step="${i}"><legend>${esc(q.question)}${q.multiple ? ' <span class="muted">(plusieurs choix possibles)</span>' : ''}</legend>${
+  form.innerHTML = questions.map((q, i) => `<fieldset class="q" data-step="${i}"><legend>${esc(q.question)}${q.multiple || !q.options.length ? '' : ' <span class="muted">(un seul choix)</span>'}</legend>${
     q.options.map((o) => `<label class="q-opt"><input type="${q.multiple ? 'checkbox' : 'radio'}" name="q${i}" value="${esc(o)}"><span>${esc(o)}</span></label>`).join('')
   }<input type="text" class="q-other" name="other${i}" placeholder="${q.options.length ? 'Autre réponse ou précision…' : 'Votre réponse…'}"></fieldset>`).join('') +
     `<div class="q-actions"><button type="button" class="ghost q-skip">Ignorer</button><div class="q-steps" role="group">${questions.map((q, i) => `<button type="button" class="q-step" data-step="${i}" title="${esc(q.question)}">${i + 1}</button>`).join('<span class="q-link"></span>')}</div><div class="q-nav"><button type="button" class="ghost q-prev">${CHEV_LEFT}<span>Précédent</span></button><button type="submit" class="primary q-next"></button></div></div>`;
