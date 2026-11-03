@@ -110,6 +110,7 @@ const api = {
   makeFolder: call('files:mkdir'),
   attachFiles: call('files:attach'),
   attachPick: call('files:attachPick'),
+  attachData: call('files:attachData'),
   moveFiles: call('files:move'),
   appsToOpen: call('files:apps'),
   projectBusy: call('files:busy'),

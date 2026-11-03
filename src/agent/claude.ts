@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { unifiedDiff } from './diff.ts';
+import { soberPath, withAttachedPaths } from './attached.ts';
 import { loadSkills, skillDirs, withSkills, type Skill } from './skills.ts';
 import { errorMessage, isNumber, isString, list, num, parseJson, rec, str } from '../unknown.ts';
 import type { Options, PermissionMode, PermissionResult, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
@@ -248,15 +249,18 @@ async function sessionUsage(q: ClaudeQuery) {
   return typeof session.utilization === 'number' ? { utilization: session.utilization, resetsAt: isString(session.resets_at) || isNumber(session.resets_at) ? session.resets_at : null } : null;
 }
 
-const inside = (cwd: string, file: unknown) => {
+const insideOf = (cwd: string, file: unknown, scratch: string | null = null) => {
+  const sober = soberPath(String(file ?? ''), scratch); // (the private folder, as `.poney/…`)
+  if (sober) return sober;
   const rel = path.relative(cwd, String(file ?? ''));
   return rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? rel : String(file ?? '');
 };
 
 /** A tool of the Claude harness as a card of Poney. */
-export function toolView(name: string, input: unknown, cwd: string): { tool: string; args: ToolArgs } {
+export function toolView(name: string, input: unknown, cwd: string, scratch: string | null = null): { tool: string; args: ToolArgs } {
   const i = rec(input);
   const opt = (v: unknown) => (typeof v === 'string' ? v : undefined);
+  const inside = (c: string, file: unknown) => insideOf(c, file, scratch);
   const where = () => (i.path ? inside(cwd, i.path) : undefined);
   switch (name) {
     case 'Read': return { tool: 'read', args: { path: inside(cwd, i.file_path) } };
@@ -349,7 +353,8 @@ export class ClaudeAgent extends EventEmitter<{ event: [AgentEvent] }> {
   /** The message with its skills: Poney's, called like its local models do. */
   prompt(text: string, turnId?: string): string {
     const inView = (s: Skill) => this.messages.some((m) => m.content.includes(`(Skill "${s.name}"`));
-    const { text: out, shown } = withSkills(text, loadSkills(skillDirs(this.cwd, this.skillsDir)), { auto: this.autoSkills !== false, inView });
+    // (the files attached, under `.poney/` in the message: read here by their absolute path)
+    const { text: out, shown } = withSkills(withAttachedPaths(text, this.attachDir), loadSkills(skillDirs(this.cwd, this.skillsDir)), { auto: this.autoSkills !== false, inView });
     if (shown.length) this.emit('event', { type: 'skill', turnId, skills: shown });
     return out;
   }
@@ -552,7 +557,7 @@ export class ClaudeAgent extends EventEmitter<{ event: [AgentEvent] }> {
     if (known) return known;
     const id = nextId++;
     const input = rec(rawInput);
-    const { tool, args } = toolView(name, input, this.cwd);
+    const { tool, args } = toolView(name, input, this.cwd, this.attachDir);
     const entry: ToolEntry = { id, name, input, parent, tool };
     if (name === 'TodoWrite') {
       const statuses: Record<string, TaskStatus | undefined> = { in_progress: 'running', completed: 'done' };
@@ -579,7 +584,7 @@ export class ClaudeAgent extends EventEmitter<{ event: [AgentEvent] }> {
     const diff = !ok ? undefined
       : t.name === 'Edit' ? unifiedDiff(str(t.input.old_string), str(t.input.new_string), name)
         : t.name === 'Write' ? unifiedDiff('', str(t.input.content), name) : undefined;
-    this.emitFor(t.parent, state, { type: 'action_end', id: t.id, ok, output, ...(diff ? { diff } : {}), meta: { path: inside(this.cwd, name) } });
+    this.emitFor(t.parent, state, { type: 'action_end', id: t.id, ok, output, ...(diff ? { diff } : {}), meta: { path: insideOf(this.cwd, name, this.attachDir) } });
   }
 
   /** Stopped or cut short: no card goes on turning. */

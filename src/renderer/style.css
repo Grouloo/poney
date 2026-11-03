@@ -347,6 +347,16 @@ details.thinking div { white-space: pre-wrap; border-left: 2px solid var(--borde
 .attach-chip .attach-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .attach-chip button { flex: none; width: 18px; height: 18px; padding: 0; border: none; border-radius: 5px; background: none; color: var(--muted); cursor: pointer; line-height: 1; }
 .attach-chip button:hover { background: color-mix(in srgb, var(--text) 12%, transparent); color: var(--text); }
+/* the files attached to a message: pills under its text, each opened in the viewer */
+.attached-files { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; white-space: normal; }
+.attached-pill {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 260px; padding: 4px 10px 4px 8px; border-radius: 999px;
+  border: 1px solid var(--border); background: color-mix(in srgb, var(--text) 6%, transparent); color: var(--text); font-size: 12px; cursor: pointer;
+}
+.attached-pill:hover { background: color-mix(in srgb, var(--text) 12%, transparent); }
+.attached-pill span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attached-pill svg { flex: none; width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; }
+.attach-chip { cursor: pointer; }
 .composer-box.drop-attach { border-color: var(--accent-2); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-2) 35%, transparent); }
 #input { resize: none; border: none; outline: none; background: transparent; max-height: 220px; padding: 6px; overflow-y: hidden; }
 /* Two lines under the input: tool switches, then context gauge and agent status. */

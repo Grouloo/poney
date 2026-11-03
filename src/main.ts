@@ -1294,15 +1294,14 @@ handle('files:move', [isStringArray, isString], async (rels, rel) => {
 });
 // Files attached to the message: from the Finder, copied into the conversation's private folder (the
 // original can move or change, the copy stays); from the project or that folder, named where they are.
-// What the agent reads: a path in the project, `.poney/…` for Poney's models, else the absolute path.
+// They are named in the project, or `.poney/…` (an absolute path for a file the Finder gave in no folder of them).
 const attachFiles = async (paths: string[], rels: string[]) => {
   const s = current();
   const scratch = scratchOf(s.key);
-  const local = (s.choice.engine ?? 'local') === 'local';
   const under = (dir: string, abs: string) => { const r = path.relative(dir, abs); return r && !r.startsWith('..') && !path.isAbsolute(r) ? r : null; };
   const ref = (abs: string) => {
     const inScratch = under(scratch, abs);
-    if (inScratch !== null) return local ? `.poney/${inScratch.split(path.sep).join('/')}` : abs;
+    if (inScratch !== null) return `.poney/${inScratch.split(path.sep).join('/')}`; // (Claude and Antigravity get the absolute path)
     return s.cwd ? under(s.cwd, abs)?.split(path.sep).join('/') ?? abs : abs;
   };
   const named = (abs: string) => ({ name: path.basename(abs), ref: ref(abs) });
@@ -1316,6 +1315,16 @@ const attachFiles = async (paths: string[], rels: string[]) => {
   return out;
 };
 handle('files:attach', [isStringArray, isStringArray], attachFiles);
+// Pasted into the input: an image, or a text too long for the box, as a file of the private folder.
+const isData = (v: unknown): v is string | Uint8Array => typeof v === 'string' || v instanceof Uint8Array;
+handle('files:attachData', [isString, isData], async (name, data) => {
+  const scratch = scratchOf(current().key);
+  await fs.promises.mkdir(scratch, { recursive: true });
+  const free = await freeName(scratch, path.basename(name).replace(/[\\/:]/g, '-') || 'fichier');
+  await fs.promises.writeFile(path.join(scratch, free), data);
+  return { name: free, ref: `.poney/${free}` };
+});
+
 handle('files:attachPick', [], async () => {
   const r = await pickFrom({ title: 'Joindre des fichiers', properties: ['openFile', 'multiSelections'] });
   return r.canceled ? [] : attachFiles(r.filePaths, []);

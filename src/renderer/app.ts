@@ -1056,7 +1056,22 @@ function addUserMessage(text: string, turnId?: string) {
   transcript.querySelectorAll<HTMLElement>('.retry-row').forEach((r) => r.remove()); // (taken up, or a new message)
   if (!target) planBlock = null; // a plan is the plan of one request
   const m = div('msg user');
-  fillUserBubble(m.appendChild(div('bubble')), text);
+  const { body, files } = splitAttached(text);
+  const bubble = m.appendChild(div('bubble'));
+  fillUserBubble(bubble, body);
+  if (files.length) {
+    // The files attached: pills under the text, each opened in the viewer.
+    const pills = bubble.appendChild(div('attached-files'));
+    for (const ref of files) {
+      const pill = pills.appendChild(document.createElement('button'));
+      pill.type = 'button';
+      pill.className = 'attached-pill';
+      pill.innerHTML = fileIconSvg(ref.split('/').pop() ?? ref);
+      pill.appendChild(document.createElement('span')).textContent = ref.split('/').pop() ?? ref;
+      pill.title = `${ref} (cliquer pour l’ouvrir)`;
+      pill.onclick = () => openFile(ref);
+    }
+  }
   if (turnId) {
     // Messages sent before this feature have no rewind point: no edit button.
     const btn = document.createElement('button');
@@ -1281,7 +1296,7 @@ async function submit() {
   const files = attachedNow();
   if (!typed && !files.length) return;
   // (the files attached: named at the end of the message, by the path the agent reads)
-  const text = files.length ? `${typed}${typed ? '\n\n' : ''}Fichiers joints :\n${files.map((f) => `- \`${f.ref}\``).join('\n')}` : typed;
+  const text = files.length ? `${typed}${typed ? '\n\n' : ''}${ATTACHED}\n${files.map((f) => `- \`${f.ref}\``).join('\n')}` : typed;
   if (!activeDir()) {
     settings = await window.api.chooseWorkspace();
     renderSettings();
@@ -1313,6 +1328,18 @@ async function submit() {
 }
 
 // ---------- files attached to the next message ----------
+const ATTACHED = 'Fichiers joints :'; // (as src/agent/attached.ts reads it)
+const LONG_PASTE = 4000; // characters: a text pasted beyond it, or beyond so many lines, goes in a file
+const LONG_PASTE_LINES = 80;
+const stamp = () => new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).replace(/:/g, '.');
+/** A pasted image's name: its own, unless it is the clipboard's "image.png". */
+const pastedName = (f: File) => (f.name && f.name !== 'image.png' ? f.name : `image collée ${stamp()}.${f.type.split('/')[1]?.replace('jpeg', 'jpg').replace(/\W.*$/, '') || 'png'}`);
+/** A message and the files attached at its end. */
+function splitAttached(text: string): { body: string; files: string[] } {
+  const m = /(?:^|\n\n)Fichiers joints :\n((?:- `[^`\n]+`(?:\n|$))+)\s*$/.exec(text);
+  if (!m) return { body: text, files: [] };
+  return { body: text.slice(0, m.index), files: [...m[1].matchAll(/^- `([^`\n]+)`/gm)].map((x) => x[1]) };
+}
 // Each pane its own, for its conversation (another conversation in the pane: they are dropped).
 const attachments = new Map<Pane, { session: string | null; items: Attached[] }>();
 function attachedNow(): Attached[] {
@@ -1327,7 +1354,8 @@ function renderAttachments() {
   list.innerHTML = '';
   for (const f of items) {
     const chip = list.appendChild(div('attach-chip'));
-    chip.title = f.ref;
+    chip.title = `${f.ref} (cliquer pour l’ouvrir)`;
+    chip.onclick = () => openFile(f.ref);
     chip.appendChild(document.createElement('span')).className = 'attach-name';
     chip.querySelector<HTMLElement>('.attach-name')!.textContent = f.name;
     const remove = chip.appendChild(document.createElement('button'));
@@ -1335,7 +1363,8 @@ function renderAttachments() {
     remove.textContent = '✕';
     remove.setAttribute('aria-label', `Retirer ${f.name}`);
     const p = pane;
-    remove.onclick = () => {
+    remove.onclick = (e) => {
+      e.stopPropagation();
       const a = attachments.get(p);
       if (a) a.items = a.items.filter((x) => x !== f);
       inPane(p, renderAttachments);
@@ -5411,6 +5440,20 @@ function bindPane(p: Pane) {
 
   sendBtn.onclick = submit;
   $<HTMLButtonElement>('attachBtn').onclick = () => attach(p, () => window.api.attachPick());
+  // Pasted: an image becomes a file attached, and so does a text too long for the box.
+  p.input.addEventListener('paste', (e) => {
+    const data = e.clipboardData;
+    if (!data) return;
+    const images = [...data.files].filter((f) => f.type.startsWith('image/'));
+    const text = data.getData('text/plain');
+    if (images.length) {
+      e.preventDefault();
+      void attach(p, () => Promise.all(images.map(async (f) => window.api.attachData(pastedName(f), new Uint8Array(await f.arrayBuffer())))));
+    } else if (text.length > LONG_PASTE || text.split('\n').length > LONG_PASTE_LINES) {
+      e.preventDefault();
+      void attach(p, async () => [await window.api.attachData(`texte collé ${stamp()}.${/^\s*[[{]/.test(text) ? 'json' : 'txt'}`, text)]);
+    }
+  });
   // Dropped on the input: files of the Finder, or of the files panel.
   const box = p.root.querySelector<HTMLElement>('.composer-box')!;
   const attachable = (e: DragEvent) => Boolean(draggedEntry) || (Boolean(e.dataTransfer?.types.includes('Files')) && !draggedFile && !draggedImage);

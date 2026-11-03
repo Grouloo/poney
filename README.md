@@ -196,10 +196,13 @@ node src/cli.ts --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   dropped on (a name already taken gets a number); a file or folder of the tree dragged onto a folder moves into it.
   Right-click: a new folder, and the project's folder opened in the Finder.
 - **Files attached** to a message: the round paperclip of the input, or files dropped on it from the Finder or the files
-  panel. A file of the project is named where it is; one from elsewhere is copied into the conversation's private
-  folder (a link would break when the original moves, and the agent could change the original through it). The
-  message ends with their paths: `.poney/…` for Poney's models; for Claude and Antigravity, the absolute path, the
-  folder being added to what they may read (`additionalDirectories`, `--add-dir`).
+  panel. A pasted image becomes a file attached, and so does a pasted text over 4,000 characters or 80 lines. A
+  file of the project is named where it is; one from elsewhere is copied into the conversation's private folder (a
+  link would break when the original moves, and the agent could change the original through it). Each shows as a
+  chip above the text, opened in the viewer by a click. The message ends with their paths, `.poney/…` for the private
+  folder, shown as pills under its text (a click opens the file; the title leaves them out). Claude and Antigravity
+  get the absolute path, the folder being added to what they may read (`additionalDirectories`, `--add-dir`), and
+  their cards name it `.poney/…` again (`src/agent/attached.ts`).
 - **Tool switches** in the input box, as icons (Web, Tor, Sous-agents, Terminal, sans confirmation; green when on,
   their names in instant tooltips), on one row with the model picker and the send button (`--no-web` /
   `--no-shell` in the CLI): a disabled tool disappears from the system prompt (shorter prompt) and is refused if

@@ -1,5 +1,6 @@
 // Conversations saved as one JSON file each: the agent's message history (to
 // resume the work) and the UI events (to redraw the transcript).
+import { withoutAttached } from './agent/attached.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -74,7 +75,7 @@ export class ConversationStore {
   }
 
   static cleanTitle(title: unknown): string {
-    return String(title ?? '').replace(/\s+/g, ' ').trim().slice(0, 80);
+    return withoutAttached(String(title ?? '')).replace(/\s+/g, ' ').trim().slice(0, 80); // (a first message: not its files' list)
   }
 
   /** Renames a conversation on disk without changing its place in the list. */

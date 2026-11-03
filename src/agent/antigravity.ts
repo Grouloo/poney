@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
+import { soberPath, withAttachedPaths } from './attached.ts';
 import { loadSkills, skillDirs, withSkills, type Skill } from './skills.ts';
 import { errorMessage, isRecord, isString, list, num, parseJson, rec, str } from '../unknown.ts';
 import type { AgentEvent, Checkpoint, Choice, Config, ContextStats, Message, Plan, Steps, TurnStats, ToolArgs } from '../types.ts';
@@ -121,15 +122,18 @@ function arg(params: Record<string, unknown>, ...names: string[]): string | unde
   return undefined;
 }
 
-const inside = (cwd: string, file: string | undefined) => {
+const insideOf = (cwd: string, file: string | undefined, scratch: string | null) => {
   if (!file) return undefined;
+  const sober = soberPath(file, scratch); // (the private folder, as `.poney/…`)
+  if (sober) return sober;
   const rel = path.relative(cwd, file.replace(/^file:\/\//, ''));
   return rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? rel : file;
 };
 
 /** A tool of the Antigravity harness as a card of Poney. */
-export function toolView(name: string, input: unknown, cwd: string): { tool: string; args: ToolArgs } {
+export function toolView(name: string, input: unknown, cwd: string, scratch: string | null = null): { tool: string; args: ToolArgs } {
   const i = rec(input);
+  const inside = (c: string, file: string | undefined) => insideOf(c, file, scratch);
   const file = () => inside(cwd, arg(i, 'absolutepath', 'targetfile', 'filepath', 'file', 'path', 'uri'));
   const n = name.toLowerCase();
   if (/^(view_file|read_file|view_code_item|view_file_outline)$/.test(n)) return { tool: 'read', args: { path: file() } };
@@ -258,7 +262,8 @@ export class AntigravityAgent extends EventEmitter<{ event: [AgentEvent] }> {
   /** The message with its skills: Poney's, called like its local models do. */
   prompt(text: string, turnId?: string): string {
     const inView = (s: Skill) => this.messages.some((m) => m.content.includes(`(Skill "${s.name}"`));
-    const { text: out, shown } = withSkills(text, loadSkills(skillDirs(this.cwd, this.skillsDir)), { auto: this.autoSkills !== false, inView });
+    // (the files attached, under `.poney/` in the message: read here by their absolute path)
+    const { text: out, shown } = withSkills(withAttachedPaths(text, this.attachDir), loadSkills(skillDirs(this.cwd, this.skillsDir)), { auto: this.autoSkills !== false, inView });
     if (shown.length) this.emit('event', { type: 'skill', turnId, skills: shown });
     return out;
   }
@@ -404,7 +409,7 @@ export class AntigravityAgent extends EventEmitter<{ event: [AgentEvent] }> {
       let t = state.tools.get(key);
       if (!t) {
         this.showThinking(state, conversation, num(p.step_index), null); // (the reasoning that led to it, first)
-        const { tool, args } = toolView(str(p.tool_name) || str(info.name), info.parameters, this.cwd);
+        const { tool, args } = toolView(str(p.tool_name) || str(info.name), info.parameters, this.cwd, this.attachDir);
         t = { id: nextId++, agentId, done: false };
         state.tools.set(key, t);
         this.emitAs(agentId, { type: 'action_start', id: t.id, tool, args });
@@ -567,7 +572,7 @@ export class AntigravityAgent extends EventEmitter<{ event: [AgentEvent] }> {
       }
       for (const call of calls) {
         const id = nextId++;
-        const { tool, args } = toolView(str(call.name), call.args, this.cwd);
+        const { tool, args } = toolView(str(call.name), call.args, this.cwd, this.attachDir);
         log.pending.push(id);
         this.emitAs(agentId, { type: 'action_start', id, tool, args });
       }
