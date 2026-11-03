@@ -343,3 +343,14 @@ test('the share of the plan\'s session an answer used goes with its figures', as
   await reset.a.send('bonjour');
   assert.equal((reset.events.at(-1) as EventOf<'turn_end'>).stats!.session, 1);
 });
+
+test('the files attached: Claude may read the conversation\'s private folder, once it exists', async () => {
+  const { a, calls } = agent([init, done]);
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'poney-attach-'));
+  a.attachDir = path.join(dir, 'private');
+  await a.send('a');
+  assert.equal(calls[0].options.additionalDirectories, undefined);
+  await fs.mkdir(a.attachDir);
+  await a.send('b');
+  assert.deepEqual(calls[1].options.additionalDirectories, [a.attachDir]);
+});

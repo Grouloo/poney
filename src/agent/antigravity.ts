@@ -81,6 +81,32 @@ export function agyModels(executable: string, run: ExecFn = defaultExec) {
   });
 }
 
+export interface AgyLimit { remaining: number; resetsAt: string | null; disabled: boolean }
+export interface AgyUsage { group: string; fiveHour: AgyLimit | null; weekly: AgyLimit | null }
+
+/** The quota of a model's group (agy shares one between "Gemini Models", and between "Claude and GPT models"). */
+export function parseUsage(stdout: string, modelName: string): AgyUsage | null {
+  let data: Record<string, unknown>;
+  try { data = rec(rec(rec(parseJson(stdout)).command).data); } catch { return null; }
+  const groups = Array.isArray(data.groups) ? data.groups.map(rec) : [];
+  const family = modelName.trim().split(/[\s-]/)[0].toLowerCase();
+  const group = groups.find((g) => `${str(g.name)} ${str(g.description)}`.toLowerCase().includes(family)) ?? (groups.length === 1 ? groups[0] : undefined);
+  if (!group) return null;
+  const buckets = Array.isArray(group.buckets) ? group.buckets.map(rec) : [];
+  const limit = (window: string): AgyLimit | null => {
+    const b = buckets.find((x) => str(x.window) === window);
+    return b && typeof b.remaining_fraction === 'number' ? { remaining: b.remaining_fraction, resetsAt: str(b.reset_time) || null, disabled: b.disabled === true } : null;
+  };
+  return { group: str(group.name), fiveHour: limit('5h'), weekly: limit('weekly') };
+}
+
+/** The quota left, by agy's read-only "/usage" command (no model runs). */
+export function agyUsage(executable: string, modelName: string, run: ExecFn = defaultExec) {
+  return new Promise<AgyUsage | null>((resolve) => {
+    run(executable, ['-p', '/usage', '--output-format', 'json'], { timeout: 20000, env: process.env }, (_error, stdout) => resolve(parseUsage(stdout, modelName)));
+  });
+}
+
 // Parameters arrive with the names of the harness (AbsolutePath, CommandLine…), sometimes as JSON strings.
 const value = (v: unknown): unknown => {
   if (!isString(v) || !/^".*"$/s.test(v)) return v;
@@ -168,6 +194,7 @@ export class AntigravityAgent extends EventEmitter<{ event: [AgentEvent] }> {
   cwd: string;
   executable: string | null;
   skillsDir: string | null;
+  attachDir: string | null; // the conversation's private folder, where attached files are copied
   choice: Choice;
   sessionId: string | null;
   config: Partial<Config>;
@@ -188,13 +215,14 @@ export class AntigravityAgent extends EventEmitter<{ event: [AgentEvent] }> {
   checkpoints: Checkpoint[];
   archives: (Message[] | null)[];
 
-  constructor({ cwd, executable, skillsDir = null, brain = agyBrain() }: { cwd: string; executable: string | null; skillsDir?: string | null; brain?: string }) {
+  constructor({ cwd, executable, skillsDir = null, brain = agyBrain(), attachDir = null }: { cwd: string; executable: string | null; skillsDir?: string | null; brain?: string; attachDir?: string | null }) {
     super();
     // The stream says neither the reasoning nor a sub-agent's steps: agy's logs do, read during the turn.
     this.brain = brain;
     this.cwd = cwd;
     this.executable = executable;
     this.skillsDir = skillsDir;
+    this.attachDir = attachDir;
     this.choice = {};
     this.sessionId = null; // the Antigravity conversation, resumed at each message
     this.config = {};
@@ -222,6 +250,10 @@ export class AntigravityAgent extends EventEmitter<{ event: [AgentEvent] }> {
   reset() { this.stop(); }
   upgradeReasoning() {}
   contextStats() { return this.context; }
+  setContext(used: number): void {
+    this.context = { type: 'context', used, agy: true };
+    this.emit('event', this.context);
+  }
 
   /** The message with its skills: Poney's, called like its local models do. */
   prompt(text: string, turnId?: string): string {
@@ -236,6 +268,7 @@ export class AntigravityAgent extends EventEmitter<{ event: [AgentEvent] }> {
     const args = ['-p', content, '--output-format', 'stream-json', '--print-timeout', '0s'];
     if (this.sessionId) args.push('--conversation', this.sessionId);
     if (this.choice.model) args.push('--model', this.choice.model);
+    if (this.attachDir && fs.existsSync(this.attachDir)) args.push('--add-dir', this.attachDir); // (the files attached)
     // (no --effort: agy refuses it, its models carry their level in their name, as gemini-4-argon-high)
     if (this.choice.mode === 'auto') args.push('--dangerously-skip-permissions');
     else if (this.choice.mode === 'plan') args.push('--mode', 'plan');
@@ -361,7 +394,11 @@ export class AntigravityAgent extends EventEmitter<{ event: [AgentEvent] }> {
     const key = `${conversation}:${num(p.step_index)}`;
     const type = str(p.step_type).toLowerCase();
     const done = str(p.state).toUpperCase() === 'DONE';
-    state.tokens += num(rec(p.usage).output_tokens);
+    const usage = rec(p.usage);
+    state.tokens += num(usage.output_tokens);
+    // The context: what the main conversation's last call read and wrote (agy says no window size).
+    const used = num(usage.total_tokens) || num(usage.input_tokens) + num(usage.output_tokens);
+    if (conversation === state.main && used) this.setContext(used);
     if (type === 'tool' || p.tool_info || p.tool_name) {
       const info = rec(p.tool_info);
       let t = state.tools.get(key);

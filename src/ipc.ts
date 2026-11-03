@@ -1,7 +1,7 @@
 // What the main process and the window say to each other: for each channel, its
 // arguments and its reply. Types only. `src/main.ts` checks the arguments it
 // receives against these, `src/preload.cts` builds `window.api` from them.
-import type { AgyModel } from './agent/antigravity.ts';
+import type { AgyModel, AgyUsage } from './agent/antigravity.ts';
 import type { claudeModels, claudeUsage } from './agent/claude.ts';
 import type { Skill } from './agent/skills.ts';
 import type { TorStatus } from './agent/tor.ts';
@@ -69,6 +69,9 @@ export interface ClaudeAccount {
 }
 
 /** Antigravity (agy): its models, or why there are none. */
+export type { AgyUsage };
+/** A file attached to a message: its name, and the path the agent reads. */
+export interface Attached { name: string; ref: string }
 export interface AntigravityStatus {
   installed: boolean;
   enabled: boolean;
@@ -176,6 +179,7 @@ export interface Channels {
   'claude:status': [[], ClaudeStatus];
   'antigravity:status': [[], AntigravityStatus];
   'claude:usage': [[], ClaudeUsage];
+  'antigravity:usage': [[], AgyUsage | null];
   'claude:addAccount': [[], { settings: PublicSettings; id: string }];
   'claude:login': [[id: string], boolean];
   'claude:loginCode': [[code: string], void];
@@ -201,6 +205,10 @@ export interface Channels {
   'files:moveInto': [[paths: string[], dir: string], string[]];
   'files:openExternal': [[rel: string], string];
   'files:reveal': [[rel: string], void];
+  'files:mkdir': [[rel: string], string];
+  'files:attach': [[paths: string[], rels: string[]], Attached[]];
+  'files:attachPick': [[], Attached[]];
+  'files:move': [[rels: string[], rel: string], string[]];
   'files:apps': [[rel: string], OpeningApps];
   'files:busy': [[], boolean];
   'files:rename': [[rel: string, name: string], string];

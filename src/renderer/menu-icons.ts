@@ -5,6 +5,7 @@ const PATHS = {
   openWith: '<rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1.2"/><rect x="9" y="2.5" width="4.5" height="4.5" rx="1.2"/><rect x="2.5" y="9" width="4.5" height="4.5" rx="1.2"/><rect x="9" y="9" width="4.5" height="4.5" rx="1.2"/>',
   rename: '<path d="M10.5 2.5l3 3L6 13H3v-3z"/><path d="M9 4l3 3"/>',
   reveal: '<path d="M1.5 4.2c0-.7.6-1.2 1.2-1.2h3.4l1.4 1.5h5.8c.7 0 1.2.5 1.2 1.2v6.6c0 .7-.5 1.2-1.2 1.2H2.7c-.6 0-1.2-.5-1.2-1.2z"/><path d="M6.5 9.5h4M9 7.5l2 2-2 2"/>',
+  newFolder: '<path d="M1.5 4.2c0-.7.6-1.2 1.2-1.2h3.4l1.4 1.5h5.8c.7 0 1.2.5 1.2 1.2v6.6c0 .7-.5 1.2-1.2 1.2H2.7c-.6 0-1.2-.5-1.2-1.2z"/><path d="M8 7v4M6 9h4"/>',
   trash: '<path d="M2.5 4h11M6.5 4V2.5h3V4M4 4l.7 9.5h6.6L12 4M6.8 6.8v4.4M9.2 6.8v4.4"/>',
   close: '<path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/>',
   newConversation: '<path d="M2.5 3h11v7.5H6.5L3.5 13v-2.5h-1z"/><path d="M8 4.8v4M6 6.8h4"/>',

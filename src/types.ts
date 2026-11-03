@@ -219,6 +219,8 @@ export interface ContextStats {
   calibrated?: boolean;
   measured?: number | null;
   claude?: boolean;
+  /** Antigravity's: tokens used, with no window (agy does not say it, and compacts by itself). */
+  agy?: boolean;
 }
 
 export interface TriageItem {
@@ -330,6 +332,7 @@ export interface ConversationFile {
   claudeSession?: string | null;
   claudeContext?: ContextStats | null;
   agySession?: string | null;
+  agyContext?: ContextStats | null;
 }
 
 /** A conversation in the lists. */

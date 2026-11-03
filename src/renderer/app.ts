@@ -15,7 +15,7 @@ import DOMPurify from '../../node_modules/dompurify/dist/purify.es.mjs';
 import type { Api } from '../preload.cts';
 import { isGithub, repoName } from '../remote-url.ts';
 import type { RemotesStatus } from '../ipc.ts';
-import type { AntigravityStatus, AppAlert, ClaudeAccount, ClaudeStatus, FileStates, ListedSkill, ModelGroup, OpeningApps, SessionApproval, SessionEvent, SessionView, SystemPromptView } from '../ipc.ts';
+import type { AntigravityStatus, AppAlert, Attached, ClaudeAccount, ClaudeStatus, FileStates, ListedSkill, ModelGroup, OpeningApps, SessionApproval, SessionEvent, SessionView, SystemPromptView } from '../ipc.ts';
 import type { TorStatus } from '../agent/tor.ts';
 import type { GitFile, GitRepoStatus } from '../git.ts';
 import type { ViewedFile } from '../files.ts';
@@ -581,13 +581,22 @@ function providerCard(p: Provider) {
   on.onchange = () => changeProvider(window.api.updateProvider(p.id, { enabled: on.checked }));
   return card;
 }
+/** The red bin that removes a provider, after a confirmation. */
+function removeButton(head: HTMLElement, p: Provider, tip: string, question: string) {
+  const remove = head.appendChild(document.createElement('button'));
+  remove.type = 'button';
+  remove.className = 'provider-remove';
+  remove.innerHTML = TRASH_ICON;
+  remove.dataset.tip = tip;
+  remove.setAttribute('aria-label', tip);
+  remove.onclick = (e) => {
+    e.stopPropagation();
+    if (confirm(question)) changeProvider(window.api.removeProvider(p.id));
+  };
+}
 function serverCard(p: Provider) {
   const card = providerCard(p);
-  const remove = card.querySelector<HTMLElement>('.provider-head')!.appendChild(document.createElement('button'));
-  remove.type = 'button';
-  remove.className = 'ghost';
-  remove.textContent = 'Supprimer';
-  remove.onclick = () => confirm(`Supprimer ce serveur ? Ses conversations restent lisibles.`) && changeProvider(window.api.removeProvider(p.id));
+  removeButton(card.querySelector<HTMLElement>('.provider-head')!, p, 'Supprimer ce serveur', 'Supprimer ce serveur ? Ses conversations restent lisibles.');
   const update = (patch: Partial<Provider>) => changeProvider(window.api.updateProvider(p.id, patch));
   fieldIn(card, 'Nom', p.name, (name) => update({ name }), { placeholder: 'automatique' });
   const type = card.appendChild(document.createElement('label'));
@@ -636,11 +645,7 @@ function claudeCard(p: Provider) {
   const a = claude.accounts.find((x) => x.id === p.id);
   head.querySelector<HTMLElement>('.provider-name')!.textContent = a ? accountLabel(a) : p.name || 'Compte Claude';
   if (p.id !== 'claude') {
-    const remove = head.appendChild(document.createElement('button'));
-    remove.type = 'button';
-    remove.className = 'ghost';
-    remove.textContent = 'Supprimer';
-    remove.onclick = () => confirm('Supprimer ce compte Claude de Poney ? Il y est déconnecté, et ses conversations ne pourront plus continuer (elles restent lisibles).') && changeProvider(window.api.removeProvider(p.id));
+    removeButton(head, p, 'Supprimer ce compte', 'Supprimer ce compte Claude de Poney ? Il y est déconnecté, et ses conversations ne pourront plus continuer (elles restent lisibles).');
   }
   const state = card.appendChild(div('muted'));
   state.textContent = !claude.installed ? 'Claude n’est pas installé sur cette machine.'
@@ -1272,8 +1277,11 @@ async function submit() {
     await window.api.stop();
     return;
   }
-  const text = input.value.trim();
-  if (!text) return;
+  const typed = input.value.trim();
+  const files = attachedNow();
+  if (!typed && !files.length) return;
+  // (the files attached: named at the end of the message, by the path the agent reads)
+  const text = files.length ? `${typed}${typed ? '\n\n' : ''}Fichiers joints :\n${files.map((f) => `- \`${f.ref}\``).join('\n')}` : typed;
   if (!activeDir()) {
     settings = await window.api.chooseWorkspace();
     renderSettings();
@@ -1292,11 +1300,59 @@ async function submit() {
     return;
   }
   setInput('');
-  // Not sent: the text goes back into the box (unless something new was typed).
+  const p = pane;
+  attachments.delete(p);
+  renderAttachments();
+  // Not sent: the text and the files go back into the box (unless something new was typed).
   if (!(await sendMessage(text)) && !input.value) {
-    setInput(text);
+    setInput(typed);
     noteDraft();
+    if (files.length) attachments.set(p, { session: sessionOf(p), items: files });
+    inPane(p, renderAttachments);
   }
+}
+
+// ---------- files attached to the next message ----------
+// Each pane its own, for its conversation (another conversation in the pane: they are dropped).
+const attachments = new Map<Pane, { session: string | null; items: Attached[] }>();
+function attachedNow(): Attached[] {
+  const a = attachments.get(pane);
+  if (a && a.session && a.session !== sessionOf(pane)) attachments.delete(pane);
+  return attachments.get(pane)?.items ?? [];
+}
+function renderAttachments() {
+  const list = $('attachList');
+  const items = attachedNow();
+  list.classList.toggle('hidden', !items.length);
+  list.innerHTML = '';
+  for (const f of items) {
+    const chip = list.appendChild(div('attach-chip'));
+    chip.title = f.ref;
+    chip.appendChild(document.createElement('span')).className = 'attach-name';
+    chip.querySelector<HTMLElement>('.attach-name')!.textContent = f.name;
+    const remove = chip.appendChild(document.createElement('button'));
+    remove.type = 'button';
+    remove.textContent = '✕';
+    remove.setAttribute('aria-label', `Retirer ${f.name}`);
+    const p = pane;
+    remove.onclick = () => {
+      const a = attachments.get(p);
+      if (a) a.items = a.items.filter((x) => x !== f);
+      inPane(p, renderAttachments);
+    };
+  }
+}
+/** Files attached in a pane: added to its list, once each. */
+async function attach(p: Pane, ask: () => Promise<Attached[]>) {
+  let got: Attached[];
+  try { got = await inPane(p, ask); } catch (e) { return alert(errorText(e)); }
+  if (!got.length) return;
+  inPane(p, () => {
+    const items = attachedNow().filter((x) => !got.some((g) => g.ref === x.ref));
+    attachments.set(p, { session: sessionOf(p), items: [...items, ...got] });
+    renderAttachments();
+    input.focus();
+  });
 }
 
 async function sendMessage(text: string) {
@@ -2880,9 +2936,12 @@ $<HTMLButtonElement>('projectDelete').onclick = async () => {
 const tip = document.body.appendChild(document.createElement('div'));
 tip.className = 'tip';
 tip.setAttribute('role', 'tooltip');
+tip.popover = 'manual'; // (in the top layer: above an open dialog, as the settings)
 let tipFor: HTMLElement | null = null;
 function showTip(el: HTMLElement) {
   tip.textContent = el.dataset.tip ?? '';
+  if (tip.matches(':popover-open')) tip.hidePopover();
+  tip.showPopover(); // (again: above the last dialog opened)
   const side = 'tipSide' in el.dataset;
   tip.classList.toggle('side', side);
   tip.classList.add('show');
@@ -4080,6 +4139,26 @@ async function renderDir(rel: string, ul: HTMLElement) {
         }
         node.querySelector<HTMLElement>('.caret')!.textContent = expanded.has(e.path) ? '▾' : '▸';
       };
+      if (!e.scratch) {
+        node.draggable = true; // (into another folder of the tree)
+        node.addEventListener('dragstart', (ev) => {
+          draggedEntry = e.path;
+          ev.dataTransfer?.setData('text/plain', e.path);
+        });
+        node.addEventListener('dragend', () => { draggedEntry = null; markDrop(null, false); });
+      }
+      if (!e.scratch) node.addEventListener('contextmenu', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation(); // (not the sidebar's menu)
+        showContextMenu(ev.clientX, ev.clientY, esc(e.name), [
+          { glyph: 'newFolder', label: 'Nouveau dossier', run: () => newFolderIn(e.path) },
+          '-',
+          { glyph: 'rename', label: 'Renommer…', run: () => startFileRename(node.querySelector<HTMLElement>('.name')!, e.path, null) },
+          { glyph: 'reveal', label: `Afficher dans ${FILE_MANAGER}`, run: () => window.api.revealFile(e.path) },
+          '-',
+          { glyph: 'trash', label: 'Mettre à la corbeille', danger: true, run: () => trashFile(e.path) },
+        ]);
+      });
     } else {
       node.onclick = () => openFile(e.path);
       node.addEventListener('auxclick', (ev) => { if (ev.button === 1) openFile(e.path, { tab: true }); });
@@ -4100,15 +4179,35 @@ async function renderDir(rel: string, ul: HTMLElement) {
       // (dropped on a pane of the conversations: the file opens over it)
       node.draggable = true;
       node.addEventListener('dragstart', (ev) => {
-        draggedFile = e.path;
+        draggedFile = draggedEntry = e.path;
         ev.dataTransfer?.setData('text/plain', e.path);
       });
-      node.addEventListener('dragend', () => { draggedFile = null; showDropZone(null); });
+      node.addEventListener('dragend', () => { draggedFile = draggedEntry = null; showDropZone(null); markDrop(null, false); });
     }
     ul.appendChild(li);
   }
   if (!entries.length && rel === '.') ul.innerHTML = '<li class="node muted">Dossier vide</li>';
 }
+
+/** A new folder in a folder of the tree, shown and named at once. */
+async function newFolderIn(dir: string) {
+  let rel: string;
+  try { rel = await window.api.makeFolder(dir); } catch (e) { return alert(errorText(e)); }
+  if (dir !== '.') expanded.add(dir);
+  await refreshTree();
+  const name = $('fileTree').querySelector<HTMLElement>(`.node[data-path="${CSS.escape(rel)}"] .name`);
+  if (name) startFileRename(name, rel, null);
+}
+// The panel's own menu, outside its files: the project's folder.
+$('filesPane').addEventListener('contextmenu', (ev) => {
+  ev.preventDefault();
+  ev.stopPropagation(); // (not the sidebar's menu)
+  if (!viewDir()) return;
+  showContextMenu(ev.clientX, ev.clientY, null, [
+    { glyph: 'newFolder', label: 'Nouveau dossier', run: () => newFolderIn('.') },
+    { glyph: 'reveal', label: `Ouvrir le dossier ${viewOff() ? 'de la conversation' : 'du projet'} dans ${FILE_MANAGER}`, run: () => window.api.openFileExternal('.') },
+  ]);
+});
 
 // ---------- dropped on the files panel: into the project ----------
 // An image of an answer is copied there, files of the Finder are moved there: into the folder
@@ -4128,14 +4227,55 @@ function markDrop(node: HTMLElement | null, on: boolean) {
   filesPane.classList.toggle('drop-root', on && !node);
   if (on && node) node.classList.add('drop-target');
 }
+let draggedEntry: string | null = null; // a file or folder of the tree dragged: moved into another folder
+const parentOf = (rel: string) => (rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '.');
+/** Where a file of the tree can go: not where it is, nor into itself. */
+const movesTo = (entry: string, dir: string) => dir !== parentOf(entry) && dir !== entry && !dir.startsWith(`${entry}/`);
 filesPane.addEventListener('dragover', (e) => {
-  if (!viewDir() || (!draggedImage && !fromFinder(e))) return;
+  if (!viewDir()) return;
+  if (draggedEntry) {
+    const { node, dir } = dropFolder(e);
+    if (!movesTo(draggedEntry, dir)) return markDrop(null, false);
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+    return markDrop(node, true);
+  }
+  if (!draggedImage && !fromFinder(e)) return;
   e.preventDefault();
   if (e.dataTransfer) e.dataTransfer.dropEffect = draggedImage ? 'copy' : 'move';
   markDrop(dropFolder(e).node, true);
 });
+/** A file or folder of the tree moved into another folder: its open tabs follow it. */
+async function moveEntry(entry: string, dir: string) {
+  if (await window.api.projectBusy().catch(() => false)
+    && !confirm(`${BUSY} : déplacer « ${entry.split('/').pop()} » peut gêner son travail. Déplacer quand même ?`)) return;
+  try {
+    const [to] = await window.api.moveFiles([entry], dir);
+    if (!to) return;
+    const moved = (p: string) => (p === entry ? to : p.startsWith(`${entry}/`) ? to + p.slice(entry.length) : p);
+    for (const t of viewerTabs) t.path = moved(t.path);
+    if (openPath && moved(openPath) !== openPath) {
+      openPath = moved(openPath);
+      openFile(openPath, { keepScroll: true });
+    }
+    if (dir !== '.') expanded.add(dir);
+    renderTabs();
+    await refreshTree();
+  } catch (err) {
+    alert(errorText(err));
+  }
+}
 filesPane.addEventListener('dragleave', (e) => { if (!(e.relatedTarget instanceof Node && filesPane.contains(e.relatedTarget))) markDrop(null, false); });
 filesPane.addEventListener('drop', async (e) => {
+  if (viewDir() && draggedEntry) {
+    const entry = draggedEntry;
+    draggedEntry = draggedFile = null;
+    const { dir } = dropFolder(e);
+    markDrop(null, false);
+    if (!movesTo(entry, dir)) return;
+    e.preventDefault();
+    return moveEntry(entry, dir);
+  }
   if (!viewDir() || (!draggedImage && !fromFinder(e))) return;
   e.preventDefault();
   markDrop(null, false);
@@ -5148,6 +5288,15 @@ function renderGauge(c: ContextStats | null | undefined, g: HTMLElement = $('ctx
     g.title = '';
     return;
   }
+  if (c.agy) {
+    // (agy says what the last call used, not the window: no bar, and it compacts by itself)
+    g.querySelector<HTMLElement>('.gauge-fill')!.style.width = '0';
+    g.querySelector<HTMLElement>('.gauge-mark')!.style.left = '100%';
+    g.classList.remove('warn', 'full');
+    if (g.querySelector<HTMLElement>('.gauge-text')) g.querySelector<HTMLElement>('.gauge-text')!.textContent = `${fmtTokens(c.used ?? 0)} tokens`;
+    g.title = `Contexte utilisé : ${c.used ?? 0} tokens\nAntigravity ne donne pas la taille de la fenêtre du modèle, et compacte la conversation lui-même.`;
+    return;
+  }
   const { used = 0, numCtx = 0, compactAt = 0, limit = 0, settingCtx = 0 } = c;
   const pct = Math.min(100, (used / numCtx) * 100);
   g.querySelector<HTMLElement>('.gauge-fill')!.style.width = `${pct}%`;
@@ -5176,8 +5325,24 @@ const resetDate = (iso: string | number) => {
   const d = new Date(iso);
   return `${d.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })} à ${d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`;
 };
+const usesAgy = () => choice().engine === 'antigravity';
+/** With an Antigravity model: its group's quota, the 5-hour one (the weekly one when it is what limits). */
+async function refreshAgyUsage(g: HTMLElement) {
+  const usage = await window.api.antigravityUsage().catch(() => null);
+  const shown = usage?.fiveHour && !usage.fiveHour.disabled && (usage.weekly?.remaining ?? 1) > 0 ? { limit: usage.fiveHour, name: 'session' } : usage?.weekly ? { limit: usage.weekly, name: 'semaine' } : null;
+  g.classList.toggle('hidden', !usage || !shown || !usesAgy());
+  if (!usage || !shown) return;
+  const used = Math.round((1 - shown.limit.remaining) * 100);
+  g.querySelector<HTMLElement>('.gauge-fill')!.style.width = `${Math.min(100, used)}%`;
+  g.classList.toggle('warn', used >= 80);
+  g.classList.toggle('full', used >= 100);
+  g.querySelector<HTMLElement>('.gauge-text')!.textContent = `${shown.name} ${used} %`;
+  const line = (name: string, l: typeof shown.limit | null) => (!l ? '' : l.disabled ? `${name} : sans objet pour l’instant` : `${name} : ${Math.round((1 - l.remaining) * 100)} % utilisés${l.resetsAt ? `, remise à zéro le ${resetDate(l.resetsAt)}` : ''}`);
+  g.dataset.tip = [`Quota Antigravity (${usage.group})`, line('Limite de 5 heures', usage.fiveHour), line('Limite de la semaine', usage.weekly)].filter(Boolean).join('\n');
+}
 async function refreshUsage() {
   const g = $('usageGauge');
+  if (usesAgy()) return refreshAgyUsage(g);
   const claude = usesClaude();
   const usage = claude ? await window.api.claudeUsage().catch(() => null) : null;
   g.classList.toggle('hidden', !usage || !claude);
@@ -5193,6 +5358,7 @@ setInterval(() => forPanes(refreshUsage), 5 * 60 * 1000);
 
 async function refreshGauge() {
   refreshUsage();
+  renderAttachments(); // (another conversation in the pane: not its files)
   const g = $('ctxGauge'); // (of this pane, whichever is worked in when the figures come)
   try {
     renderGauge(await window.api.getContext(), g);
@@ -5244,6 +5410,29 @@ function bindPane(p: Pane) {
   input.addEventListener('input', noteDraft);
 
   sendBtn.onclick = submit;
+  $<HTMLButtonElement>('attachBtn').onclick = () => attach(p, () => window.api.attachPick());
+  // Dropped on the input: files of the Finder, or of the files panel.
+  const box = p.root.querySelector<HTMLElement>('.composer-box')!;
+  const attachable = (e: DragEvent) => Boolean(draggedEntry) || (Boolean(e.dataTransfer?.types.includes('Files')) && !draggedFile && !draggedImage);
+  box.addEventListener('dragover', (e) => {
+    if (!attachable(e)) return;
+    e.preventDefault();
+    e.stopPropagation(); // (not the chat's: a file of the panel would open over it)
+    showDropZone(null);
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+    box.classList.add('drop-attach');
+  });
+  box.addEventListener('dragleave', (e) => { if (!(e.relatedTarget instanceof Node && box.contains(e.relatedTarget))) box.classList.remove('drop-attach'); });
+  box.addEventListener('drop', (e) => {
+    box.classList.remove('drop-attach');
+    if (!attachable(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const entry = draggedEntry;
+    draggedEntry = draggedFile = null;
+    const paths = entry ? [] : [...(e.dataTransfer?.files ?? [])].map((f) => window.api.pathOf(f)).filter(Boolean);
+    void attach(p, () => window.api.attachFiles(paths, entry ? [entry] : []));
+  });
   input.addEventListener('keydown', (e) => {
     if (skillKey(e)) return;
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {

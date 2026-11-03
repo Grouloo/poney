@@ -288,6 +288,7 @@ export class ClaudeAgent extends EventEmitter<{ event: [AgentEvent] }> {
   accountDirs: string[];
   approve: Approve;
   skillsDir: string | null;
+  attachDir: string | null; // the conversation's private folder, where attached files are copied
   runQuery: ClaudeRun | null;
   choice: Choice;
   sessionId: string | null;
@@ -309,7 +310,7 @@ export class ClaudeAgent extends EventEmitter<{ event: [AgentEvent] }> {
   checkpoints: Checkpoint[];
   archives: (Message[] | null)[];
 
-  constructor({ cwd, executable, configDir = null, approve, skillsDir = null, query = null }: { cwd: string; executable: string | null; configDir?: string | null; approve: Approve; skillsDir?: string | null; query?: ClaudeRun | null }) {
+  constructor({ cwd, executable, configDir = null, approve, skillsDir = null, query = null, attachDir = null }: { cwd: string; executable: string | null; configDir?: string | null; approve: Approve; skillsDir?: string | null; query?: ClaudeRun | null; attachDir?: string | null }) {
     super();
     this.cwd = cwd;
     this.executable = executable;
@@ -317,6 +318,7 @@ export class ClaudeAgent extends EventEmitter<{ event: [AgentEvent] }> {
     this.accountDirs = []; // every account's folder: where its session may have been written last
     this.approve = approve;
     this.skillsDir = skillsDir;
+    this.attachDir = attachDir;
     this.runQuery = query;
     this.choice = {};
     this.sessionId = null; // the Claude session, resumed at each message
@@ -372,6 +374,8 @@ export class ClaudeAgent extends EventEmitter<{ event: [AgentEvent] }> {
       }
       const options: Options = {
           cwd: this.cwd,
+          // (the files attached to the conversation, copied into its private folder)
+          ...(this.attachDir && fs.existsSync(this.attachDir) ? { additionalDirectories: [this.attachDir] } : {}),
           model: this.choice.model ?? undefined,
           effort: this.choice.effort,
           thinking: { type: 'adaptive', display: 'summarized' }, // (by default, the reasoning arrives empty)

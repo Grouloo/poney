@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { Agent, DEFAULT_CONFIG } from './agent/agent.ts';
 import { loadSkills, skillDirs } from './agent/skills.ts';
 import { askStarted, draftTip } from './agent/ask.ts';
-import { AntigravityAgent, agyModels, findAgy } from './agent/antigravity.ts';
+import { AntigravityAgent, agyModels, agyUsage, findAgy, type AgyUsage } from './agent/antigravity.ts';
 import { ClaudeAgent, findClaude, claudeAuth, claudeEnv, machineClaudeDir, claudeLogin, claudeModels, claudeUsage, linkUserSettings } from './agent/claude.ts';
 import { listModels, lmStudioModels, setInferenceService } from './agent/llm.ts';
 import { ModelEngine } from './engine/engine.ts';
@@ -17,7 +17,7 @@ import type { LocalModel } from './types.ts';
 import { addClaudeAccount, addServer, CLAUDE, claudeAccountOf, loadProviders, modelConfig, providerOf, removeProvider, savedConfig, unavailable, updateProvider } from './providers.ts';
 import { ConversationStore, moveAppData } from './conversations.ts';
 import { isGithub, tokenUrl } from './remote-url.ts';
-import { appsToOpen, bringInto, imagePath, listDir, openWith, readFileForViewer, readImage, type OpeningApp } from './files.ts';
+import { appsToOpen, bringInto, freeName, imagePath, listDir, openWith, readFileForViewer, readImage, type OpeningApp } from './files.ts';
 import { resolveInside } from './agent/tools.ts';
 import { credentialEnv, gitClone, type RemoteToken, gitFileStates, gitBranches, gitSwitch, gitCreateBranch, createGithubRepo, findGh, GITHUB_TOKEN_PAGE, gitChangeRemote, githubAccount, gitStatus, gitConnect, gitDiff, gitFetch, gitRemote, gitRemoveRemote, gitSync, readyGh } from './git.ts';
 import { migrateLegacy, rebuildHistory, rebuildForAction } from './agent/rebuild.ts';
@@ -231,8 +231,8 @@ class Session {
         else alertUser(this, 'approval', `Autorisation demandée${req.agentTitle ? ` (${req.agentTitle})` : ''} : ${req.command ?? req.tool}`);
       });
       const onEvent = (ev: AgentEvent) => this.onEvent(ev);
-      if (harness === 'antigravity') this.agent = new AntigravityAgent({ cwd: this.cwd, executable: findAgy(), skillsDir: userSkills() }).on('event', onEvent);
-      else if (harness === 'claude') this.agent = new ClaudeAgent({ cwd: this.cwd, executable: findClaude(), configDir: claudeDirOf(claudeAccountOf(this.choice)), approve, skillsDir: userSkills() }).on('event', onEvent);
+      if (harness === 'antigravity') this.agent = new AntigravityAgent({ cwd: this.cwd, executable: findAgy(), skillsDir: userSkills(), attachDir: scratchOf(this.key) }).on('event', onEvent);
+      else if (harness === 'claude') this.agent = new ClaudeAgent({ cwd: this.cwd, executable: findClaude(), configDir: claudeDirOf(claudeAccountOf(this.choice)), approve, skillsDir: userSkills(), attachDir: scratchOf(this.key) }).on('event', onEvent);
       else {
         this.agent = new Agent({
           cwd: this.cwd,
@@ -337,7 +337,10 @@ class Session {
       conv.claudeSession = agent.sessionId;
       conv.claudeContext = agent.context;
     }
-    if (agent?.harness === 'antigravity') conv.agySession = agent.sessionId;
+    if (agent?.harness === 'antigravity') {
+      conv.agySession = agent.sessionId;
+      conv.agyContext = agent.context;
+    }
     if (this.draft.trim()) conv.draft = this.draft;
     else delete conv.draft;
     if (this.askDraft) conv.askDraft = this.askDraft;
@@ -512,7 +515,7 @@ const activeCwd = () => active?.cwd ?? settings.workspace;
 let observed: string | null = null;
 const viewCwd = () => observed ?? activeCwd();
 /** The private folder shown with the files: the conversation's, local models only. */
-const viewScratch = () => (!observed && active && (active.choice.engine ?? 'local') === 'local' ? scratchOf(active.key) : null);
+const viewScratch = () => (!observed && active ? scratchOf(active.key) : null); // (any model's: files attached go there)
 /** The active session, a new one in the current project if there is none. */
 const current = () => active ?? activate(new Session({ cwd: settings.workspace }));
 const saveAll = () => { for (const s of sessions.values()) s.keepDraft(); };
@@ -950,6 +953,19 @@ handle('claude:usage', [], async () => {
   claudeUsageInfo.set(id, { at: Date.now(), usage });
   return usage;
 });
+// Antigravity's quota for the conversation's model group, by agy's read-only /usage (at most once a minute).
+const agyUsageInfo = new Map<string, { at: number; usage: AgyUsage | null }>();
+handle('antigravity:usage', [], async () => {
+  const executable = findAgy();
+  const choice = current().choice;
+  if (!executable || choice.engine !== 'antigravity') return null;
+  const model = choice.model ?? (await agyInfo)?.models[0]?.value ?? 'gemini';
+  const known = agyUsageInfo.get(model);
+  if (known && Date.now() - known.at < 60000) return known.usage;
+  const usage = await agyUsage(executable, model).catch((e) => { logError('antigravity usage', e); return null; });
+  agyUsageInfo.set(model, { at: Date.now(), usage });
+  return usage;
+});
 // Another account: its folder takes the user's settings; it logs in next.
 handle('claude:addAccount', [], () => {
   const added = addClaudeAccount(settings.providers);
@@ -1041,7 +1057,10 @@ handle('conversations:open', [isString], (id) => {
     a.sessionId = loaded.claudeSession ?? null;
     a.context = loaded.claudeContext ?? null;
   }
-  if (a.harness === 'antigravity') a.sessionId = loaded.agySession ?? null;
+  if (a.harness === 'antigravity') {
+    a.sessionId = loaded.agySession ?? null;
+    a.context = loaded.agyContext ?? null;
+  }
   a.upgradeReasoning(); // older reasoning blocks -> short notes
   if (loaded.inProgress) {
     // The app stopped during a turn (crash, forced quit): say so, and how to go on.
@@ -1268,6 +1287,39 @@ handle('files:moveInto', [isStringArray, isString], async (paths, rel) => {
   const dir = intoFolder(rel);
   return (await bringInto(paths.filter((p) => path.isAbsolute(p)), dir.abs, { move: true })).map((n) => joinRel(dir.rel, n));
 });
+// Files of the tree moved into another of its folders (a name taken gets a number).
+handle('files:move', [isStringArray, isString], async (rels, rel) => {
+  const dir = intoFolder(rel);
+  return (await bringInto(rels.map((r) => resolveInside(viewCwd(), r, viewScratch()).abs), dir.abs, { move: true })).map((n) => joinRel(dir.rel, n));
+});
+// Files attached to the message: from the Finder, copied into the conversation's private folder (the
+// original can move or change, the copy stays); from the project or that folder, named where they are.
+// What the agent reads: a path in the project, `.poney/…` for Poney's models, else the absolute path.
+const attachFiles = async (paths: string[], rels: string[]) => {
+  const s = current();
+  const scratch = scratchOf(s.key);
+  const local = (s.choice.engine ?? 'local') === 'local';
+  const under = (dir: string, abs: string) => { const r = path.relative(dir, abs); return r && !r.startsWith('..') && !path.isAbsolute(r) ? r : null; };
+  const ref = (abs: string) => {
+    const inScratch = under(scratch, abs);
+    if (inScratch !== null) return local ? `.poney/${inScratch.split(path.sep).join('/')}` : abs;
+    return s.cwd ? under(s.cwd, abs)?.split(path.sep).join('/') ?? abs : abs;
+  };
+  const named = (abs: string) => ({ name: path.basename(abs), ref: ref(abs) });
+  const inside = paths.filter((p) => path.isAbsolute(p) && s.cwd && under(s.cwd, p) !== null);
+  const outside = paths.filter((p) => path.isAbsolute(p) && !inside.includes(p));
+  const out = [...inside.map(named), ...rels.map((r) => named(resolveInside(viewCwd(), r, viewScratch()).abs))];
+  if (outside.length) {
+    await fs.promises.mkdir(scratch, { recursive: true });
+    out.push(...(await bringInto(outside, scratch)).map((n) => named(path.join(scratch, n))));
+  }
+  return out;
+};
+handle('files:attach', [isStringArray, isStringArray], attachFiles);
+handle('files:attachPick', [], async () => {
+  const r = await pickFrom({ title: 'Joindre des fichiers', properties: ['openFile', 'multiSelections'] });
+  return r.canceled ? [] : attachFiles(r.filePaths, []);
+});
 handle('files:openExternal', [isString], (rel) => shell.openPath(resolveInside(viewCwd(), rel, viewScratch()).abs));
 handle('files:reveal', [isString], (rel) => shell.showItemInFolder(resolveInside(viewCwd(), rel, viewScratch()).abs));
 // A file renamed in its folder, or put in the trash; busy: an agent works in the project meanwhile.
@@ -1281,6 +1333,13 @@ handle('files:rename', [isString, isString], async (rel, name) => {
   if (fs.existsSync(to.abs) && to.abs.toLowerCase() !== from.abs.toLowerCase()) throw new Error(`« ${clean} » existe déjà dans ce dossier.`);
   await fs.promises.rename(from.abs, to.abs);
   return to.rel;
+});
+// A new folder in a folder of the project, under a free name: the renderer has it renamed next.
+handle('files:mkdir', [isString], async (rel) => {
+  const dir = intoFolder(rel);
+  const name = await freeName(dir.abs, 'Nouveau dossier');
+  await fs.promises.mkdir(path.join(dir.abs, name));
+  return joinRel(dir.rel, name);
 });
 handle('files:trash', [isString], (rel) => shell.trashItem(resolveInside(viewCwd(), rel, viewScratch()).abs));
 handle('app:desktop', [], () => app.getPath('desktop'));

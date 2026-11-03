@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { AntigravityAgent, agyError, agyModels, parseModels, toolView } from '../src/agent/antigravity.ts';
+import { AntigravityAgent, agyError, agyModels, agyUsage, parseModels, parseUsage, toolView } from '../src/agent/antigravity.ts';
 import { readImage } from '../src/files.ts';
 import { parseJson, isStringArray } from '../src/unknown.ts';
 import type { AgentEvent, EventOf } from '../src/types.ts';
@@ -114,6 +114,49 @@ test('a turn as agy 1.4.12 prints it', async () => {
   assert.deepEqual(of(events, 'final').map((e) => e.text), ['OK\n']);
   assert.equal(of(events, 'turn_end')[0].stats?.tokens, 1);
   assert.equal(agent.sessionId, 'ad26b583');
+  // The context gauge: what the last call used (agy says no window).
+  assert.deepEqual(of(events, 'context').at(-1), { type: 'context', used: 6857, agy: true });
+  assert.deepEqual(agent.contextStats(), { type: 'context', used: 6857, agy: true });
+});
+
+test('the files attached: agy may read the conversation\'s private folder, once it exists', async () => {
+  const { dir, agent, script, args } = await fakeAgy();
+  const attachDir = path.join(dir, 'private');
+  agent.attachDir = attachDir;
+  await script({ stdout: [result({ conversation_id: 'c1', status: 'SUCCESS', response: 'ok' })] });
+  await agent.send('a');
+  assert.ok(!(await args()).includes('--add-dir'));
+  await fs.mkdir(attachDir);
+  await agent.send('b');
+  const a = await args();
+  assert.equal(a[a.indexOf('--add-dir') + 1], attachDir);
+});
+
+test('the quota left, by agy\'s /usage: the group of the model', async () => {
+  // (as agy 1.4.12 prints it, descriptions cut)
+  const out = JSON.stringify({ conversation_id: '', status: 'SUCCESS', response: '…', command: { name: 'usage', data: { groups: [
+    { name: 'Gemini Models', description: 'Models within this group: Gemini Flash, Gemini Pro', buckets: [
+      { id: 'gemini-weekly', window: 'weekly', remaining_fraction: 0.9654, reset_time: '2026-11-09T07:16:12Z' },
+      { id: 'gemini-5h', window: '5h', remaining_fraction: 0.9853, reset_time: '2026-11-04T01:47:02Z' },
+    ] },
+    { name: 'Claude and GPT models', description: 'Models within this group: Claude Opus, Claude Sonnet, GPT-OSS', buckets: [
+      { id: '3p-weekly', window: 'weekly', remaining_fraction: 0, reset_time: '2026-11-07T16:15:38Z' },
+      { id: '3p-5h', window: '5h', disabled: true, remaining_fraction: 1 },
+    ] },
+  ] } } });
+  assert.deepEqual(parseUsage(out, 'gemini-4-argon-low'), {
+    group: 'Gemini Models',
+    fiveHour: { remaining: 0.9853, resetsAt: '2026-11-04T01:47:02Z', disabled: false },
+    weekly: { remaining: 0.9654, resetsAt: '2026-11-09T07:16:12Z', disabled: false },
+  });
+  assert.deepEqual(parseUsage(out, 'gpt-oss-120b-medium')?.fiveHour, { remaining: 1, resetsAt: null, disabled: true });
+  assert.equal(parseUsage(out, 'gpt-oss-120b-medium')?.weekly?.remaining, 0);
+  assert.equal(parseUsage(out, 'mistral-large'), null);
+  assert.equal(parseUsage('not json', 'gemini'), null);
+  let called: string[] = [];
+  const usage = await agyUsage('agy', 'gemini-3.8-flash-low', (_file, a, _o, done) => { called = a; done(null, out, ''); });
+  assert.deepEqual(called, ['-p', '/usage', '--output-format', 'json']);
+  assert.equal(usage?.group, 'Gemini Models');
 });
 
 test('the reasoning and the sub-agents\' steps come from agy\'s logs', async () => {
