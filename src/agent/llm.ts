@@ -296,7 +296,8 @@ async function* streamEngine(opts: ChatOptions & { lease: Lease }): AsyncGenerat
       signal: opts.signal,
     });
     await checkResponse(res);
-    yield* streamRaw({ ...opts, prompt: str(rec(await res.json()).prompt), extra });
+    // (llama-server constrains raw completions too: the JSON schema stands, without the reasoning)
+    yield* streamRaw({ ...opts, prompt: str(rec(await res.json()).prompt), extra: { ...extra, ...(jsonSchema ? { json_schema: jsonSchema } : {}) } });
     return;
   }
   yield* streamHTTP({ ...opts, provider: 'openai', tools: toolSchemas?.length ? toolSchemas : undefined, extra });

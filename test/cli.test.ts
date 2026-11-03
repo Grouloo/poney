@@ -189,6 +189,9 @@ test('a Gemma model on the service takes the path of the app: its template, then
   assert.ok(f.calls.some((c) => c.url === '/apply-template'));
   assert.ok(f.calls.some((c) => c.url === '/v1/completions' && c.body.cache_prompt === true && c.body.model === 'test-model'));
   assert.ok(!f.calls.some((c) => c.url === '/v1/chat/completions'));
+  // The assessment, without reasoning, still constrained to its JSON.
+  assert.ok(f.calls.some((c) => c.url === '/v1/completions' && c.body.prompt?.endsWith('<|channel>thought<channel|>') && c.body.json_schema));
+  assert.ok(f.calls.some((c) => c.url === '/v1/completions' && !c.body.json_schema));
   assert.ok(f.calls.every((c) => c.auth === `Bearer ${e.key}`));
   const out = (r.events().find((ev) => ev.type === 'action_end'))!.output;
   assert.match(out, /PONEY_DATA/); // (it is the environment)
