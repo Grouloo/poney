@@ -5,7 +5,8 @@ import path from 'node:path';
 import os from 'node:os';
 import { streamChat, complete, serverContextLength } from './llm.ts';
 import { callOrigins, calledAs, liveAction, partialEditPairs, TOOLS, buildSystemPrompt, parseActions, splitThinking, formatResult, isToolEnabled, withReasoning, findRepetition, normalizeToolCalls, stripReasoning, legacyReasoningToNotes, stripChannelMarkers, toolSchemas, answerInReasoning } from './protocol.ts';
-import { executeAction, runShell, truncateMiddle, checkOldBlock, type SharedFiles } from './tools.ts';
+import { executeAction, runShell, truncateMiddle, checkOldBlock, resolveInside, type SharedFiles } from './tools.ts';
+import { changesNote, citedLines, projectSnapshot, type Snapshot } from './hints.ts';
 import { KEEP_SCHEMA, addProjectNote, fileTask, keepInstruction, messageStart, noteHeadings, parseKeep } from './keep.ts';
 import { remember, forget, memoryBlock, standingInstructions, instructionNote, replacedAutoNote } from './memory.ts';
 import { loadSkills, skillDirs, mentionedSkills, matchingSkills, skillBlock, type Skill } from './skills.ts';
@@ -21,7 +22,7 @@ import {
   buildSummaryMessage, calibrate, SUMMARY_MARKER, filesInContext, splitChapter, chapterDates, capChapters,
 } from './context.ts';
 import { errorMessage, errorName, isRecord, list, rec, str } from '../unknown.ts';
-import type { Action, AgentEvent, Approve, Checkpoint, Config, ContextStats, EventOf, GenerationStats, Message, Plan, ResumeState, RebuiltAction, Steps, StreamChat, Triage, TurnStats, Usage } from '../types.ts';
+import type { Action, AgentEvent, Approve, Checkpoint, Config, ContextStats, EventOf, GenerationStats, Message, Plan, ResumeState, RebuiltAction, Steps, StreamChat, Triage, TurnStats, Usage, Viewing } from '../types.ts';
 
 type SubTurnEvent = EventOf<'turn_start' | 'turn_end'>;
 
@@ -73,6 +74,20 @@ export const DEFAULT_CONFIG: Config = {
 };
 
 const PROJECT_NOTE_FILES = ['AGENTS.md', 'PONEY.md', 'LOCAL_CODEX.md', 'CLAUDE.md'];
+
+// Actions that only look (their result does not change while nothing changes), so not run
+// twice while their result is still in view: a read while its file is unchanged, the others
+// within the same message and while no action may have changed the files.
+const REUSABLE = new Set(['read', 'list', 'search', 'web_search', 'fetch']);
+interface DoneAction {
+  at: number; // index of the message that holds its result
+  marker: string; // the start of that result (gone after a compaction or a rewind: run again)
+  step: number;
+  turn: number;
+  mutations: number;
+  mtime: number | null; // (a read: its file's)
+}
+const actionKey = (a: Action) => JSON.stringify([a.tool, { ...a.args, ...(a.args.path !== undefined ? { path: path.posix.normalize(String(a.args.path).trim().replace(/\\/g, '/')).replace(/\/$/, '') } : {}) }]);
 /**
  * Timing of one generation. Uses the server's counts and durations when it
  * reports them (not the case when we stop the stream early), else estimates.
@@ -166,6 +181,14 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
   shared: SharedFiles;
   subWork: Map<number, string[]>;
   readVersions: Map<string, number>;
+  /** The project as the last answer left it: what changed without the agent is said with the next message. */
+  snapshot: Snapshot | null;
+  /** The file of the viewer last mentioned to the model (not repeated while it stays open). */
+  lastViewed: string | null;
+  /** Actions whose result is still in view, to not run them twice for nothing (see reusedResult). */
+  doneActions: Map<string, DoneAction>;
+  turnSeq: number;
+  mutations: number;
   messages: Message[];
   untested: boolean;
   taskPlan: Plan | null;
@@ -211,6 +234,11 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
     this.shared = shared || { versions: new Map(), locks: new Map() };
     this.subWork = new Map(); // sub-agent id -> what it changed (see runSubAgent)
     this.readVersions = new Map(); // file -> version this agent last read or wrote
+    this.snapshot = null;
+    this.lastViewed = null;
+    this.doneActions = new Map();
+    this.turnSeq = 0;
+    this.mutations = 0; // actions that may have changed files (writes, commands, sub-agents)
     this.messages = [];
     this.untested = false; // files changed since the last successful command
     this.taskPlan = null; // the task list written with <plan> (see plan.ts)
@@ -645,6 +673,58 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
     if (!doc?.path || !doc.task) return null;
     const report = await this.runSubAgent({ tool: 'agent', args: { title: `Mise à jour de ${doc.path}`.slice(0, 60), task: fileTask(doc.path, doc.task) } }, signal, 1500, nextId++, { auto: true });
     return `${doc.path} (updated before this summary by a helper): ${truncateMiddle(report.replace(/<\/?result[^>]*>/g, '').replace(/\s+/g, ' ').trim(), 400)}`;
+  }
+
+  // ----- hints given with a message or a result (see hints.ts) -----
+
+  /** What the model cannot know with this message: files changed without it, the file the user looks at. */
+  async messageHints(viewing: Viewing | null): Promise<{ kind: 'changes' | 'viewing'; model: string; shown: string }[]> {
+    const out: { kind: 'changes' | 'viewing'; model: string; shown: string }[] = [];
+    if (this.role !== 'main' || this.offProject) return out;
+    if (this.snapshot) {
+      const now = await projectSnapshot(this.cwd).catch(() => null);
+      const note = now && changesNote(this.snapshot, now);
+      if (note) {
+        const n = note.files.length;
+        out.push({ kind: 'changes', model: note.text, shown: `Modifié hors de la conversation, signalé à l’agent : ${note.files.slice(0, 5).join(', ')}${n > 5 ? ` et ${n - 5} autre${n > 6 ? 's' : ''}` : ''}` });
+      }
+    }
+    if (!viewing?.path) { this.lastViewed = null; return out; }
+    const sel = viewing.selection?.text.trim() ? viewing.selection : null;
+    const lines = sel?.start ? `lines ${sel.start}-${sel.end ?? sel.start}` : '';
+    if (sel) {
+      const text = truncateMiddle(sel.text.trim(), 2000);
+      out.push({ kind: 'viewing', model: `(The user has ${viewing.path} open in the viewer, with ${lines || 'this text'} selected:\n${text}\n)`, shown: `Sélection transmise à l’agent : ${viewing.path}${sel.start ? `, lignes ${sel.start}-${sel.end ?? sel.start}` : ''}` });
+    } else if (viewing.path !== this.lastViewed) {
+      const v = viewing.visible;
+      out.push({ kind: 'viewing', model: `(The user has ${viewing.path} open in the viewer${v ? `, lines ${v[0]}-${v[1]} on screen` : ''}.)`, shown: `Fichier ouvert transmis à l’agent : ${viewing.path}${v ? `, lignes ${v[0]}-${v[1]}` : ''}` });
+    }
+    this.lastViewed = viewing.path;
+    return out;
+  }
+
+  /** The modification time of a file of the project (null if it cannot be read). */
+  async mtimeOf(file: unknown): Promise<number | null> {
+    try { return (await fs.stat(resolveInside(this.cwd, file, this.scratch).abs)).mtimeMs; } catch { return null; }
+  }
+
+  /**
+   * The result for an action already done whose result is still in view, when
+   * nothing it depends on changed: what to tell the model instead of running it
+   * again. Null: run it.
+   */
+  async reusedResult(action: Action): Promise<string | null> {
+    if (!REUSABLE.has(action.tool)) return null;
+    const done = this.doneActions.get(actionKey(action));
+    if (!done || !this.messages[done.at]?.content.includes(done.marker)) return null;
+    const when = done.turn === this.turnSeq ? `at step ${done.step + 1}` : 'earlier in this conversation';
+    if (action.tool === 'read') {
+      const mtime = await this.mtimeOf(action.args.path);
+      if (mtime === null || mtime !== done.mtime) return null;
+      return `You already read this ${when}, and the file has not changed since: its content is in that result, above. Do not read it again: go on with it.`;
+    }
+    if (done.turn !== this.turnSeq || done.mutations !== this.mutations) return null;
+    return `You already did exactly this ${when}, and nothing changed since: its result is above. Do not repeat it: use that result, or try something else.`;
   }
 
   /** Manual compaction, from the UI. */
@@ -1176,11 +1256,12 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
 
   // ----- main loop -----
 
-  async send(userText: string | null, { turnId, resume }: { turnId?: string; resume?: ResumeState } = {}): Promise<void> {
+  async send(userText: string | null, { turnId, resume, viewing }: { turnId?: string; resume?: ResumeState; viewing?: Viewing | null } = {}): Promise<void> {
     if (this.running) throw new Error('Agent is already running.');
     const request = userText ?? ''; // (no message when a turn is resumed)
     if (turnId && !resume) this.checkpoints.push({ turnId, archive: null, length: this.messages.length, untested: this.untested, plan: structuredClone(this.taskPlan), memory: [...this.memory], memoryShownAt: this.memoryShownAt, chapters: [...this.chapters] });
     this.running = true;
+    this.turnSeq++;
     this.abort = new AbortController();
     const { signal } = this.abort;
     const config = this.config;
@@ -1223,6 +1304,10 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
         }
       }
       let content = `${messageStamp(this.now?.() ?? new Date())} ${userText}`;
+      for (const h of await this.messageHints(viewing ?? null)) {
+        content += `\n\n${h.model}`;
+        this.emit('event', { type: 'hint', turnId, kind: h.kind, text: h.shown });
+      }
       // The memory is recalled with the message when its last full view is far back
       // (a third of the window): it stays in view without costing room at every message.
       // (-1: changed by the user since, to be shown again)
@@ -1451,10 +1536,12 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
             this.emit('event', { type: 'action_start', id: actId, tool: 'run', args: { command: config.testCommand }, auto: true });
             const r = await runShell(config.testCommand, { cwd: this.cwd, timeoutSec: Math.max(config.commandTimeout, 300), signal, onOutput: (t) => this.emit('event', { type: 'action_output', id: actId, text: t }) });
             const out = truncateMiddle(r.out.trim() || '(no output)', this.maxResultChars);
+            this.mutations++; // (a command may change files)
             this.emit('event', { type: 'action_end', id: actId, ok: r.code === 0, output: out, meta: { exit: r.code } });
             if (r.code !== 0 && testFailures < 3) {
               testFailures++;
-              this.messages.push({ role: 'user', content: `${formatResult('run', { command: config.testCommand, exit: r.code }, out)}\nThe project tests FAIL. The task is not finished: fix the code until this command passes.` });
+              const cited = await citedLines(this.cwd, out);
+              this.messages.push({ role: 'user', content: `${formatResult('run', { command: config.testCommand, exit: r.code }, cited ? `${out}\n${cited}` : out)}\nThe project tests FAIL. The task is not finished: fix the code until this command passes.` });
               continue;
             }
             if (r.code === 0) this.untested = false;
@@ -1532,6 +1619,7 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
             sourcesRead += this.subSources; // (what they read, for the route of the assessment)
             this.subSources = 0;
             changedThisTurn = true; // sub-agents may have changed files
+            this.mutations++;
           }
           toRun.length = 0;
         }
@@ -1628,8 +1716,16 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
             }
             sourcesRead += this.subSources;
             this.subSources = 0;
+            this.mutations++; // (its sub-agents may have changed files)
             this.emit('event', { type: 'action_end', id: actId, ok: out.ok, output: out.text, meta: { tasks: this.taskPlan?.tasks.length ?? 0 } });
             results.push(out.result);
+            continue;
+          }
+          // Already done, its result still in view and nothing changed: not run again.
+          const reused = await this.reusedResult(action);
+          if (reused) {
+            this.emit('event', { type: 'action_end', id: actId, ok: true, output: 'Déjà fait, et rien n’a changé depuis : l’agent reprend le résultat plus haut.', meta: { reused: true } });
+            results.push(formatResult(action.tool, { path: action.args.path }, reused));
             continue;
           }
           const r = await executeAction(action, {
@@ -1664,15 +1760,31 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
             output += '\nNOTE: you already did exactly this several times. Do something different.';
           }
           if (action.tool === 'run' && r.exitCode !== 0) {
+            const cited = await citedLines(this.cwd, r.output); // (the lines it points at: no <read> needed to see them)
+            if (cited) output += `\n${cited}`;
             output += '\nThe command failed. Read the error, fix the cause, then run it again.';
           }
           const attrs = { ...r.meta };
           if (action.tool === 'run') attrs.command = action.args.command;
           results.push(formatResult(action.tool, attrs, output));
+          if (r.ok && REUSABLE.has(action.tool)) {
+            this.doneActions.set(actionKey(action), {
+              at: this.messages.length, // (the message of this batch's results, pushed below)
+              marker: results[results.length - 1].slice(0, 300),
+              step,
+              turn: this.turnSeq,
+              mutations: this.mutations,
+              mtime: action.tool === 'read' ? await this.mtimeOf(action.args.path) : null,
+            });
+          }
+          if (r.changed || action.tool === 'run') this.mutations++;
           if (!r.ok && !['run', 'search'].includes(action.tool)) stopBatch = true;
         }
         const skipped = actions.length - results.length;
         let content = results.join('\n');
+        // Near the step limit: said once, so that the answer does not stop short.
+        const left = config.maxSteps - step - 1;
+        if (left === 5 && config.maxSteps >= 15) content += `\n(${left} steps left for this message: finish now, or end with what is done and what remains to do.)`;
         if (skipped > 0) content += `\n(${skipped} later action(s) were NOT run. Look at the result above first, then continue.)`;
         if (cutNote) content += `\n${cutNote}`;
         // The assessment recalled while its route is not satisfied (it is at the start of
@@ -1714,6 +1826,8 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
       this.running = false;
       this.abort = null;
       await this.emitContext(system).catch(() => {});
+      // The project as this answer leaves it: what changes before the next message was not the agent.
+      if (this.role === 'main' && !this.offProject) this.snapshot = await projectSnapshot(this.cwd).catch(() => null);
       turnStats.totalMs = Date.now() - turnT0;
       turnStats.tps = turnStats.genMs ? Math.round((turnStats.tokens / (turnStats.genMs / 1000)) * 10) / 10 : 0;
       this.emit('event', { type: 'turn_end', reason, stats: turnStats.steps ? turnStats : null });

@@ -80,6 +80,13 @@ export interface ParsedAction extends Action {
 
 export type Meta = Record<string, unknown>;
 
+/** The file open in the viewer when a message is sent: lines on screen, or the selection. */
+export interface Viewing {
+  path: string;
+  visible?: [number, number];
+  selection?: { text: string; start?: number; end?: number };
+}
+
 /** A question of the questionnaire (<ask>, see ask.ts). */
 export interface Question {
   question: string;
@@ -268,6 +275,8 @@ export type AgentEvent = Scoped & (
   | { type: 'plan'; tasks: PlanTask[] }
   | { type: 'memory'; notes: string[] }
   | { type: 'noted'; turnId?: string; notes: string[] }
+  // A hint given with the message (shown under it): what changed without the agent, the file the user looks at.
+  | { type: 'hint'; turnId?: string; kind: 'changes' | 'viewing'; text: string }
   | { type: 'recalled'; turnId?: string; passages: RecalledPassage[] }
   | { type: 'skill'; turnId?: string; skills: SkillView[] }
   | { type: 'fetching'; urls: string[] }

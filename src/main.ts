@@ -22,7 +22,7 @@ import { migrateLegacy, rebuildHistory, rebuildForAction } from './agent/rebuild
 import { checkTor, torStatus, newCircuits, findTorProxy, requireTor, proxyEnv } from './agent/tor.ts';
 import { errorMessage, isBoolean, isNumber, isRecord, isString, isStringArray, list, parseJson, rec, str } from './unknown.ts';
 import type { AppAlert, Args, Channel, ClaudeAccount, ClaudeUsage, Reply, SessionView } from './ipc.ts';
-import type { AgentEvent, ApprovalAnswer, ApprovalRequest, AskDraft, Choice, ConversationFile, ProjectIcon, Provider, PublicSettings, Settings } from './types.ts';
+import type { AgentEvent, ApprovalAnswer, ApprovalRequest, AskDraft, Choice, ConversationFile, ProjectIcon, Provider, PublicSettings, Settings, Viewing } from './types.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -714,7 +714,7 @@ handle('engine:setOptions', [isObject], (patch) => {
   engine.setOptions(engineOptions());
   return publicSettings();
 });
-handle('agent:send', [isString, optional(isString)], async (text, turnId) => {
+handle('agent:send', [isString, optional(isString), optional((v): v is Viewing | null => v === null || isRecord(v))], async (text, turnId, viewing) => {
   const s = current();
   const a = s.getAgent();
   if (a.running) throw new Error('L’agent est déjà en cours d’exécution.');
@@ -733,7 +733,7 @@ handle('agent:send', [isString, optional(isString)], async (text, turnId) => {
   clearTimeout(s.draftTimer);
   store.record(s.conv, { type: 'user_message', text, turnId });
   // Events stream back through 'agent:event'.
-  a.send(text, { turnId }).catch((e) => s.onEvent({ type: 'error', message: errorMessage(e) }));
+  (a instanceof Agent ? a.send(text, { turnId, viewing: viewingOf(viewing) }) : a.send(text, { turnId })).catch((e) => s.onEvent({ type: 'error', message: errorMessage(e) }));
   s.save(); // after send() has set this message's rewind point, so that it is saved with it
   send('sessions:changed');
   return true;
@@ -919,6 +919,20 @@ handle('skills:list', [], () => loadSkills(skillDirs(activeCwd(), userSkills()))
 handle('session:setDraft', [isString], (text) => {
   current().noteDraft(String(text ?? ''));
 });
+/** The file open in the viewer, as sent by the window: narrowed. */
+function viewingOf(v: unknown): Viewing | null {
+  const r = rec(v);
+  if (!isString(r.path) || !r.path.trim()) return null;
+  const vis = list(r.visible).filter(isNumber);
+  const sel = rec(r.selection);
+  const line = (n: unknown) => (isNumber(n) && n >= 1 ? Math.floor(n) : undefined);
+  return {
+    path: r.path.slice(0, 500),
+    ...(vis.length === 2 ? { visible: [Math.max(1, Math.floor(vis[0])), Math.max(1, Math.floor(vis[1]))] } : {}),
+    ...(isString(sel.text) && sel.text.trim() ? { selection: { text: sel.text.slice(0, 20000), start: line(sel.start), end: line(sel.end) } } : {}),
+  };
+}
+
 // The questionnaire being answered in the conversation shown (null: answered, or given up).
 handle('session:setAskDraft', [(v): v is AskDraft | null => v === null || isRecord(v)], (draft) => {
   const s = current();

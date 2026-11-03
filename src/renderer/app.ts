@@ -15,7 +15,7 @@ import type { TorStatus } from '../agent/tor.ts';
 import type { GitFile, GitRepoStatus } from '../git.ts';
 import type { ViewedFile } from '../files.ts';
 import { errorMessage, isRecord, isStringArray, num, str } from '../unknown.ts';
-import type { AgentEvent, Choice, ContextStats, ConversationSummary, Effort, EngineName, EventOf, PlanTask, ProjectIcon, Provider, ProviderType, PublicSettings, AskDraft, Question, QuestionAnswer, ToolArgs, TriageItem, TurnStats } from '../types.ts';
+import type { AgentEvent, Choice, ContextStats, Viewing, ConversationSummary, Effort, EngineName, EventOf, PlanTask, ProjectIcon, Provider, ProviderType, PublicSettings, AskDraft, Question, QuestionAnswer, ToolArgs, TriageItem, TurnStats } from '../types.ts';
 
 declare global {
   interface Window {
@@ -1089,7 +1089,8 @@ async function sendMessage(text: string) {
   }
   setRunning(true);
   try {
-    await window.api.send(text, turnId);
+    await window.api.send(text, turnId, viewing());
+    viewerSelection = null; // (said once)
     return true;
   } catch (e) {
     add(div('error', esc(errorMessage(e).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''))));
@@ -1785,6 +1786,15 @@ function onEvent(ev: SessionEvent) {
       const d = div('noted');
       d.textContent = `🧠 Noté dans la mémoire : ${ev.notes.map((n) => `« ${n} »`).join(', ')}`;
       d.title = 'Gardé pour toute la conversation (malgré le compactage). Retirable via 🧠 sous la zone de saisie.';
+      msg.appendChild(d);
+      break;
+    }
+    case 'hint': {
+      // What the app told the agent with the message: files changed without it, the file looked at.
+      const msg = [...(target || transcript).querySelectorAll<HTMLElement>('.msg.user')].pop();
+      if (!msg) break;
+      const d = div('noted');
+      d.textContent = `${ev.kind === 'changes' ? '✎' : '👁'} ${ev.text}`;
       msg.appendChild(d);
       break;
     }
@@ -3675,8 +3685,45 @@ function formatSize(n: number) {
   return `${(n / 1024 / 1024).toFixed(1)} Mo`;
 }
 
+// The selection in the viewer, kept when the focus goes to the input box (where the page's
+// selection moves): sent with the next message, with its lines in the code view.
+let viewerSelection: { text: string; start?: number; end?: number } | null = null;
+document.addEventListener('selectionchange', () => {
+  const sel = window.getSelection();
+  if (!sel?.rangeCount) return;
+  const range = sel.getRangeAt(0);
+  const body = $('viewerBody');
+  if (!body.contains(range.commonAncestorContainer)) return; // (elsewhere: the viewer's is kept)
+  const text = sel.toString();
+  if (!text.trim()) { viewerSelection = null; return; }
+  const code = body.querySelector('code');
+  if (!code?.contains(range.startContainer)) { viewerSelection = { text }; return; }
+  const before = document.createRange();
+  before.setStart(code, 0);
+  before.setEnd(range.startContainer, range.startOffset);
+  const start = before.toString().split('\n').length;
+  viewerSelection = { text, start, end: start + text.replace(/\n$/, '').split('\n').length - 1 };
+});
+
+/** The file open in the viewer, for the agent: the lines on screen, or the selection. */
+function viewing(): Viewing | null {
+  if (!openPath || $('viewer').classList.contains('hidden')) return null;
+  const body = $('viewerBody');
+  const code = body.querySelector<HTMLElement>('code');
+  let visible: [number, number] | undefined;
+  if (code) {
+    const total = (code.textContent ?? '').replace(/\n$/, '').split('\n').length;
+    const lh = parseFloat(getComputedStyle(code).lineHeight) || 20;
+    const top = Math.max(0, body.scrollTop - code.offsetTop);
+    const first = Math.min(total, Math.floor(top / lh) + 1);
+    visible = [first, Math.min(total, first + Math.max(0, Math.floor(body.clientHeight / lh) - 1))];
+  }
+  return { path: openPath, ...(visible ? { visible } : {}), ...(viewerSelection ? { selection: viewerSelection } : {}) };
+}
+
 function closeViewer() {
   closeDiffPanel();
+  viewerSelection = null;
   openPath = null;
   $('viewer').classList.add('hidden');
   document.querySelectorAll<HTMLElement>('.tree .node.active').forEach((n) => n.classList.remove('active'));
@@ -3693,6 +3740,7 @@ async function openFile(rel: string, { keepScroll = false } = {}) {
     read = { path: rel, kind: 'error', message: errorMessage(e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '') };
   }
   const f = read;
+  if (f.path !== openPath) viewerSelection = null;
   openPath = f.path;
   if (panelAgent) closeAgentPanel(); // (one side panel at a time)
   if (liveBubble) closeLivePanel();

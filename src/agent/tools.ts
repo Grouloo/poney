@@ -3,6 +3,7 @@ import path from 'node:path';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { Dirent, Stats } from 'node:fs';
 import { rankedSearch } from './codesearch.ts';
+import { didYouMean, nearestPaths } from './hints.ts';
 import { parseEditBody } from './protocol.ts';
 import { webSearch, fetchUrl } from './web.ts';
 import { requireTor, proxyEnv } from './tor.ts';
@@ -125,10 +126,15 @@ async function exists(p: string) {
   try { await fs.access(p); return true; } catch { return false; }
 }
 
+/** " Did you mean …?" with the closest existing paths (none in the private folder). */
+const similar = async (cwd: string, rel: string, dirs = false) =>
+  (rel === SCRATCH || rel.startsWith(`${SCRATCH}/`) ? '' : didYouMean(await nearestPaths(cwd, rel, { dirs }).catch(() => [])));
+
 // ---------- list ----------
 async function listTool(cwd: string, args: ToolArgs, ctx: ToolContext = {}): Promise<ToolResult> {
   const { abs, rel } = resolveInside(cwd, args.path || '.', ctx.scratch);
   if (rel === SCRATCH && !(await exists(abs))) return { output: '(empty folder)', meta: { path: rel } };
+  if (!(await exists(abs))) throw new ToolError(`Folder "${rel}" does not exist.${await similar(cwd, rel, true)}`);
   const maxDepth = Math.min(toInt(args.depth) || 3, 6);
   const lines: string[] = [];
   let count = 0;
@@ -163,7 +169,7 @@ async function readTool(cwd: string, args: ToolArgs, ctx: ToolContext = {}): Pro
   let content: string;
   if (virtual !== undefined) content = virtual;
   else try { content = await fs.readFile(abs, 'utf8'); } catch (e) {
-    if (errorCode(e) === 'ENOENT') throw new ToolError(`File "${rel}" does not exist. Use <list /> to see files.`);
+    if (errorCode(e) === 'ENOENT') throw new ToolError(`File "${rel}" does not exist.${await similar(cwd, rel) || ' Use <list /> to see files.'}`);
     if (errorCode(e) === 'EISDIR') throw new ToolError(`"${rel}" is a folder. Use <list path="${rel}" />.`);
     throw new ToolError(`Cannot read "${rel}": ${errorMessage(e)}`);
   }
@@ -358,7 +364,7 @@ export async function checkOldBlock(cwd: string, filePath: string, oldText: stri
   try { ({ abs, rel } = resolveInside(cwd, filePath, scratch)); } catch (e) { return { ok: false, message: errorMessage(e) }; }
   let content: string;
   try { content = await fs.readFile(abs, 'utf8'); } catch {
-    return { ok: false, message: `File "${rel}" does not exist. Use <write> to create it.` };
+    return { ok: false, message: `File "${rel}" does not exist.${await similar(cwd, rel)} Use <write> to create a new file.` };
   }
   content = content.replace(/\r\n/g, '\n');
   const pair = parseEditBody(`<old>${oldText}</old><new></new>`)[0];
@@ -411,7 +417,7 @@ async function editTool(cwd: string, args: ToolArgs, ctx: ToolContext = {}): Pro
   const { abs, rel } = resolveInside(cwd, args.path, ctx.scratch);
   let content: string;
   try { content = await fs.readFile(abs, 'utf8'); } catch {
-    throw new ToolError(`File "${rel}" does not exist. Use <write> to create it.`);
+    throw new ToolError(`File "${rel}" does not exist.${await similar(cwd, rel)} Use <write> to create a new file.`);
   }
   // Windows line endings: the model writes <old> with "\n" only. Match on LF, write back CRLF.
   const crlf = content.includes('\r\n');

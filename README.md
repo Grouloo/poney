@@ -60,6 +60,11 @@ node src/cli.ts --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   (requests, previous summary, last notes) and the reason is shown. The requested answer size adapts to the room
   left (never past the window); an answer cut by the limit never runs an unfinished action, and if the cut comes
   from a lack of room, the context is compacted and the step retried.
+- **Context hints, only when they help**: with a message, the files changed in the project since the last answer
+  (not by the agent) and the file open in the viewer (the lines on screen, or the selection); in results, the
+  closest existing paths when one does not exist, and the lines a failed command's output points at. A read or a
+  lookup done again while its result is still in view and nothing changed is not run again: the model is pointed
+  at it. Five steps before the limit, the model is told to finish.
 - **What to keep, before a compaction**: one constrained-JSON call on the cached conversation tells the model which
   messages are about to leave its view and asks what, in the whole conversation, must not be lost (3 items at
   most, restatements and banal items rejected). The app writes them where the model says: the conversation's
