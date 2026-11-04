@@ -132,6 +132,38 @@ function makePane(root: HTMLElement): Pane {
   };
 }
 const panes = [makePane(firstChat), makePane(secondChat)];
+// Away from the end of the conversation: a round ↓ above the input brings it back, scrolling.
+for (const p of panes) {
+  const btn = p.root.appendChild(document.createElement('button'));
+  btn.type = 'button';
+  btn.className = 'scroll-down';
+  btn.setAttribute('aria-label', 'Revenir en bas de la conversation');
+  btn.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10m0 0-4-4m4 4 4-4"/></svg>';
+  btn.onclick = () => p.transcript.scrollTo({ top: p.transcript.scrollHeight, behavior: 'smooth' });
+  let queued = false;
+  const update = () => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => {
+      queued = false;
+      const t = p.transcript;
+      btn.classList.toggle('shown', !p.root.classList.contains('fresh') && t.scrollHeight - t.scrollTop - t.clientHeight > 120);
+    });
+  };
+  // (at the end, it stays there when an image finishes loading and the conversation grows)
+  let atEnd = true;
+  p.transcript.addEventListener('scroll', () => {
+    const t = p.transcript;
+    atEnd = t.scrollHeight - t.scrollTop - t.clientHeight < 40;
+    update();
+  }, { passive: true });
+  p.transcript.addEventListener('load', () => {
+    if (atEnd) p.transcript.scrollTop = p.transcript.scrollHeight;
+    update();
+  }, true);
+  new MutationObserver(update).observe(p.transcript, { childList: true, subtree: true, characterData: true });
+  new ResizeObserver(update).observe(p.transcript);
+}
 let pane = panes[0]; // the pane worked in
 let focused = panes[0]; // the pane the user works in
 let split = false; // two panes shown
@@ -185,7 +217,7 @@ window.api.beforeCalls(() => {
 
 // The conversation runs under the input: its end stays above it, whatever its height
 // (the plan showing up, a long message), and in view if it was.
-const fitComposer = () => transcript.style.setProperty('--composer-h', `${composer.offsetHeight}px`);
+const fitComposer = () => chat.style.setProperty('--composer-h', `${composer.offsetHeight}px`); // (the transcript and the ↓ button)
 for (const p of panes) {
   new ResizeObserver(() => inPane(p, () => {
     const atEnd = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 40;
@@ -1071,7 +1103,7 @@ function addUserMessage(text: string, turnId?: string) {
       pill.appendChild(document.createElement('span')).textContent = name;
       pill.title = `Skill ${name}`;
     }
-    for (const ref of files) {
+    for (const ref of files.filter((f) => !isImageRef(f))) {
       const pill = pills.appendChild(document.createElement('button'));
       pill.type = 'button';
       pill.className = 'attached-pill';
@@ -1079,6 +1111,13 @@ function addUserMessage(text: string, turnId?: string) {
       pill.appendChild(document.createElement('span')).textContent = ref.split('/').pop() ?? ref;
       pill.title = `${ref} (cliquer pour l’ouvrir)`;
       pill.onclick = () => openFile(ref);
+    }
+    pills.classList.toggle('hidden', !pills.childElementCount);
+    // (the images as thumbnails, on their own line below)
+    const pics = files.filter(isImageRef);
+    if (pics.length) {
+      const row = bubble.appendChild(div('attached-thumbs'));
+      for (const ref of pics) row.appendChild(thumbnail(ref, ref.split('/').pop() ?? ref, () => openFile(ref)));
     }
   }
   if (turnId) {
@@ -1345,6 +1384,23 @@ const LONG_PASTE_LINES = 80;
 const stamp = () => new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).replace(/:/g, '.');
 /** A pasted image's name: its own, unless it is the clipboard's "image.png". */
 const pastedName = (f: File) => (f.name && f.name !== 'image.png' ? f.name : `image collée ${stamp()}.${f.type.split('/')[1]?.replace('jpeg', 'jpg').replace(/\W.*$/, '') || 'png'}`);
+/** An image, shown as a thumbnail when attached. */
+const isImageRef = (ref: string) => /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(ref);
+// (read once per conversation: `.poney/…` names a file of that conversation)
+const thumbs = new Map<string, Promise<string | null>>();
+function thumbnail(ref: string, name: string, onOpen: () => void): HTMLElement {
+  const t = document.createElement('button');
+  t.type = 'button';
+  t.className = 'attach-thumb';
+  t.title = `${name} (cliquer pour l’ouvrir)`;
+  t.onclick = onOpen;
+  const img = t.appendChild(document.createElement('img'));
+  img.alt = name;
+  const key = `${sessionOf(pane) ?? ''}|${ref}`;
+  if (!thumbs.has(key)) thumbs.set(key, window.api.readImage(ref).catch(() => null));
+  thumbs.get(key)!.then((data) => { if (data) img.src = data; else t.classList.add('missing'); });
+  return t;
+}
 // Each pane its own, for its conversation (another conversation in the pane: they are dropped).
 const attachments = new Map<Pane, { session: string | null; items: Attached[]; skills: ListedSkill[] }>();
 const SKILL_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.2l1.5 4.3 4.3 1.5-4.3 1.5L8 13.8l-1.5-4.3L2.2 8l4.3-1.5z"/></svg>';
@@ -1389,8 +1445,27 @@ function renderAttachments() {
   const skills = skillsNow();
   list.classList.toggle('hidden', !items.length && !skills.length);
   list.innerHTML = '';
+  // (the images as thumbnails, on their own line above the other chips)
+  const pics = list.appendChild(div('attach-thumbs'));
+  const chips = list.appendChild(div('attach-chips'));
+  for (const f of items.filter((x) => isImageRef(x.ref))) {
+    const t = pics.appendChild(thumbnail(f.ref, f.name, () => openFile(f.ref)));
+    const remove = t.appendChild(document.createElement('span'));
+    remove.className = 'thumb-remove';
+    remove.textContent = '✕';
+    remove.setAttribute('role', 'button');
+    remove.setAttribute('aria-label', `Retirer ${f.name}`);
+    const p = pane;
+    remove.onclick = (e) => {
+      e.stopPropagation();
+      const a = attachments.get(p);
+      if (a) a.items = a.items.filter((x) => x !== f);
+      inPane(p, renderAttachments);
+    };
+  }
+  pics.classList.toggle('hidden', !pics.childElementCount);
   for (const sk of skills) {
-    const chip = list.appendChild(div('attach-chip skill'));
+    const chip = chips.appendChild(div('attach-chip skill'));
     chip.title = sk.description || `Skill ${sk.name}`;
     chip.innerHTML = SKILL_ICON;
     chip.appendChild(document.createElement('span')).className = 'attach-name';
@@ -1407,8 +1482,8 @@ function renderAttachments() {
       inPane(p, renderAttachments);
     };
   }
-  for (const f of items) {
-    const chip = list.appendChild(div('attach-chip'));
+  for (const f of items.filter((x) => !isImageRef(x.ref))) {
+    const chip = chips.appendChild(div('attach-chip'));
     chip.title = `${f.ref} (cliquer pour l’ouvrir)`;
     chip.onclick = () => openFile(f.ref);
     chip.appendChild(document.createElement('span')).className = 'attach-name';
@@ -1425,6 +1500,7 @@ function renderAttachments() {
       inPane(p, renderAttachments);
     };
   }
+  chips.classList.toggle('hidden', !chips.childElementCount);
 }
 /** Files attached in a pane: added to its list, once each. */
 async function attach(p: Pane, ask: () => Promise<Attached[]>) {

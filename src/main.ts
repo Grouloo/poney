@@ -1269,7 +1269,12 @@ handle('files:observe', [(v: unknown): v is string | null => v === null || isStr
 });
 handle('files:list', [optional(isString)], (rel) => listDir(viewCwd(), rel, viewScratch()));
 handle('files:read', [isString], (rel) => readFileForViewer(viewCwd(), rel, viewScratch()));
-handle('files:image', [isString], (src) => readImage(current().cwd || null, src));
+// (`.poney/…`: the conversation's private folder, where the files attached from elsewhere are)
+handle('files:image', [isString], (src) => {
+  const s = current();
+  const inScratch = /^\.poney\/./.test(src) ? path.join(scratchOf(s.key), ...src.slice(7).split('/')) : null;
+  return readImage(s.cwd || null, inScratch ?? src);
+});
 // An image of an answer, saved where the user says (Downloads by default).
 handle('files:saveImage', [isString], async (src) => {
   const file = imagePath(current().cwd || null, src);

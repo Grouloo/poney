@@ -202,7 +202,8 @@ node src/cli.ts --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   Right-click: a new folder, and the project's folder opened in the Finder.
 - **Files attached** to a message: the round paperclip of the input ("Un fichier…"), or files dropped on it from the Finder or the files
   panel. The message ends with `Skills : /name …` then `Fichiers joints :` and the list (`src/agent/message-parts.ts`,
-  read by the interface too). A pasted image becomes a file attached, and so does a pasted text over 4,000 characters or 80 lines. A
+  read by the interface too). Images attached show as thumbnails, on a line of their own (above the chips in the
+  input, below the pills in a message). A pasted image becomes a file attached, and so does a pasted text over 4,000 characters or 80 lines. A
   file of the project is named where it is; one from elsewhere is copied into the conversation's private folder (a
   link would break when the original moves, and the agent could change the original through it). Each shows as a
   chip above the text, opened in the viewer by a click. The message ends with their paths, `.poney/…` for the private
