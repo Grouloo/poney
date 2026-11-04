@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { soberPath, withAttachedPaths } from '../src/agent/attached.ts';
+import { soberPath, withAttachedPaths, joinMessage, splitMessage, withoutAttached } from '../src/agent/attached.ts';
+import { mentionedSkills, withSkills, type Skill } from '../src/agent/skills.ts';
 import { toolView as claudeTool } from '../src/agent/claude.ts';
 import { toolView as agyTool } from '../src/agent/antigravity.ts';
 
@@ -29,4 +30,20 @@ test('a conversation\'s title leaves out the list of files attached', async () =
   const { ConversationStore } = await import('../src/conversations.ts');
   assert.equal(ConversationStore.cleanTitle('Résume ça\n\nFichiers joints :\n- `.poney/rapport.md`'), 'Résume ça');
   assert.equal(ConversationStore.cleanTitle('Fichiers joints :\n- `.poney/rapport.md`\n- `src/a.ts`'), 'rapport.md, a.ts');
+});
+
+test('skills attached: a "Skills :" line of /names before the files, read by every harness', () => {
+  const text = joinMessage('Relis ce code', ['review', 'tests'], ['src/a.ts']);
+  assert.equal(text, 'Relis ce code\n\nSkills : /review /tests\n\nFichiers joints :\n- `src/a.ts`');
+  assert.deepEqual(splitMessage(text), { body: 'Relis ce code', skills: ['review', 'tests'], files: ['src/a.ts'] });
+  assert.deepEqual(splitMessage('Skills : /review'), { body: '', skills: ['review'], files: [] });
+  assert.deepEqual(splitMessage('cd /tmp'), { body: 'cd /tmp', skills: [], files: [] });
+  assert.equal(joinMessage('', ['review'], []), 'Skills : /review');
+  assert.equal(withoutAttached(text), 'Relis ce code');
+  assert.equal(withoutAttached(joinMessage('', ['review'], ['.poney/a.png'])), 'review, a.png');
+  const skill: Skill = { name: 'review', description: 'Relire', triggers: [], auto: false, author: '', source: '', license: '', adapted: '', origin: 'poney', body: 'Lis tout.' };
+  assert.deepEqual(mentionedSkills(text, [skill]).map((s) => s.name), ['review']); // (Poney's models)
+  const sent = withSkills(text, [skill], { auto: false });
+  assert.match(sent.text, /Skills : review \/tests/); // (Claude, Antigravity: no slash, read as one of their commands)
+  assert.match(sent.text, /\(Skill "review", for this request/);
 });

@@ -1,10 +1,10 @@
-// Files attached to a message, and the conversation's private folder as the interface names it.
+// Skills and files attached to a message, and the conversation's private folder as the interface names it.
 // The message keeps `.poney/…` paths (what the user sees, what Poney's models read); the
 // harnesses of Claude and Antigravity read the absolute path, and show `.poney/…` again.
 import path from 'node:path';
+import { ATTACHED, splitMessage } from './message-parts.ts';
 
-/** The line before the list of files attached, at the end of a message. */
-export const ATTACHED = 'Fichiers joints :';
+export { ATTACHED, SKILLS, splitMessage, joinMessage } from './message-parts.ts';
 
 /** A file of the private folder named `.poney/…`, else null. */
 export function soberPath(file: string, scratch: string | null): string | null {
@@ -22,9 +22,9 @@ export function withAttachedPaths(text: string, scratch: string | null): string 
   return text.slice(0, at) + list;
 }
 
-/** A message without the list of its files attached (only their names, when it has no text). */
+/** A message without what is attached to it (only their names, when it has no text). */
 export function withoutAttached(text: string): string {
-  const m = /(?:^|\n\n)Fichiers joints :\n((?:- `[^`\n]+`(?:\n|$))+)\s*$/.exec(text);
-  if (!m) return text;
-  return text.slice(0, m.index).trim() || [...m[1].matchAll(/^- `([^`\n]+)`/gm)].map((x) => x[1].split('/').pop()).join(', ');
+  const { body, skills, files } = splitMessage(text);
+  if (!skills.length && !files.length) return text;
+  return body.trim() || [...skills, ...files.map((f) => f.split('/').pop())].join(', ');
 }

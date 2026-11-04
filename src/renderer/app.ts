@@ -3,6 +3,7 @@ import hljs from '../../node_modules/@highlightjs/cdn-assets/es/highlight.min.js
 import { fmtNum, fmtDuration } from './format.ts';
 import { parsePlan, taskParts } from '../agent/plan.ts';
 import { parseQuestions, cleanAnswers } from '../agent/ask.ts';
+import { joinMessage, splitMessage } from '../agent/message-parts.ts';
 import { markdown, esc } from './markdown.ts';
 import { documentHtml } from './document.ts';
 import { SwipeDetector } from './swipe.ts';
@@ -1056,12 +1057,20 @@ function addUserMessage(text: string, turnId?: string) {
   transcript.querySelectorAll<HTMLElement>('.retry-row').forEach((r) => r.remove()); // (taken up, or a new message)
   if (!target) planBlock = null; // a plan is the plan of one request
   const m = div('msg user');
-  const { body, files } = splitAttached(text);
+  const { body, skills, files } = splitMessage(text);
   const bubble = m.appendChild(div('bubble'));
   fillUserBubble(bubble, body);
-  if (files.length) {
-    // The files attached: pills under the text, each opened in the viewer.
+  if (skills.length || files.length) {
+    // The skills and files attached: pills under the text, the files opened in the viewer.
     const pills = bubble.appendChild(div('attached-files'));
+    for (const name of skills) {
+      const pill = pills.appendChild(document.createElement('span'));
+      pill.className = 'attached-pill skill';
+      pill.dataset.skill = name;
+      pill.innerHTML = SKILL_ICON;
+      pill.appendChild(document.createElement('span')).textContent = name;
+      pill.title = `Skill ${name}`;
+    }
     for (const ref of files) {
       const pill = pills.appendChild(document.createElement('button'));
       pill.type = 'button';
@@ -1293,11 +1302,13 @@ async function submit() {
     await window.api.stop();
     return;
   }
-  const typed = input.value.trim();
   const files = attachedNow();
-  if (!typed && !files.length) return;
-  // (the files attached: named at the end of the message, by the path the agent reads)
-  const text = files.length ? `${typed}${typed ? '\n\n' : ''}${ATTACHED}\n${files.map((f) => `- \`${f.ref}\``).join('\n')}` : typed;
+  // (a skill named with /name in the text: attached instead, the command leaves the text)
+  const typed = await skillsTyped(pane);
+  const skills = skillsNow();
+  if (!typed && !files.length && !skills.length) return;
+  // (named at the end of the message: the skills by /name, the files by the path the agent reads)
+  const text = joinMessage(typed, skills.map((x) => x.name), files.map((f) => f.ref));
   if (!activeDir()) {
     settings = await window.api.chooseWorkspace();
     renderSettings();
@@ -1323,36 +1334,79 @@ async function submit() {
   if (!(await sendMessage(text)) && !input.value) {
     setInput(typed);
     noteDraft();
-    if (files.length) attachments.set(p, { session: sessionOf(p), items: files });
+    if (files.length || skills.length) attachments.set(p, { session: sessionOf(p), items: files, skills });
     inPane(p, renderAttachments);
   }
 }
 
 // ---------- files attached to the next message ----------
-const ATTACHED = 'Fichiers joints :'; // (as src/agent/attached.ts reads it)
 const LONG_PASTE = 4000; // characters: a text pasted beyond it, or beyond so many lines, goes in a file
 const LONG_PASTE_LINES = 80;
 const stamp = () => new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).replace(/:/g, '.');
 /** A pasted image's name: its own, unless it is the clipboard's "image.png". */
 const pastedName = (f: File) => (f.name && f.name !== 'image.png' ? f.name : `image collée ${stamp()}.${f.type.split('/')[1]?.replace('jpeg', 'jpg').replace(/\W.*$/, '') || 'png'}`);
-/** A message and the files attached at its end. */
-function splitAttached(text: string): { body: string; files: string[] } {
-  const m = /(?:^|\n\n)Fichiers joints :\n((?:- `[^`\n]+`(?:\n|$))+)\s*$/.exec(text);
-  if (!m) return { body: text, files: [] };
-  return { body: text.slice(0, m.index), files: [...m[1].matchAll(/^- `([^`\n]+)`/gm)].map((x) => x[1]) };
-}
 // Each pane its own, for its conversation (another conversation in the pane: they are dropped).
-const attachments = new Map<Pane, { session: string | null; items: Attached[] }>();
+const attachments = new Map<Pane, { session: string | null; items: Attached[]; skills: ListedSkill[] }>();
+const SKILL_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.2l1.5 4.3 4.3 1.5-4.3 1.5L8 13.8l-1.5-4.3L2.2 8l4.3-1.5z"/></svg>';
 function attachedNow(): Attached[] {
   const a = attachments.get(pane);
   if (a && a.session && a.session !== sessionOf(pane)) attachments.delete(pane);
   return attachments.get(pane)?.items ?? [];
 }
+function skillsNow(): ListedSkill[] {
+  attachedNow(); // (dropped with another conversation)
+  return attachments.get(pane)?.skills ?? [];
+}
+/** A skill attached in a pane, once. */
+function attachSkill(p: Pane, skill: ListedSkill) {
+  inPane(p, () => {
+    const a = attachments.get(p) ?? { session: sessionOf(p), items: attachedNow(), skills: [] };
+    if (!a.skills.some((x) => x.name === skill.name)) a.skills = [...a.skills, skill];
+    attachments.set(p, a);
+    renderAttachments();
+  });
+}
+/**
+ * The text typed, without the skills it names with /name: those are attached instead.
+ * (Not a path: /name stands alone, as the harnesses read it.)
+ */
+async function skillsTyped(p: Pane): Promise<string> {
+  const typed = input.value.trim();
+  if (!/(?:^|\s)\/[a-z0-9]/i.test(typed)) return typed;
+  const known = await window.api.listSkills().catch((): ListedSkill[] => []);
+  let out = typed;
+  for (const m of [...typed.matchAll(/(?:^|\s)\/([a-z0-9][a-z0-9-]*)(?=$|[\s.,:;!?)])/g)]) {
+    const skill = known.find((k) => k.name === m[1]);
+    if (!skill) continue;
+    attachSkill(p, skill);
+    out = out.replace(new RegExp(`(^|\\s)/${m[1]}(?=$|[\\s.,:;!?)])`), '$1');
+  }
+  return out.replace(/[ \t]{2,}/g, ' ').replace(/^[ \t]+|[ \t]+$/gm, '').trim();
+}
 function renderAttachments() {
   const list = $('attachList');
   const items = attachedNow();
-  list.classList.toggle('hidden', !items.length);
+  const skills = skillsNow();
+  list.classList.toggle('hidden', !items.length && !skills.length);
   list.innerHTML = '';
+  for (const sk of skills) {
+    const chip = list.appendChild(div('attach-chip skill'));
+    chip.title = sk.description || `Skill ${sk.name}`;
+    chip.innerHTML = SKILL_ICON;
+    chip.appendChild(document.createElement('span')).className = 'attach-name';
+    chip.querySelector<HTMLElement>('.attach-name')!.textContent = sk.name;
+    const remove = chip.appendChild(document.createElement('button'));
+    remove.type = 'button';
+    remove.textContent = '✕';
+    remove.setAttribute('aria-label', `Retirer le skill ${sk.name}`);
+    const p = pane;
+    remove.onclick = (e) => {
+      e.stopPropagation();
+      const a = attachments.get(p);
+      if (a) a.skills = a.skills.filter((x) => x !== sk);
+      inPane(p, renderAttachments);
+    };
+  }
   for (const f of items) {
     const chip = list.appendChild(div('attach-chip'));
     chip.title = `${f.ref} (cliquer pour l’ouvrir)`;
@@ -1379,11 +1433,56 @@ async function attach(p: Pane, ask: () => Promise<Attached[]>) {
   if (!got.length) return;
   inPane(p, () => {
     const items = attachedNow().filter((x) => !got.some((g) => g.ref === x.ref));
-    attachments.set(p, { session: sessionOf(p), items: [...items, ...got] });
+    attachments.set(p, { session: sessionOf(p), items: [...items, ...got], skills: skillsNow() });
     renderAttachments();
     input.focus();
   });
 }
+
+// The paperclip: a file (the Finder's dialog), or a skill saved in Poney.
+const PAPERCLIP = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13.2 7.4 8 12.6a3.3 3.3 0 0 1-4.7-4.7l5.6-5.6a2.2 2.2 0 0 1 3.1 3.1L6.4 11a1.1 1.1 0 0 1-1.6-1.6l5.1-5.1"/></svg>';
+function closeAttachMenu() {
+  for (const m of document.querySelectorAll<HTMLElement>('.attach-menu')) m.classList.add('hidden');
+}
+function toggleAttachMenu(p: Pane) {
+  const box = p.root.querySelector<HTMLElement>('.composer-box')!;
+  let menu = box.querySelector<HTMLElement>('.attach-menu');
+  if (menu && !menu.classList.contains('hidden')) return closeAttachMenu();
+  menu ??= box.appendChild(div('skill-menu attach-menu hidden'));
+  const m = menu;
+  m.innerHTML = `<button type="button" class="skill-row choice" data-pick="file">${PAPERCLIP}<span class="skill-name">Un fichier…</span><span class="skill-desc">depuis le Finder (ou glissé dans la zone)</span></button>`
+    + `<button type="button" class="skill-row choice" data-pick="skill">${SKILL_ICON}<span class="skill-name">Un skill…</span><span class="skill-desc">enregistré dans Poney (ou / dans la zone)</span></button>`;
+  m.querySelector<HTMLElement>('[data-pick="file"]')!.onclick = () => {
+    closeAttachMenu();
+    attach(p, () => window.api.attachPick());
+  };
+  m.querySelector<HTMLElement>('[data-pick="skill"]')!.onclick = async () => {
+    const skills = await window.api.listSkills().catch((): ListedSkill[] => []);
+    m.innerHTML = skills.length ? '' : '<div class="empty-row">Aucun skill enregistré.</div>';
+    for (const sk of skills) {
+      const row = m.appendChild(document.createElement('button'));
+      row.type = 'button';
+      row.className = 'skill-row';
+      row.innerHTML = `<span class="skill-name">${esc(sk.name)}</span><span class="skill-desc">${esc(sk.description)}</span>${sk.author ? `<span class="skill-author">${esc(sk.author)}</span>` : ''}`;
+      row.title = sk.description;
+      row.onclick = () => {
+        closeAttachMenu();
+        attachSkill(p, sk);
+        p.input.focus();
+      };
+    }
+  };
+  fitBelowBar(m, box);
+  m.classList.remove('hidden');
+}
+// (closed by a click elsewhere, or Escape)
+document.addEventListener('pointerdown', (e) => {
+  const t = e.target instanceof Element ? e.target : null;
+  if (!t?.closest('.attach-menu, .attach-btn')) closeAttachMenu();
+}, true);
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && document.querySelector('.attach-menu:not(.hidden)')) { e.preventDefault(); closeAttachMenu(); }
+}, true);
 
 async function sendMessage(text: string) {
   const turnId = crypto.randomUUID();
@@ -1442,10 +1541,12 @@ function renderSkillMenu() {
   skillMenu.innerHTML = skillMatches.map((s, i) => `<button type="button" class="skill-row${i === skillPick ? ' active' : ''}" data-i="${i}"><span class="skill-name">/${esc(s.name)}</span><span class="skill-desc">${esc(s.description)}</span>${s.author ? `<span class="skill-author">${esc(s.author)}</span>` : ''}</button>`).join('');
   skillMenu.querySelector<HTMLElement>('.active')?.scrollIntoView({ block: 'nearest' });
 }
+/** The skill picked: attached to the message, and its /command leaves the text. */
 function acceptSkill(i: number) {
   const token = skillToken();
   if (!token) return hideSkillMenu();
-  input.setRangeText(`/${skillMatches[i].name} `, token.start, input.selectionStart, 'end');
+  input.setRangeText('', token.start, input.selectionStart, 'end');
+  attachSkill(pane, skillMatches[i]);
   hideSkillMenu();
   autosize();
   noteDraft();
@@ -2271,8 +2372,12 @@ function onEvent(ev: SessionEvent) {
       // The skills added to the last user message.
       const msg = [...(target || transcript).querySelectorAll<HTMLElement>('.msg.user')].pop();
       if (!msg) break;
+      // (the ones attached are already its pills)
+      const pilled = new Set([...msg.querySelectorAll<HTMLElement>('.attached-pill.skill')].map((x) => x.dataset.skill));
+      const added = ev.skills.filter((s) => !pilled.has(s.name));
+      if (!added.length) break;
       const d = div('skills-used');
-      for (const s of ev.skills) {
+      for (const s of added) {
         const name = document.createElement(s.source ? 'a' : 'span');
         name.textContent = s.name;
         if (s.source) {
@@ -2282,7 +2387,7 @@ function onEvent(ev: SessionEvent) {
         name.title = [s.description, s.author ? `par ${s.author}` : '', s.auto ? 'Ajouté automatiquement' : ''].filter(Boolean).join('\n');
         d.append(name, ' ');
       }
-      d.prepend(ev.skills.length > 1 ? 'Skills : ' : 'Skill : ');
+      d.prepend(added.length > 1 ? 'Skills : ' : 'Skill : ');
       msg.appendChild(d);
       scrollDown();
       break;
@@ -5440,7 +5545,7 @@ function bindPane(p: Pane) {
   input.addEventListener('input', noteDraft);
 
   sendBtn.onclick = submit;
-  $<HTMLButtonElement>('attachBtn').onclick = () => attach(p, () => window.api.attachPick());
+  $<HTMLButtonElement>('attachBtn').onclick = () => toggleAttachMenu(p);
   // Pasted: an image becomes a file attached, and so does a text too long for the box.
   p.input.addEventListener('paste', (e) => {
     const data = e.clipboardData;
