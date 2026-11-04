@@ -261,7 +261,7 @@ function add<T extends HTMLElement>(el: T): T {
     return el;
   }
   transcript.appendChild(el);
-  scrollDown(true);
+  scrollDown(); // (only when at the end: someone reading higher up stays where they are)
   return el;
 }
 
@@ -1082,6 +1082,7 @@ function addUserMessage(text: string, turnId?: string) {
     m.appendChild(btn);
   }
   add(m);
+  scrollDown(true); // (the user's own message: to its answer)
 }
 
 /** Inline editor on a previous user message; "Relancer" restarts the conversation from it. */
