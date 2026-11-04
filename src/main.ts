@@ -18,7 +18,8 @@ import { addClaudeAccount, addServer, CLAUDE, claudeAccountOf, loadProviders, mo
 import { ConversationStore, moveAppData } from './conversations.ts';
 import { isGithub, tokenUrl } from './remote-url.ts';
 import { appsToOpen, bringInto, freeName, imagePath, listDir, openWith, readFileForViewer, readImage, type OpeningApp } from './files.ts';
-import { resolveInside } from './agent/tools.ts';
+import { IGNORED_DIRS, resolveInside } from './agent/tools.ts';
+import { projectFiles } from './agent/codesearch.ts';
 import { credentialEnv, gitClone, type RemoteToken, gitFileStates, gitBranches, gitSwitch, gitCreateBranch, createGithubRepo, findGh, GITHUB_TOKEN_PAGE, gitChangeRemote, githubAccount, gitStatus, gitConnect, gitDiff, gitFetch, gitRemote, gitRemoveRemote, gitSync, readyGh } from './git.ts';
 import { migrateLegacy, rebuildHistory, rebuildForAction, recapOf } from './agent/rebuild.ts';
 import { checkTor, torStatus, newCircuits, findTorProxy, requireTor, proxyEnv } from './agent/tor.ts';
@@ -1330,6 +1331,11 @@ const attachFiles = async (paths: string[], rels: string[]) => {
   return out;
 };
 handle('files:attach', [isStringArray, isStringArray], attachFiles);
+// The project's files, for @ in the input (git's list when there is one: what it ignores stays out).
+handle('files:all', [], async () => {
+  const cwd = viewCwd();
+  return cwd ? projectFiles(cwd, '.', IGNORED_DIRS) : [];
+});
 // Pasted into the input: an image, or a text too long for the box, as a file of the private folder.
 const isData = (v: unknown): v is string | Uint8Array => typeof v === 'string' || v instanceof Uint8Array;
 handle('files:attachData', [isString, isData], async (name, data) => {

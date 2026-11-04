@@ -207,6 +207,7 @@ export interface Channels {
   'files:reveal': [[rel: string], void];
   'files:mkdir': [[rel: string], string];
   'files:attach': [[paths: string[], rels: string[]], Attached[]];
+  'files:all': [[], string[]];
   'files:attachPick': [[], Attached[]];
   'files:attachData': [[name: string, data: string | Uint8Array], Attached];
   'files:move': [[rels: string[], rel: string], string[]];

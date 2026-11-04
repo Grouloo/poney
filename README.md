@@ -200,7 +200,9 @@ node src/cli.ts --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   writes, and reveals the modified file. Files dragged from the Finder onto it move into the project, or into the folder
   dropped on (a name already taken gets a number); a file or folder of the tree dragged onto a folder moves into it.
   Right-click: a new folder, and the project's folder opened in the Finder.
-- **Files attached** to a message: the round paperclip of the input ("Un fichier…"), or files dropped on it from the Finder or the files
+- **Files attached** to a message: the round paperclip of the input ("Un fichier…"), `@` in the input (the project's
+  files complete as you type, git's list when there is one; the file is attached and `@path` stays in the text, so the
+  request can speak of it; a path typed in full is attached when sent), or files dropped on it from the Finder or the files
   panel. The message ends with `Skills : /name …` then `Fichiers joints :` and the list (`src/agent/message-parts.ts`,
   read by the interface too). Images attached show as thumbnails, on a line of their own (above the chips in the
   input, below the pills in a message). A pasted image becomes a file attached, and so does a pasted text over 4,000 characters or 80 lines. A

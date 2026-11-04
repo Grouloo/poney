@@ -1341,10 +1341,13 @@ async function submit() {
     await window.api.stop();
     return;
   }
-  const files = attachedNow();
-  // (a skill named with /name in the text: attached instead, the command leaves the text)
-  const typed = await skillsTyped(pane);
-  const skills = skillsNow();
+  // (a skill named with /name in the text: attached instead, the command leaves the text;
+  // a file named with @path: attached, and named in the text still)
+  const p0 = pane;
+  const typed = await skillsTyped(p0);
+  await filesTyped(p0, typed);
+  const files = inPane(p0, attachedNow);
+  const skills = inPane(p0, skillsNow);
   if (!typed && !files.length && !skills.length) return;
   // (named at the end of the message: the skills by /name, the files by the path the agent reads)
   const text = joinMessage(typed, skills.map((x) => x.name), files.map((f) => f.ref));
@@ -1600,7 +1603,8 @@ function hideSkillMenu() {
 }
 async function updateSkillMenu() {
   const token = skillToken();
-  if (!token) return hideSkillMenu();
+  if (!token) return updateFileMenu();
+  menuKind = 'skill';
   skillList ??= await window.api.listSkills().catch(() => []);
   const { query } = token;
   skillMatches = [
@@ -1613,12 +1617,62 @@ async function updateSkillMenu() {
   fitBelowBar(skillMenu, skillMenu.parentElement!);
   skillMenu.classList.remove('hidden');
 }
+// ---------- @file: the project's files while typing ----------
+// The file picked is attached, and @path stays in the text: the request can speak of it.
+let menuKind: 'skill' | 'file' = 'skill';
+let fileMatches: string[] = [];
+let fileList: { at: number; files: string[] } | null = null;
+/** The project's files (read again after a while: the project changes). */
+async function projectFileList(): Promise<string[]> {
+  if (!fileList || Date.now() - fileList.at > 10_000) fileList = { at: Date.now(), files: await window.api.projectFiles().catch((): string[] => []) };
+  return fileList.files;
+}
+/** The @path being typed where the cursor is, if any. */
+function fileToken() {
+  const before = input.value.slice(0, input.selectionStart);
+  const m = before.match(/(?:^|\s)@([^\s@]*)$/);
+  return m ? { query: m[1], start: before.length - m[1].length - 1 } : null;
+}
+/** The files whose name starts with the query, then contains it, then whose path does; the shortest first. */
+function rankFiles(files: string[], query: string): string[] {
+  const q = query.toLowerCase();
+  const scored: [number, string][] = [];
+  for (const f of files) {
+    const lower = f.toLowerCase();
+    const base = lower.slice(lower.lastIndexOf('/') + 1);
+    const score = !q ? 0 : base.startsWith(q) ? 0 : base.includes(q) ? 1 : lower.includes(q) ? 2 : -1;
+    if (score >= 0) scored.push([score, f]);
+  }
+  return scored.sort((a, b) => a[0] - b[0] || a[1].length - b[1].length || a[1].localeCompare(b[1])).slice(0, 40).map((x) => x[1]);
+}
+async function updateFileMenu() {
+  const token = fileToken();
+  if (!token) return hideSkillMenu();
+  const files = await projectFileList();
+  if (fileToken()?.query !== token.query) return; // (typed on meanwhile: that call shows it)
+  fileMatches = rankFiles(files, token.query);
+  if (!fileMatches.length) return skillMenu.classList.add('hidden');
+  menuKind = 'file';
+  skillPick = 0;
+  renderSkillMenu();
+  fitBelowBar(skillMenu, skillMenu.parentElement!);
+  skillMenu.classList.remove('hidden');
+}
 function renderSkillMenu() {
+  if (menuKind === 'file') {
+    skillMenu.innerHTML = fileMatches.map((f, i) => {
+      const cut = f.lastIndexOf('/');
+      return `<button type="button" class="skill-row file-row${i === skillPick ? ' active' : ''}" data-i="${i}">${fileIconSvg(f.slice(cut + 1))}<span class="skill-name">${esc(f.slice(cut + 1))}</span><span class="skill-desc">${esc(cut > 0 ? f.slice(0, cut) : '')}</span></button>`;
+    }).join('');
+    skillMenu.querySelector<HTMLElement>('.active')?.scrollIntoView({ block: 'nearest' });
+    return;
+  }
   skillMenu.innerHTML = skillMatches.map((s, i) => `<button type="button" class="skill-row${i === skillPick ? ' active' : ''}" data-i="${i}"><span class="skill-name">/${esc(s.name)}</span><span class="skill-desc">${esc(s.description)}</span>${s.author ? `<span class="skill-author">${esc(s.author)}</span>` : ''}</button>`).join('');
   skillMenu.querySelector<HTMLElement>('.active')?.scrollIntoView({ block: 'nearest' });
 }
 /** The skill picked: attached to the message, and its /command leaves the text. */
 function acceptSkill(i: number) {
+  if (menuKind === 'file') return acceptFile(i);
   const token = skillToken();
   if (!token) return hideSkillMenu();
   input.setRangeText('', token.start, input.selectionStart, 'end');
@@ -1628,12 +1682,34 @@ function acceptSkill(i: number) {
   noteDraft();
   input.focus();
 }
+/** The file picked: @path in the text, and the file attached. */
+function acceptFile(i: number) {
+  const token = fileToken();
+  const rel = fileMatches[i];
+  if (!token || !rel) return hideSkillMenu();
+  input.setRangeText(`@${rel} `, token.start, input.selectionStart, 'end');
+  hideSkillMenu();
+  autosize();
+  noteDraft();
+  input.focus();
+  void attach(pane, () => window.api.attachFiles([], [rel]));
+}
+/** The files named with @path in a text typed (not picked in the menu): attached too. */
+async function filesTyped(p: Pane, typed: string) {
+  const named = [...typed.matchAll(/(?:^|\s)@([^\s@]+)/g)].map((m) => m[1].replace(/[.,;:!?)]+$/, ''));
+  if (!named.length) return;
+  const files = new Set(await projectFileList());
+  const known = new Set(inPane(p, attachedNow).map((a) => a.ref));
+  const rels = [...new Set(named)].filter((r) => files.has(r) && !known.has(r));
+  if (rels.length) await attach(p, () => window.api.attachFiles([], rels));
+}
 /** The keys of the open menu; true when it used the key. */
 function skillKey(e: KeyboardEvent) {
   if (skillMenu.classList.contains('hidden') || e.isComposing) return false;
   const moves: Record<string, number> = { ArrowDown: 1, ArrowUp: -1 };
   if (e.key in moves) {
-    skillPick = (skillPick + moves[e.key] + skillMatches.length) % skillMatches.length;
+    const n = menuKind === 'file' ? fileMatches.length : skillMatches.length;
+    skillPick = (skillPick + moves[e.key] + n) % n;
     renderSkillMenu();
   } else if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) acceptSkill(skillPick);
   else if (e.key === 'Escape') hideSkillMenu();

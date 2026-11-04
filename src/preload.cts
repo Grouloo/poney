@@ -109,6 +109,7 @@ const api = {
   revealFile: call('files:reveal'),
   makeFolder: call('files:mkdir'),
   attachFiles: call('files:attach'),
+  projectFiles: call('files:all'),
   attachPick: call('files:attachPick'),
   attachData: call('files:attachData'),
   moveFiles: call('files:move'),
