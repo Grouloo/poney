@@ -1416,3 +1416,27 @@ body.panel-dragging { user-select: none; cursor: grabbing; }
 .limit-reset { grid-column: 2 / -1; font-size: 11.5px; color: var(--muted); }
 .limit-reset:empty { display: none; }
 .limit-row.none .limit-bar { opacity: 0.4; }
+
+/* ---------- switches (providers and models shown or hidden) ---------- */
+input[type="checkbox"].switch {
+  appearance: none; -webkit-appearance: none; flex: none; position: relative; width: 30px; height: 18px; margin: 0; padding: 0;
+  border: none; border-radius: 9px; background: color-mix(in srgb, var(--muted) 40%, transparent); cursor: pointer; transition: background-color 0.18s;
+}
+input[type="checkbox"].switch::before {
+  content: ''; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / 0.3); transition: transform 0.18s ease;
+}
+input[type="checkbox"].switch:checked { background: var(--accent-2); }
+input[type="checkbox"].switch:checked::before { transform: translateX(12px); }
+input[type="checkbox"].switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.provider-check { padding: 3px 4px; border-radius: 6px; }
+.provider-check:hover { background: var(--panel-2); }
+.provider-check:has(.switch:not(:checked)) span, .provider-model:has(.switch:not(:checked)) span { color: var(--muted); }
+
+/* a provider's settings, from the model menu: its gear, and the card flashing once opened */
+.model-sep::after { order: 1; }
+.model-sep-settings { order: 2; display: inline-grid; place-items: center; width: 20px; height: 20px; margin: -3px -2px -3px 0; border-radius: 5px; color: var(--muted); opacity: 0.55; }
+.model-sep:hover .model-sep-settings { opacity: 1; }
+.model-sep-settings:hover { color: var(--text); background: var(--panel-2); }
+.provider-card.flash { animation: provider-flash 1.2s ease-out; }
+@keyframes provider-flash { from { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); } }

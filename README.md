@@ -183,7 +183,7 @@ node src/cli.ts --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   a single line break is kept. LaTeX formulas rendered by KaTeX (`$…$`, `\(…\)` inline; `$$…$$`, `\[…\]` as
   blocks); prices like "$5 and $10" stay text. Raw HTML in an answer is shown as text.
 - **Providers** (Réglages › Fournisseurs): where models come from, each one on or off, the servers added or removed
-  freely (the red bin removes one). Each provider's card lists its models with a box: an unticked one leaves the model menu (except for the conversation using it). The model menu shows Poney's own models, then each server's (LM Studio's with its logo), then Claude's. A
+  freely (the red bin removes one). Each provider's card has a switch to turn it on or off, and lists its models with a switch each: one switched off leaves the model menu (except for the conversation using it). The model menu shows Poney's own models, then each server's (LM Studio's with its logo), then Claude's; the gear on a section's title opens that provider's card in the settings. A
   conversation keeps its provider and model; if its provider is off or gone, it stays readable and sending asks for
   another model.
 - **Poney's engine**: GGUF models run without any other app. `llama-server` (a pinned llama.cpp build, downloaded on

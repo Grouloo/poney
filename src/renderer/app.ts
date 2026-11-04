@@ -487,15 +487,21 @@ function openModelMenu() {
     };
   };
   const started = settings.active?.started;
+  // (key: the provider's id, whose settings its gear opens)
   const label = (text: string, key: string) => {
     const head = menu.appendChild(document.createElement('button'));
     head.type = 'button';
     head.className = `model-sep${foldedModels.has(key) ? ' folded' : ''}`;
-    head.innerHTML = `${CHEVRON}<span></span>`;
+    head.innerHTML = `${CHEVRON}<span></span><span class="model-sep-settings" role="button" data-tip="Réglages de ce fournisseur" aria-label="Réglages de ce fournisseur">${GEAR_ICON}</span>`;
     head.querySelector('span')!.textContent = text;
     into = menu.appendChild(div(`model-group${foldedModels.has(key) ? ' hidden' : ''}`));
     const group = into;
-    head.onclick = () => {
+    head.onclick = (e) => {
+      if (e.target instanceof Element && e.target.closest('.model-sep-settings')) {
+        closeModelMenu();
+        void openProviderSettings(key);
+        return;
+      }
       if (foldedModels.has(key)) foldedModels.delete(key); else foldedModels.add(key);
       try { localStorage.setItem('modelFolded', JSON.stringify([...foldedModels])); } catch {}
       head.classList.toggle('folded', foldedModels.has(key));
@@ -585,16 +591,19 @@ function modelChecks(card: HTMLElement, p: Provider, models: { id: string; name:
     if (m.name !== m.id) row.title = m.id;
   }
 }
+/** Once a switch's knob has slid: the settings drawn again replace it. */
+const afterSlide = (then: () => void) => setTimeout(then, 200);
 /** The box that shows a model in the menu, or hides it. */
 function shownBox(p: Provider, model: string) {
   const check = document.createElement('input');
   check.type = 'checkbox';
+  check.className = 'switch';
   check.checked = !p.hiddenModels?.includes(model);
   check.title = 'Affiché dans le menu des modèles';
   check.onchange = () => {
     const hidden = new Set(p.hiddenModels ?? []);
     if (check.checked) hidden.delete(model); else hidden.add(model);
-    changeProvider(window.api.updateProvider(p.id, { hiddenModels: [...hidden] }));
+    afterSlide(() => changeProvider(window.api.updateProvider(p.id, { hiddenModels: [...hidden] })));
   };
   return check;
 }
@@ -602,9 +611,10 @@ function shownBox(p: Provider, model: string) {
 const openProviders = new Set<string>();
 function providerCard(p: Provider) {
   const card = div(`provider-card${p.enabled ? '' : ' off'}${openProviders.has(p.id) ? '' : ' folded'}`);
+  card.dataset.provider = p.id;
   const group = modelGroups.find((g) => g.provider.id === p.id);
   const head = card.appendChild(div('provider-head'));
-  head.innerHTML = `<span class="provider-chev">${CHEVRON}</span><span class="pm-icon">${p.type === 'claude' || p.type === 'antigravity' ? engineIcon(p.type) : groupIcon(group)}</span><span class="provider-name"></span><div class="spacer"></div><label><input type="checkbox"> Activé</label>`;
+  head.innerHTML = `<span class="provider-chev">${CHEVRON}</span><span class="pm-icon">${p.type === 'claude' || p.type === 'antigravity' ? engineIcon(p.type) : groupIcon(group)}</span><span class="provider-name"></span><div class="spacer"></div><label>Activé <input type="checkbox" class="switch"></label>`;
   head.onclick = (e) => {
     if (e.target instanceof Element && e.target.closest('label, button, input')) return;
     if (openProviders.has(p.id)) openProviders.delete(p.id); else openProviders.add(p.id);
@@ -613,7 +623,7 @@ function providerCard(p: Provider) {
   head.querySelector<HTMLElement>('.provider-name')!.textContent = p.name || group?.name || 'Serveur';
   const on = head.querySelector<HTMLInputElement>('input')!;
   on.checked = p.enabled;
-  on.onchange = () => changeProvider(window.api.updateProvider(p.id, { enabled: on.checked }));
+  on.onchange = () => afterSlide(() => changeProvider(window.api.updateProvider(p.id, { enabled: on.checked })));
   return card;
 }
 /** The red bin that removes a provider, after a confirmation. */
@@ -879,12 +889,24 @@ const settingsDialog = $<HTMLDialogElement>('settingsDialog');
 closeOnOutside(settingsDialog);
 closeOnOutside($<HTMLDialogElement>('projectDialog'));
 const showSettingsPage = navDialog(settingsDialog);
-function openSettings(page?: string) {
+async function openSettings(page?: string) {
   changeRemotes(window.api.remotesStatus);
   if (page) showSettingsPage(page);
-  renderProviders();
+  const drawn = renderProviders();
   refreshModels(); // (a server started or stopped since)
   if (!settingsDialog.open) settingsDialog.showModal();
+  await drawn;
+}
+/** A provider's settings, from its section of the model menu: its card opened, in view. */
+async function openProviderSettings(id: string) {
+  openProviders.add(id);
+  await openSettings('providers');
+  const card = [...$('providersList').querySelectorAll<HTMLElement>('.provider-card')].find((c) => c.dataset.provider === id);
+  if (!card) return;
+  card.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  card.classList.remove('flash');
+  void card.offsetWidth; // (the flash starts again)
+  card.classList.add('flash');
 }
 $<HTMLButtonElement>('settingsBtn').onclick = () => openSettings();
 $<HTMLButtonElement>('closeSettings').onclick = () => settingsDialog.close();
@@ -1034,6 +1056,7 @@ function clearTranscript() {
 }
 
 // ---------- new conversation page ----------
+const GEAR_ICON = '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="2.1"/><path d="M8 1.8v1.6M8 12.6v1.6M14.2 8h-1.6M3.4 8H1.8M12.4 3.6l-1.1 1.1M4.7 11.3l-1.1 1.1M12.4 12.4l-1.1-1.1M4.7 4.7 3.6 3.6"/><circle cx="8" cy="8" r="4.6"/></svg>';
 const CHEVRON = '<svg class="picker-chev" viewBox="0 0 12 12" width="11" height="11" aria-hidden="true"><path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 /** The project of the conversation shown (OFF_KEY outside projects), null if none. */
 const activeProject = () => offMode() ? OFF_KEY : activeDir() || null;
