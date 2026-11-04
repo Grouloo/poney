@@ -195,7 +195,8 @@ interface TurnState {
   gens: Map<string, Gen>;
   tools: Map<string, Tool>;
   subagents: Map<string, number>;
-  tokens: number;
+  tokens: Map<string, { tokens: number; main: boolean }>; // (each step's tokens written, its last count)
+  resumed: boolean; // (agy's result then counts the whole conversation)
   logs: Map<string, Log>;
   thought: Set<string>; // (the steps whose reasoning is shown)
   before: Set<string>; // (the sub-agents of earlier messages: not shown again)
@@ -314,7 +315,7 @@ export class AntigravityAgent extends EventEmitter<{ event: [AgentEvent] }> {
     if (this.running) throw new Error('L’agent est déjà en cours d’exécution.');
     this.stopped = false;
     this.emit('event', { type: 'turn_start' });
-    const state: TurnState = { main: this.sessionId, gens: new Map(), tools: new Map(), subagents: new Map(), tokens: 0, logs: new Map(), thought: new Set(), before: new Set() };
+    const state: TurnState = { main: this.sessionId, gens: new Map(), tools: new Map(), subagents: new Map(), tokens: new Map(), resumed: Boolean(this.sessionId), logs: new Map(), thought: new Set(), before: new Set() };
     let looking = Promise.resolve();
     const look = () => { looking = looking.then(() => this.readLogs(state)); return looking; };
     const timer = setInterval(look, 500);
@@ -411,12 +412,17 @@ export class AntigravityAgent extends EventEmitter<{ event: [AgentEvent] }> {
       const error = isString(p.error) ? p.error : str(rec(p.error).message) || str(p.status);
       this.emit('event', { type: 'error', message: agyError(error) });
     }
+    // This message's figures. In a conversation resumed, agy's result counts the whole conversation:
+    // the time is then this run's, and the tokens and steps those of the steps it streamed.
     const usage = rec(p.usage);
-    const tokens = num(usage.output_tokens) + num(usage.thinking_tokens) || state.tokens;
-    const totalMs = num(p.duration_seconds) * 1000 || Date.now() - started;
+    const counted = [...state.tokens.values()];
+    const stepTokens = counted.reduce((sum, x) => sum + x.tokens, 0);
+    const tokens = state.resumed ? stepTokens : num(usage.output_tokens) + num(usage.thinking_tokens) || stepTokens;
+    const totalMs = state.resumed ? Date.now() - started : num(p.duration_seconds) * 1000 || Date.now() - started;
+    const steps = state.resumed ? Math.max(1, counted.filter((x) => x.main).length) : num(p.num_turns, 1);
     return {
       reason: ok ? 'done' : str(p.status) === 'CANCELED' || str(p.status) === 'INTERRUPTED' ? 'stopped' : 'error',
-      stats: { totalMs, genMs: totalMs, promptMs: 0, tokens, exact: Boolean(usage.output_tokens), tps: totalMs ? tokens / (totalMs / 1000) : 0, steps: num(p.num_turns, 1) },
+      stats: { totalMs, genMs: totalMs, promptMs: 0, tokens, exact: tokens > 0, tps: totalMs ? tokens / (totalMs / 1000) : 0, steps },
     };
   }
 
@@ -431,7 +437,8 @@ export class AntigravityAgent extends EventEmitter<{ event: [AgentEvent] }> {
     const type = str(p.step_type).toLowerCase();
     const done = str(p.state).toUpperCase() === 'DONE';
     const usage = rec(p.usage);
-    state.tokens += num(usage.output_tokens);
+    const written = num(usage.output_tokens) + num(usage.thinking_tokens);
+    if (written) state.tokens.set(key, { tokens: written, main: conversation === state.main }); // (said again as the step goes on: its last count)
     // The context: what the main conversation's last call read and wrote (agy says no window size).
     const used = num(usage.total_tokens) || num(usage.input_tokens) + num(usage.output_tokens);
     if (conversation === state.main && used) this.setContext(used);

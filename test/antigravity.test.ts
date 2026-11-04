@@ -316,3 +316,22 @@ test('rewinding: a new conversation, told the earlier exchanges (agy cannot cut 
   agent.rewind('t1', 'RECAP\n\n');
   assert.deepEqual([agent.sessionId, agent.preamble], [null, null]);
 });
+
+test('a resumed conversation: the figures under the answer are this message\'s, not the conversation\'s', async () => {
+  const { agent, events, script } = await fakeAgy();
+  agent.sessionId = 'c1';
+  const usage = (output: number, thinking: number) => ({ input_tokens: 9000, output_tokens: output, thinking_tokens: thinking, total_tokens: 9000 + output });
+  await script({ stdout: [
+    step('c1', 7, { state: 'ACTIVE', step_type: 'agent_response', text_delta: 'Ré', usage: usage(10, 20) }),
+    step('c1', 7, { state: 'DONE', step_type: 'agent_response', text_delta: 'ponse', usage: usage(30, 20) }), // (the step's count, said again)
+    step('c1', 8, { state: 'DONE', step_type: 'agent_response', text_delta: '.', usage: usage(5, 0) }),
+    // agy's result: the whole conversation's
+    result({ conversation_id: 'c1', status: 'SUCCESS', response: 'Réponse.', duration_seconds: 840, num_turns: 31, usage: { output_tokens: 12000, thinking_tokens: 3000 } }),
+  ] });
+  const t0 = Date.now();
+  await agent.send('encore');
+  const stats = (events.findLast((e) => e.type === 'turn_end') as EventOf<'turn_end'>).stats!;
+  assert.equal(stats.tokens, 55);
+  assert.equal(stats.steps, 2);
+  assert.ok(stats.totalMs <= Date.now() - t0 && stats.totalMs < 60_000);
+});
