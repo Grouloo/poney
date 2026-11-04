@@ -101,6 +101,11 @@ node src/cli.ts --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
 
 ## Interface
 
+- **Steps as a stepper**: reasoning, assessments, compactions and tool calls are rows of one design, an icon then a
+  title (a brain for reasoning; a file's own icon for reading or writing it, as in the attachments). Rows that follow
+  each other are linked from icon to icon. The icon is blue and shimmering while the step runs, yellow while it waits
+  for the user, red when it failed, grey when done; a click on the row opens what it read and wrote
+  (`src/renderer/step-icons.ts`).
 - **Edit a previous message and relaunch** ("✎ Modifier" on hover): the agent goes back to its state before that
   message, even across a compaction (the replaced history is archived), and what follows is removed. Files already
   modified by the agent are not restored. When the exact state is gone (old conversations, a resume point lost in a

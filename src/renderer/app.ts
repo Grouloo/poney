@@ -11,6 +11,7 @@ import { EMOJIS, ICONS, ICON_COLORS, iconSvg } from './project-icons.ts';
 import { fileIconSvg, folderIconSvg, privateFolderIconSvg } from './file-icons.ts';
 import { menuIconSvg, type MenuGlyph } from './menu-icons.ts';
 import { findRanges } from './find.ts';
+import { stepIconSvg } from './step-icons.ts';
 import { wordDiff, type Piece } from './word-diff.ts';
 import DOMPurify from '../../node_modules/dompurify/dist/purify.es.mjs';
 import type { Api } from '../preload.cts';
@@ -35,7 +36,7 @@ interface Bubble {
   bubble: HTMLElement;
   raw: string;
   thinking: string;
-  thinkingEl: HTMLDetailsElement | null;
+  thinkingEl: HTMLElement | null;
   located: EventOf<'edit_located'>[];
   live?: NonNullable<ReturnType<typeof liveAction>> | null;
   liveFile?: { path: string; text: string | null } | null;
@@ -317,6 +318,7 @@ function setRunning(v: boolean) {
     $('status').textContent = '';
     // (stopped or interrupted: nothing goes on)
     chat.querySelectorAll<HTMLElement>('.plan-list li.running').forEach((li) => li.classList.replace('running', 'pending'));
+    chat.querySelectorAll<HTMLElement>('.step.running:not(.subagent)').forEach((el) => el.classList.remove('running'));
   }
 }
 
@@ -949,6 +951,8 @@ function markWaiting() {
   for (const li of chat.querySelectorAll<HTMLElement>('.plan-list li[data-agent]')) {
     li.classList.toggle('waiting', Boolean(agentViews.get(Number(li.dataset.agent))?.querySelector<HTMLElement>('.approval')));
   }
+  // (a sub-agent's card: yellow while it waits for an approval)
+  for (const [id, view] of agentViews) cards.get(id)?.classList.toggle('waiting', Boolean(view.querySelector('.approval')));
 }
 
 // ---------- a sub-agent's work, in the side panel ----------
@@ -2028,6 +2032,31 @@ function summarize(tool: string, args: ToolArgs = {}) {
   }
 }
 
+// ---------- steps: reasoning, assessments, compactions, tool calls ----------
+// Each a row: its icon (its state's color: blue and shimmering while it runs, yellow while it
+// waits for the user, red when it failed, grey when done), its title, and what it read and
+// wrote, shown on a click. Rows that follow each other are linked, as a vertical stepper.
+function stepHead(kind: string, title: string, path = '') {
+  return `<span class="step-icon">${stepIconSvg(kind, path)}</span><div class="card-head"><span class="tool">${esc(title)}</span><span class="summary"></span></div>`;
+}
+/** A row that opens on a click on its head (not when text of it is being selected). */
+function stepRow(className: string, kind: string, title: string, body = '') {
+  const el = div(`card step ${className}`);
+  el.innerHTML = `${stepHead(kind, title)}<div class="card-body">${body}</div>`;
+  el.querySelector<HTMLElement>('.card-head')!.onclick = () => !getSelection()?.toString() && el.classList.toggle('open');
+  return el;
+}
+/** A reasoning: a row before its answer. */
+function thinkingStep(b: Bubble): HTMLElement {
+  const el = stepRow('thinking running', 'thinking', 'Réflexion', '<div class="thinking-text"></div>');
+  b.el.before(el);
+  return el;
+}
+function setThinking(el: HTMLElement, summary: string, text: string) {
+  el.querySelector<HTMLElement>('.summary')!.textContent = summary;
+  el.querySelector<HTMLElement>('.thinking-text')!.textContent = text;
+}
+
 const TOOL_LABEL: Record<string, string> = { list: 'Lister', read: 'Lire', search: 'Chercher', write: 'Écrire', edit: 'Modifier', run: 'Exécuter', web_search: 'Web', fetch: 'Page web', agent: 'Sous-agent', plan: 'Plan', remember: 'Mémoriser', forget: 'Oublier', recall: 'Retrouver', ask: 'Questions', image: 'Image' };
 
 function renderDiff(diff: string) {
@@ -2089,16 +2118,8 @@ function drawStreaming() {
     // notes of the history, which the model imitates after a tool result): shown
     // live too, not only once the generation is over.
     const inline = splitThinking(b.raw).thinking;
-    if (inline.trim() && !b.thinkingEl) {
-      b.thinkingEl = document.createElement('details');
-      b.thinkingEl.className = 'thinking';
-      b.thinkingEl.innerHTML = '<summary>Réflexion…</summary><div></div>';
-      b.el.insertBefore(b.thinkingEl, b.bubble);
-    }
-    if (b.thinkingEl) {
-      b.thinkingEl.querySelector<HTMLElement>('summary')!.textContent = b.thinkPieces ? `Réflexion… ${b.thinkPieces} tokens` : 'Réflexion…';
-      b.thinkingEl.querySelector<HTMLElement>('div')!.textContent = b.thinking + inline;
-    }
+    if (inline.trim() && !b.thinkingEl) b.thinkingEl = thinkingStep(b);
+    if (b.thinkingEl) setThinking(b.thinkingEl, b.thinkPieces ? `${b.thinkPieces} tokens` : '', b.thinking + inline);
     const { text, pending } = streamingDisplay(b.raw);
     const tool = b.toolPending && b.toolName ? ` (${esc(b.toolName)})` : '';
     // A file being written or edited: a card to follow it in the side panel.
@@ -2347,12 +2368,7 @@ function onEvent(ev: SessionEvent) {
       if (ev.kind === 'thinking') {
         b.thinking += ev.text;
         if (!ev.summary) b.thinkPieces = (b.thinkPieces || 0) + 1; // (a summary's pieces say nothing of the tokens spent)
-        if (!b.thinkingEl) {
-          b.thinkingEl = document.createElement('details');
-          b.thinkingEl.className = 'thinking';
-          b.thinkingEl.innerHTML = '<summary>Réflexion…</summary><div></div>';
-          b.el.insertBefore(b.thinkingEl, b.bubble);
-        }
+        b.thinkingEl ??= thinkingStep(b);
       } else {
         b.raw += ev.text;
       }
@@ -2368,29 +2384,24 @@ function onEvent(ev: SessionEvent) {
       if (liveBubble === b) renderLivePanel();
       b.bubble.classList.remove('cursor');
       const thinking = (b.thinking + (ev.thinking && !b.thinking ? ev.thinking : '')).trim();
-      if (thinking && !b.thinkingEl) {
-        b.thinkingEl = document.createElement('details');
-        b.thinkingEl.className = 'thinking';
-        b.thinkingEl.innerHTML = '<summary>Réflexion</summary><div></div>';
-        b.thinkingEl.querySelector<HTMLElement>('div')!.textContent = thinking;
-        b.el.insertBefore(b.thinkingEl, b.bubble);
-      } else if (b.thinkingEl) {
-        b.thinkingEl.querySelector<HTMLElement>('summary')!.textContent = b.thinkPieces ? `Réflexion (${b.thinkPieces} tokens)` : 'Réflexion';
-        b.thinkingEl.querySelector<HTMLElement>('div')!.textContent = thinking; // (a reasoning that ends at once was never drawn; written in the answer: as kept)
-      }
+      if (thinking) {
+        // (a reasoning that ends at once was never drawn; written in the answer: as kept)
+        b.thinkingEl ??= thinkingStep(b);
+        setThinking(b.thinkingEl, b.thinkPieces ? `${b.thinkPieces} tokens` : '', thinking);
+        b.thinkingEl.classList.replace('running', 'ok');
+      } else b.thinkingEl?.remove();
       if (ev.text) {
         b.bubble.innerHTML = markdown(ev.text);
         showImages(b.bubble);
-      } else if (!thinking) b.el.remove();
-      else b.bubble.remove();
+      } else b.el.remove(); // (its reasoning, if any, is a step before it)
       break;
     }
     case 'action_start': {
       if (ev.tool === 'agent') {
         // Sub-agent card: compact (its latest activity, then the start of its report); a click shows
         // its whole work in the side panel (its task, a live log, its report).
-        const card = div('card subagent running');
-        card.innerHTML = `<div class="card-head"><span class="status"><span class="spin">◌</span></span><span class="tool">Sous-agent</span><span class="summary"></span><span class="tag sub-tokens"></span><span class="gauge sub-gauge hidden"><span class="gauge-bar"><span class="gauge-fill"></span><span class="gauge-mark"></span></span></span><span class="sub-open">›</span></div><div class="sub-line">démarre…</div>`;
+        const card = div('card step subagent running');
+        card.innerHTML = `<span class="step-icon">${stepIconSvg('agent')}</span><div class="card-head"><span class="tool">Sous-agent</span><span class="summary"></span><span class="tag sub-tokens"></span><span class="gauge sub-gauge hidden"><span class="gauge-bar"><span class="gauge-fill"></span><span class="gauge-mark"></span></span></span><span class="sub-open">›</span></div><div class="sub-line">démarre…</div>`;
         card.querySelector<HTMLElement>('.summary')!.textContent = ev.args?.title || 'sous-agent';
         card.title = 'Voir son travail dans le panneau de droite';
         const view = div('agent-view');
@@ -2407,8 +2418,8 @@ function onEvent(ev: SessionEvent) {
         } else add(card);
         break;
       }
-      const card = div('card running');
-      card.innerHTML = `<div class="card-head"><span class="status"><span class="spin">◌</span></span><span class="tool">${esc(TOOL_LABEL[ev.tool] || ev.tool)}</span><span class="summary"></span>${ev.auto ? '<span class="tag">vérification auto</span>' : ''}</div><div class="card-body"><pre class="out"></pre></div>`;
+      const card = div('card step running');
+      card.innerHTML = `<span class="step-icon">${stepIconSvg(ev.tool, ev.args?.path)}</span><div class="card-head"><span class="tool">${esc(TOOL_LABEL[ev.tool] || ev.tool)}</span><span class="summary"></span>${ev.auto ? '<span class="tag">vérification auto</span>' : ''}</div><div class="card-body"><pre class="out"></pre></div>`;
       const summaryEl = card.querySelector<HTMLElement>('.summary')!;
       summaryEl.textContent = summarize(ev.tool, ev.args);
       if (['read', 'write', 'edit'].includes(ev.tool) && ev.args?.path && !/^@turn\//.test(ev.args.path.trim())) { // (@turn/n: a step of the main agent, not a file)
@@ -2446,7 +2457,6 @@ function onEvent(ev: SessionEvent) {
       if (!card) break;
       card.classList.remove('running');
       card.classList.add(ev.ok ? 'ok' : 'fail');
-      card.querySelector<HTMLElement>('.status')!.textContent = ev.ok ? '✓' : '✗';
       card.querySelector<HTMLElement>('.approval, .ask-wait')?.remove();
       closeQuestionnaire(ev.id);
       if (card.dataset.tool === 'ask' && ev.meta?.answers) askAnswers.set(ev.id, cleanAnswers(parseQuestions(card.dataset.body), ev.meta.answers));
@@ -2507,31 +2517,28 @@ function onEvent(ev: SessionEvent) {
     }
     case 'triage_start': {
       if (replaying) break;
-      const text = ev.update ? 'Mise à jour du bilan…' : 'Bilan avant d’agir…';
-      // (a sub-agent's view has no user message: its assessment goes in its log)
-      const msg = ev.update ? null : [...(target || transcript).querySelectorAll<HTMLElement>('.msg.user')].pop();
-      if (msg) msg.appendChild(div('triage pending', `<span class="spin">◌</span> ${text}`));
-      else add(div('triage pending', `<span class="spin">◌</span> ${text}`));
+      add(stepRow('triage pending running', 'triage', ev.update ? 'Mise à jour du bilan…' : 'Bilan avant d’agir…'));
       break;
     }
     case 'triage': {
       // The assessment before acting, under the user message (its updates after outside
       // results, where they were made): what the model knows, doubts and does not know,
       // and the route the app chose.
-      const msg = ev.update || target ? null : [...transcript.querySelectorAll<HTMLElement>('.msg.user')].pop();
       (target || transcript).querySelectorAll<HTMLElement>('.triage.pending').forEach((p) => p.remove());
-      const place = (el: HTMLElement) => (msg ? msg.appendChild(el) : add(el));
-      if (ev.failed) { place(div('triage', ev.update ? '🧭 Mise à jour du bilan illisible : le bilan précédent reste en vigueur.' : '🧭 Bilan illisible : l’agent devra vérifier au moins une source avant de répondre.')); break; }
+      if (ev.failed) {
+        const f = add(stepRow('triage fail', 'triage', ev.update ? 'Mise à jour du bilan illisible' : 'Bilan illisible'));
+        f.querySelector<HTMLElement>('.summary')!.textContent = ev.update ? 'le bilan précédent reste en vigueur' : 'l’agent devra vérifier au moins une source avant de répondre';
+        break;
+      }
       const routes: Record<string, string> = { direct: 'agir directement', check: 'vérifier d’abord', investigate: 'lire plusieurs sources' };
       const route = routes[ev.route ?? ''];
       const count = (n: number, one: string, many: string) => (n ? `${n} ${n > 1 ? many : one}` : '');
       const parts = [count(ev.known?.length ?? 0, 'acquis', 'acquis'), count(ev.doubts?.length ?? 0, 'doute', 'doutes'), count(ev.unknowns?.length ?? 0, 'inconnue', 'inconnues')].filter(Boolean);
-      const d = document.createElement('details');
-      d.className = `triage route-${ev.route}`;
       const list = (title: string, items: (string | TriageItem)[] = []) => (items.length ? `<div class="triage-sec"><b>${title}</b><ul>${items.map((x) => `<li>${esc(typeof x === 'string' ? x : x.point)}${typeof x !== 'string' && x.why ? ` <span class="muted">— ${esc(x.why)}</span>` : ''}</li>`).join('')}</ul></div>` : '');
       if (ev.questions?.length) parts.push(count(ev.questions.length, 'question', 'questions'));
-      d.innerHTML = `<summary>🧭 ${ev.update ? 'Bilan mis à jour' : 'Bilan'}${parts.length ? ` : ${parts.join(', ')}` : ''} → ${route}</summary>${list('Sait', ev.known)}${list('Doute', ev.doubts)}${list('Ignore', ev.unknowns)}${list('À demander', ev.questions)}`;
-      place(d);
+      const d = stepRow(`triage ok route-${ev.route}`, 'triage', ev.update ? 'Bilan mis à jour' : 'Bilan', `<div class="triage-body">${list('Sait', ev.known)}${list('Doute', ev.doubts)}${list('Ignore', ev.unknowns)}${list('À demander', ev.questions)}</div>`);
+      d.querySelector<HTMLElement>('.summary')!.textContent = `${parts.length ? `${parts.join(', ')} ` : ''}→ ${route}`;
+      add(d);
       break;
     }
     case 'fetching':
@@ -2619,7 +2626,7 @@ function onEvent(ev: SessionEvent) {
     case 'keep_start':
       if (replaying) break;
       (target ?? transcript).querySelector<HTMLElement>('.compaction.pending')?.remove();
-      add(div('compaction pending', '<span class="spin">◌</span> Avant le compactage : ce qui mérite d’être retenu…'));
+      add(stepRow('compaction pending running', 'compaction', 'Avant le compactage : ce qui mérite d’être retenu…'));
       break;
     case 'kept':
       (target ?? transcript).querySelector<HTMLElement>('.compaction.pending')?.remove();
@@ -2629,14 +2636,13 @@ function onEvent(ev: SessionEvent) {
       break;
     case 'compaction_start':
       (target ?? transcript).querySelector<HTMLElement>('.compaction.pending')?.remove();
-      add(div('compaction pending', '<span class="spin">◌</span> Compactage du contexte : résumé des anciens messages…'));
+      add(stepRow('compaction pending running', 'compaction', 'Compactage du contexte : résumé des anciens messages…'));
       break;
     case 'compaction': {
       if (promptProgress?.id === 'compaction') promptProgress = null;
       (target ?? transcript).querySelector<HTMLElement>('.compaction.pending')?.remove();
-      const d = document.createElement('details');
-      d.className = 'compaction';
-      d.innerHTML = `<summary>🗜 Contexte compacté : ${fmtTokens(ev.before)} → ${fmtTokens(ev.after)} tokens (${ev.removed} messages résumés)${ev.fallback ? ' · résumé de secours' : ''}</summary>${ev.fallback ? `<p class="compaction-why">Le modèle n’a pas pu écrire le résumé (${esc(ev.failure || 'raison inconnue')}) : un résumé de secours a été construit à partir des demandes, du résumé précédent et des dernières notes de l’agent.</p>` : ''}<pre></pre>`;
+      const d = stepRow('compaction ok', 'compaction', 'Contexte compacté', `${ev.fallback ? `<p class="compaction-why">Le modèle n’a pas pu écrire le résumé (${esc(ev.failure || 'raison inconnue')}) : un résumé de secours a été construit à partir des demandes, du résumé précédent et des dernières notes de l’agent.</p>` : ''}<pre></pre>`);
+      d.querySelector<HTMLElement>('.summary')!.textContent = `${fmtTokens(ev.before)} → ${fmtTokens(ev.after)} tokens (${ev.removed} messages résumés)${ev.fallback ? ' · résumé de secours' : ''}`;
       d.querySelector<HTMLElement>('pre')!.textContent = ev.summary;
       add(d);
       break;

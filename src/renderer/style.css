@@ -181,10 +181,6 @@ body:has(dialog[open]) .topbar { -webkit-app-region: no-drag; }
 .cursor::after { content: '▍'; animation: blink 1s steps(2) infinite; color: var(--accent); }
 @keyframes blink { 50% { opacity: 0; } }
 
-details.thinking { color: var(--muted); font-size: 13.5px; margin-bottom: 6px; }
-details.thinking summary { cursor: pointer; user-select: none; }
-details.thinking div { white-space: pre-wrap; border-left: 2px solid var(--border); padding-left: 10px; margin-top: 4px; max-height: 260px; overflow-y: auto; }
-
 /* ---------- action cards ---------- */
 .card { border: 1px solid var(--border); border-radius: 10px; background: var(--surface); margin: 8px auto; overflow: hidden; }
 #transcript > .card { padding: 0; max-width: 820px; width: calc(100% - 40px); }
@@ -199,7 +195,7 @@ details.thinking div { white-space: pre-wrap; border-left: 2px solid var(--borde
 .card .tag { font-size: 12px; color: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 0 6px; white-space: nowrap; flex-shrink: 0; }
 .card.ok .status { color: var(--ok); }
 .card.fail .status { color: var(--err); }
-.card.fail { border-color: color-mix(in srgb, var(--err) 45%, var(--border)); }
+.card.fail:not(.step) { border-color: color-mix(in srgb, var(--err) 45%, var(--border)); }
 .card-body {
   border-top: 0 solid var(--border); height: 0; overflow: hidden; visibility: hidden; interpolate-size: allow-keywords;
   transition: height 0.2s ease, visibility 0.2s;
@@ -208,6 +204,33 @@ details.thinking div { white-space: pre-wrap; border-left: 2px solid var(--borde
 .card-body pre { margin: 0; border: none; border-radius: 0; max-height: 420px; overflow: auto; }
 .spin { display: inline-block; animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---------- steps: reasoning, assessments, compactions, tool calls ----------
+   A row each: the icon in a column of its own, then the head; the body (what it read and
+   wrote) under the head on a click. Rows that follow each other are linked by a line from
+   icon to icon: a vertical stepper. The icon's color is the step's state. */
+.card.step { display: grid; grid-template-columns: 24px minmax(0, 1fr); column-gap: 6px; position: relative; margin: 2px auto; border: none; border-radius: 0; background: none; overflow: visible; color: var(--text); }
+#transcript > .step { padding: 0; max-width: 820px; width: calc(100% - 40px); }
+.step > :not(.step-icon) { grid-column: 2; }
+.step-icon { grid-column: 1; grid-row: 1; width: 24px; height: 24px; margin-top: 3px; display: grid; place-items: center; color: var(--muted); }
+.step-icon svg { width: 16px; height: 16px; color: inherit !important; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+.step:has(+ .step)::after { content: ''; position: absolute; left: 11.5px; top: 30px; bottom: -5px; width: 1px; background: var(--border); }
+.step > .card-head { padding: 5px 8px; border-radius: 8px; }
+.step .tool { color: var(--text); font-weight: 500; }
+.step > .card-body { border: 0 solid var(--border); border-radius: 8px; background: var(--surface); }
+.card.step.open > .card-body { border-width: 1px; margin: 2px 0 6px; }
+.step.running > .step-icon { color: var(--accent-2); animation: step-shimmer 1.4s ease-in-out infinite; }
+.step.waiting > .step-icon, .step:has(.approval, .ask-wait) > .step-icon { color: var(--warn); animation: none; }
+.step.fail > .step-icon { color: var(--err); }
+.step.fail .tool { color: var(--err); }
+@keyframes step-shimmer {
+  0%, 100% { opacity: 1; filter: drop-shadow(0 0 0 transparent); }
+  50% { opacity: 0.55; filter: drop-shadow(0 0 4px var(--accent-2)); }
+}
+.thinking-text { white-space: pre-wrap; color: var(--muted); font-size: 13.5px; padding: 8px 12px; max-height: 260px; overflow-y: auto; }
+.triage-body { padding: 4px 12px 10px; font-size: 13px; }
+.step.compaction .card-body { padding: 0 12px; }
+
 
 .diff .add { background: var(--add-bg); color: var(--ok); display: block; }
 .diff .del { background: var(--del-bg); color: var(--err); display: block; }
@@ -927,11 +950,6 @@ img.proj-icon { width: 1.15em; height: 1.15em; object-fit: contain; vertical-ali
 .gauge.sub-gauge .gauge-bar { width: 44px; }
 .agent-panel .gauge:hover { background: none; color: var(--muted); }
 
-.compaction {
-  border: 1px dashed var(--border); border-radius: 10px; margin: 10px auto; padding: 6px 12px !important;
-  color: var(--muted); font-size: 13.5px; width: calc(100% - 40px); max-width: 820px;
-}
-.compaction summary { cursor: pointer; user-select: none; }
 .kept {
   border: 1px solid var(--border); border-radius: 10px; margin: 10px auto; padding: 8px 12px;
   font-size: 13.5px; width: calc(100% - 40px); max-width: 820px; background: var(--surface);
@@ -942,7 +960,7 @@ img.proj-icon { width: 1.15em; height: 1.15em; object-fit: contain; vertical-ali
 .kept-text { flex: 1; min-width: 0; }
 .kept-where { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
 
-.compaction pre { white-space: pre-wrap; font: 13px/1.5 var(--mono); color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+.step.compaction pre { white-space: pre-wrap; font: 13px/1.5 var(--mono); color: var(--text); background: none; border: none; padding: 8px 0; max-height: 420px; overflow: auto; }
 
 /* ---------- generation timing ---------- */
 .gen-meta { color: var(--muted); font-size: 12.5px; margin: -6px auto 10px; font-variant-numeric: tabular-nums; cursor: default; }
@@ -986,11 +1004,11 @@ fieldset label.check input { width: auto; }
 .tor-status-line .tor-state::before { margin-left: 0; }
 
 /* ---------- sub-agents ---------- */
-.card.subagent { border-left: 3px solid var(--accent-2); cursor: pointer; }
-.card.subagent:hover, .card.subagent.shown { border-color: var(--accent); }
+.card.subagent { cursor: pointer; }
+.card.subagent.shown > .card-head { background: var(--panel-2); }
 .card.subagent .sub-open { margin-left: auto; color: var(--muted); font-size: 16px; }
 .card.subagent .summary { min-width: 0; color: var(--text); font-family: inherit; font-size: 14px; }
-.card.subagent .sub-line { padding: 0 12px 8px 34px; color: var(--muted); font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card.subagent .sub-line { padding: 0 8px 6px; color: var(--muted); font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* a sub-agent's work, in the side panel */
 .agent-panel .agent-chip, .live-panel .agent-chip { font-size: 13px; font-weight: 600; color: var(--accent); }
 .agent-panel .agent-title, .live-panel .agent-title { flex: 1; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1118,11 +1136,6 @@ fieldset label.check input { width: auto; }
 .conv-card .state { display: none; }
 .conv-card.busy:not(.pair) .state, .conv-card.pair .pair-row.busy .state { display: inline-block; flex: none; width: 14px; height: 14px; margin: 2px; border-radius: 50%; border: 2px solid var(--accent); border-right-color: transparent; animation: spin 0.9s linear infinite; }
 .msg.user .fetched { margin: 4px 0 0 15%; font-size: 13px; color: var(--muted); white-space: pre-line; }
-.msg.user .triage { margin: 4px 0 0 15%; font-family: var(--ui); font-size: 13px; color: var(--muted); }
-#transcript > .triage, .agent-view .triage { margin: 6px auto; font-family: var(--ui); font-size: 13px; color: var(--muted); }
-.triage summary { cursor: pointer; user-select: none; }
-.triage.route-check summary { color: var(--warn); }
-.triage.route-investigate summary { color: var(--accent); }
 .triage-sec { margin: 6px 0 0 18px; }
 .triage-sec ul { margin: 2px 0 0; padding-left: 18px; color: var(--text); }
 
