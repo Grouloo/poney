@@ -1333,9 +1333,10 @@ body.panel-dragging { user-select: none; cursor: grabbing; }
 .lightbox { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.78); cursor: zoom-out; -webkit-app-region: no-drag; }
 .lightbox img { max-width: 92vw; max-height: 92vh; border-radius: 6px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5); }
 
-.img-wrap { position: relative; display: inline-block; max-width: 100%; }
-.img-wrap .answer-img { margin: 8px 0; }
-.img-save { position: absolute; top: 16px; right: 8px; display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0; border: none; border-radius: 8px; color: #fff; background: rgba(0, 0, 0, 0.55); opacity: 0; transition: opacity 0.15s; cursor: pointer; }
+/* (the wrapper takes the image's size limit: sized by the image's own width, it ran past the image shown) */
+.img-wrap { position: relative; display: block; width: fit-content; max-width: min(100%, 520px); margin: 8px 0; }
+.img-wrap .answer-img { max-width: 100%; margin: 0; }
+.img-save { position: absolute; top: 8px; right: 8px; display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0; border: none; border-radius: 8px; color: #fff; background: rgba(0, 0, 0, 0.55); opacity: 0; transition: opacity 0.15s; cursor: pointer; }
 .img-save svg { width: 16px; height: 16px; }
 .img-wrap:hover .img-save, .img-save:focus-visible { opacity: 1; }
 .img-save:hover { background: rgba(0, 0, 0, 0.75); }
