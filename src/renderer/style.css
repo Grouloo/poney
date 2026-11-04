@@ -1389,3 +1389,17 @@ body.panel-dragging { user-select: none; cursor: grabbing; }
 /* A drop on the files panel: the folder it goes into */
 #filesPane.drop-root { outline: 2px dashed var(--accent); outline-offset: -4px; border-radius: 8px; }
 #fileTree .node.drop-target { background: color-mix(in srgb, var(--accent) 22%, transparent); border-radius: 6px; }
+
+/* A provider's limits in the settings: per line its name, a bar, the share used, then when it starts again */
+.provider-limits { display: grid; gap: 8px; margin: 4px 0 10px; }
+.limit-group { margin-top: 4px; font-size: 12.5px; font-weight: 600; color: var(--muted); }
+.limit-row { display: grid; grid-template-columns: 110px 1fr 48px; align-items: center; column-gap: 10px; row-gap: 2px; font-size: 13px; }
+.limit-name { color: var(--text); }
+.limit-bar { height: 6px; border-radius: 3px; overflow: hidden; background: color-mix(in srgb, var(--text) 12%, transparent); }
+.limit-fill { display: block; height: 100%; border-radius: inherit; background: var(--accent-2); transition: width 0.4s cubic-bezier(0.22, 1, 0.36, 1); }
+.limit-row.warn .limit-fill { background: var(--warn); }
+.limit-row.full .limit-fill { background: var(--err); }
+.limit-value { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+.limit-reset { grid-column: 2 / -1; font-size: 11.5px; color: var(--muted); }
+.limit-reset:empty { display: none; }
+.limit-row.none .limit-bar { opacity: 0.4; }

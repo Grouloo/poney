@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { Agent, DEFAULT_CONFIG } from './agent/agent.ts';
 import { loadSkills, skillDirs } from './agent/skills.ts';
 import { askStarted, draftTip } from './agent/ask.ts';
-import { AntigravityAgent, agyModels, agyUsage, findAgy, type AgyUsage } from './agent/antigravity.ts';
+import { AntigravityAgent, agyModels, agyUsage, agyUsageGroups, findAgy, type AgyUsage } from './agent/antigravity.ts';
 import { ClaudeAgent, findClaude, claudeAuth, claudeEnv, machineClaudeDir, claudeLogin, claudeModels, claudeUsage, linkUserSettings } from './agent/claude.ts';
 import { listModels, lmStudioModels, setInferenceService } from './agent/llm.ts';
 import { ModelEngine } from './engine/engine.ts';
@@ -951,10 +951,11 @@ handle('antigravity:status', [], async () => {
 });
 
 const claudeUsageInfo = new Map<string, { at: number; usage: ClaudeUsage }>();
-handle('claude:usage', [], async () => {
+// (an account's, for the settings; else the conversation's)
+handle('claude:usage', [optional(isString)], async (account) => {
   const executable = findClaude();
   if (!executable) return null;
-  const id = claudeAccountOf(current().choice);
+  const id = account ?? claudeAccountOf(current().choice);
   const known = claudeUsageInfo.get(id);
   if (known && Date.now() - known.at < 60000) return known.usage;
   const usage = await claudeUsage(executable, { configDir: claudeDirOf(id) }).catch((e) => { logError('claude usage', e); return null; });
@@ -973,6 +974,16 @@ handle('antigravity:usage', [], async () => {
   const usage = await agyUsage(executable, model).catch((e) => { logError('antigravity usage', e); return null; });
   agyUsageInfo.set(model, { at: Date.now(), usage });
   return usage;
+});
+// Every group's quota, for the settings.
+let agyGroupsInfo: { at: number; groups: AgyUsage[] } | null = null;
+handle('antigravity:usageGroups', [], async () => {
+  const executable = findAgy();
+  if (!executable) return [];
+  if (agyGroupsInfo && Date.now() - agyGroupsInfo.at < 60000) return agyGroupsInfo.groups;
+  const groups = await agyUsageGroups(executable).catch((e) => { logError('antigravity usage', e); return []; });
+  agyGroupsInfo = { at: Date.now(), groups };
+  return groups;
 });
 // Another account: its folder takes the user's settings; it logs in next.
 handle('claude:addAccount', [], () => {

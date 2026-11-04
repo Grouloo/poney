@@ -178,8 +178,9 @@ export interface Channels {
   'session:setAskDraft': [[draft: AskDraft | null], void];
   'claude:status': [[], ClaudeStatus];
   'antigravity:status': [[], AntigravityStatus];
-  'claude:usage': [[], ClaudeUsage];
+  'claude:usage': [[account?: string], ClaudeUsage];
   'antigravity:usage': [[], AgyUsage | null];
+  'antigravity:usageGroups': [[], AgyUsage[]];
   'claude:addAccount': [[], { settings: PublicSettings; id: string }];
   'claude:login': [[id: string], boolean];
   'claude:loginCode': [[code: string], void];

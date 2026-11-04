@@ -224,7 +224,7 @@ test('the plan\'s session usage, or nothing where limits do not apply or the cal
   let closed = 0;
   const query = (answer: unknown) => (): ClaudeQuery => idle({ [call]: async () => answer, close() { closed++; } });
   const usage = await claudeUsage('/bin/claude', { query: query({ rate_limits_available: true, rate_limits: { five_hour: { utilization: 22, resets_at: 'r5' }, seven_day: { utilization: 56, resets_at: 'r7' } } }) });
-  assert.deepEqual(usage, { utilization: 22, resetsAt: 'r5' });
+  assert.deepEqual(usage, { utilization: 22, resetsAt: 'r5', weekly: { utilization: 56, resetsAt: 'r7' } });
   assert.equal(await claudeUsage('/bin/claude', { query: query({ rate_limits_available: false, rate_limits: null }) }), null);
   assert.equal(await claudeUsage('/bin/claude', { query: () => idle({ close() { closed++; } }) }), null);
   assert.equal(closed, 3);

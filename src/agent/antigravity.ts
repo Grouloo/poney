@@ -83,25 +83,39 @@ export function agyModels(executable: string, run: ExecFn = defaultExec) {
 }
 
 export interface AgyLimit { remaining: number; resetsAt: string | null; disabled: boolean }
-export interface AgyUsage { group: string; fiveHour: AgyLimit | null; weekly: AgyLimit | null }
+export interface AgyUsage { group: string; description?: string; fiveHour: AgyLimit | null; weekly: AgyLimit | null }
 
-/** The quota of a model's group (agy shares one between "Gemini Models", and between "Claude and GPT models"). */
-export function parseUsage(stdout: string, modelName: string): AgyUsage | null {
+/** Each group's quota (agy shares one between "Gemini Models", and between "Claude and GPT models"). */
+export function parseUsageGroups(stdout: string): AgyUsage[] {
   let data: Record<string, unknown>;
-  try { data = rec(rec(rec(parseJson(stdout)).command).data); } catch { return null; }
+  try { data = rec(rec(rec(parseJson(stdout)).command).data); } catch { return []; }
   const groups = Array.isArray(data.groups) ? data.groups.map(rec) : [];
-  const family = modelName.trim().split(/[\s-]/)[0].toLowerCase();
-  const group = groups.find((g) => `${str(g.name)} ${str(g.description)}`.toLowerCase().includes(family)) ?? (groups.length === 1 ? groups[0] : undefined);
-  if (!group) return null;
-  const buckets = Array.isArray(group.buckets) ? group.buckets.map(rec) : [];
-  const limit = (window: string): AgyLimit | null => {
-    const b = buckets.find((x) => str(x.window) === window);
-    return b && typeof b.remaining_fraction === 'number' ? { remaining: b.remaining_fraction, resetsAt: str(b.reset_time) || null, disabled: b.disabled === true } : null;
-  };
-  return { group: str(group.name), fiveHour: limit('5h'), weekly: limit('weekly') };
+  return groups.map((group) => {
+    const buckets = Array.isArray(group.buckets) ? group.buckets.map(rec) : [];
+    const limit = (window: string): AgyLimit | null => {
+      const b = buckets.find((x) => str(x.window) === window);
+      return b && typeof b.remaining_fraction === 'number' ? { remaining: b.remaining_fraction, resetsAt: str(b.reset_time) || null, disabled: b.disabled === true } : null;
+    };
+    return { group: str(group.name), description: str(group.description), fiveHour: limit('5h'), weekly: limit('weekly') };
+  });
 }
 
-/** The quota left, by agy's read-only "/usage" command (no model runs). */
+/** The quota of a model's group. */
+export function parseUsage(stdout: string, modelName: string): AgyUsage | null {
+  const groups = parseUsageGroups(stdout);
+  const family = modelName.trim().split(/[\s-]/)[0].toLowerCase();
+  const group = groups.find((g) => `${g.group} ${g.description}`.toLowerCase().includes(family)) ?? (groups.length === 1 ? groups[0] : undefined);
+  return group ? { group: group.group, fiveHour: group.fiveHour, weekly: group.weekly } : null;
+}
+
+/** The quota left, by agy's read-only "/usage" command (no model runs): every group's. */
+export function agyUsageGroups(executable: string, run: ExecFn = defaultExec) {
+  return new Promise<AgyUsage[]>((resolve) => {
+    run(executable, ['-p', '/usage', '--output-format', 'json'], { timeout: 20000, env: process.env }, (_error, stdout) => resolve(parseUsageGroups(stdout)));
+  });
+}
+
+/** The quota left of a model's group. */
 export function agyUsage(executable: string, modelName: string, run: ExecFn = defaultExec) {
   return new Promise<AgyUsage | null>((resolve) => {
     run(executable, ['-p', '/usage', '--output-format', 'json'], { timeout: 20000, env: process.env }, (_error, stdout) => resolve(parseUsage(stdout, modelName)));

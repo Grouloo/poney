@@ -245,8 +245,12 @@ export async function claudeUsage(executable: string, { query, configDir = null 
 async function sessionUsage(q: ClaudeQuery) {
   const r = rec(await q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?.({ skipBehaviors: true }));
   if (!r.rate_limits_available) return null;
-  const session = rec(rec(r.rate_limits).five_hour);
-  return typeof session.utilization === 'number' ? { utilization: session.utilization, resetsAt: isString(session.resets_at) || isNumber(session.resets_at) ? session.resets_at : null } : null;
+  const limit = (raw: unknown) => {
+    const l = rec(raw);
+    return typeof l.utilization === 'number' ? { utilization: l.utilization, resetsAt: isString(l.resets_at) || isNumber(l.resets_at) ? l.resets_at : null } : null;
+  };
+  const session = limit(rec(r.rate_limits).five_hour);
+  return session ? { ...session, weekly: limit(rec(r.rate_limits).seven_day) } : null; // (the session's, and the week's)
 }
 
 const insideOf = (cwd: string, file: unknown, scratch: string | null = null) => {

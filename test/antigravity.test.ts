@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { AntigravityAgent, agyError, agyModels, agyUsage, parseModels, parseUsage, toolView } from '../src/agent/antigravity.ts';
+import { AntigravityAgent, agyError, agyModels, agyUsage, agyUsageGroups, parseModels, parseUsage, toolView } from '../src/agent/antigravity.ts';
 import { readImage } from '../src/files.ts';
 import { parseJson, isStringArray } from '../src/unknown.ts';
 import type { AgentEvent, EventOf } from '../src/types.ts';
@@ -157,6 +157,10 @@ test('the quota left, by agy\'s /usage: the group of the model', async () => {
   const usage = await agyUsage('agy', 'gemini-3.8-flash-low', (_file, a, _o, done) => { called = a; done(null, out, ''); });
   assert.deepEqual(called, ['-p', '/usage', '--output-format', 'json']);
   assert.equal(usage?.group, 'Gemini Models');
+  // Every group, for the settings.
+  const groups = await agyUsageGroups('agy', (_file, _a, _o, done) => done(null, out, ''));
+  assert.deepEqual(groups.map((g) => [g.group, g.fiveHour?.remaining, g.weekly?.remaining]), [['Gemini Models', 0.9853, 0.9654], ['Claude and GPT models', 1, 0]]);
+  assert.deepEqual(await agyUsageGroups('agy', (_file, _a, _o, done) => done(null, 'not json', '')), []);
 });
 
 test('the reasoning and the sub-agents\' steps come from agy\'s logs', async () => {

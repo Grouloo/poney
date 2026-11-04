@@ -692,8 +692,46 @@ function claudeCard(p: Provider) {
     login.textContent = a.loggedIn ? 'Changer de compte…' : 'Se connecter…';
     login.onclick = () => loginClaude(p.id);
   }
+  // The plan's limits: the session (5 hours), the week.
+  if (claude.installed && a?.loggedIn) limitsBox(card, async () => {
+    const u = await window.api.claudeUsage(p.id);
+    return u ? [{ rows: [{ name: 'Session (5 h)', used: u.utilization, resetsAt: u.resetsAt }, ...(u.weekly ? [{ name: 'Semaine', used: u.weekly.utilization, resetsAt: u.weekly.resetsAt }] : [])] }] : null;
+  });
   modelChecks(card, p, a?.models.map((m) => ({ id: m.value, name: m.name })) ?? []);
   return card;
+}
+
+/** A plan's limits: a bar each, the share used, and when it starts again. */
+interface LimitRow { name: string; used: number | null; resetsAt: string | number | null; note?: string }
+function limitRows(box: HTMLElement, rows: LimitRow[]) {
+  for (const r of rows) {
+    const row = box.appendChild(div('limit-row'));
+    row.innerHTML = '<span class="limit-name"></span><span class="limit-bar"><span class="limit-fill"></span></span><span class="limit-value"></span><span class="limit-reset"></span>';
+    row.querySelector<HTMLElement>('.limit-name')!.textContent = r.name;
+    const used = r.used === null ? null : Math.round(r.used);
+    row.querySelector<HTMLElement>('.limit-fill')!.style.width = `${Math.min(100, used ?? 0)}%`;
+    row.querySelector<HTMLElement>('.limit-value')!.textContent = used === null ? '—' : `${used} %`;
+    row.querySelector<HTMLElement>('.limit-reset')!.textContent = r.note ?? (r.resetsAt ? `Remise à zéro le ${resetDate(r.resetsAt)}` : '');
+    row.classList.toggle('warn', (used ?? 0) >= 80);
+    row.classList.toggle('full', (used ?? 0) >= 100);
+    row.classList.toggle('none', used === null);
+  }
+}
+/** The limits of a provider, filled when they come (null: not known). */
+function limitsBox(card: HTMLElement, load: () => Promise<{ title?: string; rows: LimitRow[] }[] | null>) {
+  const box = card.appendChild(div('provider-limits'));
+  box.appendChild(div('muted')).textContent = 'Utilisation…';
+  load().catch(() => null).then((groups) => {
+    box.replaceChildren();
+    if (!groups?.length) {
+      box.appendChild(div('muted')).textContent = 'Utilisation indisponible pour l’instant.';
+      return;
+    }
+    for (const g of groups) {
+      if (g.title) box.appendChild(div('limit-group')).textContent = g.title;
+      limitRows(box, g.rows);
+    }
+  });
 }
 
 function antigravityCard(p: Provider) {
@@ -702,6 +740,16 @@ function antigravityCard(p: Provider) {
   const state = card.appendChild(div('muted'));
   state.textContent = !antigravity.installed ? 'Antigravity n’est pas installé sur cette machine : installez sa ligne de commande (agy), puis lancez « agy » une fois dans un terminal pour vous connecter.'
     : !p.enabled ? '' : antigravity.error ?? `${antigravity.models.length} modèle${antigravity.models.length > 1 ? 's' : ''}, avec la connexion de cette machine.`;
+  // The quota of each group of models: its 5 hours, its week.
+  if (antigravity.installed && p.enabled) limitsBox(card, async () => (await window.api.antigravityUsageGroups()).map((g) => ({
+    title: g.group,
+    rows: [g.fiveHour, g.weekly].flatMap((l, i) => (!l ? [] : [{
+      name: i ? 'Semaine' : 'Session (5 h)',
+      used: l.disabled ? null : (1 - l.remaining) * 100,
+      resetsAt: l.resetsAt,
+      ...(l.disabled ? { note: 'Sans objet pour l’instant' } : {}),
+    }])),
+  })));
   modelChecks(card, p, antigravity.models.map((m) => ({ id: m.value, name: m.name })));
   return card;
 }
@@ -5639,7 +5687,10 @@ async function refreshUsage() {
   g.classList.toggle('warn', used >= 80);
   g.classList.toggle('full', used >= 100);
   g.querySelector<HTMLElement>('.gauge-text')!.textContent = `session ${used} %`;
-  g.dataset.tip = `Session de votre abonnement : ${used} % utilisés${usage.resetsAt ? `. Remise à zéro le ${resetDate(usage.resetsAt)}` : ''}`;
+  g.dataset.tip = [
+    `Session de votre abonnement : ${used} % utilisés${usage.resetsAt ? `. Remise à zéro le ${resetDate(usage.resetsAt)}` : ''}`,
+    usage.weekly ? `Semaine : ${Math.round(usage.weekly.utilization)} % utilisés${usage.weekly.resetsAt ? `. Remise à zéro le ${resetDate(usage.weekly.resetsAt)}` : ''}` : '',
+  ].filter(Boolean).join('\n');
 }
 setInterval(() => forPanes(refreshUsage), 5 * 60 * 1000);
 

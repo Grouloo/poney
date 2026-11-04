@@ -249,7 +249,8 @@ node src/cli.ts --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
 ![A command waiting for approval; the sidebar sorts the conversations by state](docs/screenshots/approval.png)
 - **A turn ended by an error** puts its conversation under "Erreur", with "Reprendre" in the transcript: the conversation goes on from where it stopped.
 - **Plan usage** beside the context gauge with a Claude model: how much of the session (5 hours) is used (the SDK marks this call
-  as experimental; without an answer the gauge does not show).
+  as experimental; without an answer the gauge does not show). Réglages › Fournisseurs shows each Claude account's
+  session and week, and each Antigravity group's (5 hours, week), with when they start again (read at most once a minute).
 - **Context gauge** under the input (the tick marks the compaction threshold); a click compacts on demand. With a
   Claude model it shows the API's counts, from the first message on, and the Claude harness compacts by itself.
   Each sub-agent has its own, on its card and in its panel (kept with its result).

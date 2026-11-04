@@ -67,6 +67,7 @@ const api = {
   antigravityStatus: call('antigravity:status'),
   claudeUsage: call('claude:usage'),
   antigravityUsage: call('antigravity:usage'),
+  antigravityUsageGroups: call('antigravity:usageGroups'),
   addClaudeAccount: call('claude:addAccount'),
   claudeLogin: call('claude:login'),
   claudeLoginCode: call('claude:loginCode'),
