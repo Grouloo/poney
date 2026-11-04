@@ -166,6 +166,8 @@ export interface Checkpoint {
   currentTask?: string | null;
   triage?: TurnTriage | null;
   rebuild?: boolean;
+  session?: string | null; // Claude, Antigravity: their session when the message was sent (null: none yet)
+  at?: string | null; // Claude: the last entry of that session then, where it is forked to go back
 }
 
 /** Where a turn starts again from, a checkpoint or a state rebuilt from the transcript. */
@@ -333,6 +335,9 @@ export interface ConversationFile {
   claudeContext?: ContextStats | null;
   agySession?: string | null;
   agyContext?: ContextStats | null;
+  claudeLast?: string | null; // the last entry of the Claude session (a rewind point for the next message)
+  claudeForkAt?: string | null; // rewound: the next message forks the session from this entry
+  preamble?: string | null; // rewound without a point to fork from: the earlier exchanges, told in the next message
 }
 
 /** A conversation in the lists. */

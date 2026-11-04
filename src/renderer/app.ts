@@ -1090,7 +1090,7 @@ function startEditMessage(m: HTMLElement, turnId: string, text: string) {
   m.classList.add('editing');
   const editor = div('msg-editor');
   editor.innerHTML = `<textarea rows="3"></textarea>
-    <p class="edit-note">Les messages qui suivent seront supprimés de la conversation. Les fichiers déjà modifiés par l’agent ne sont pas restaurés.</p>
+    <p class="edit-note">Les messages qui suivent seront supprimés de la conversation. Les fichiers déjà modifiés par l’agent ne sont pas restaurés.${choice().engine === 'antigravity' ? ' Antigravity reprendra dans une nouvelle conversation, avec le récit des échanges précédents.' : ''}</p>
     <div class="edit-actions"><button class="ghost cancel">Annuler</button><button class="primary relaunch">Relancer</button></div>`;
   const area = editor.querySelector<HTMLTextAreaElement>('textarea')!;
   area.value = text;

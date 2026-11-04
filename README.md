@@ -105,6 +105,11 @@ node src/cli.ts --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
   message, even across a compaction (the replaced history is archived), and what follows is removed. Files already
   modified by the agent are not restored. When the exact state is gone (old conversations, a resume point lost in a
   crash), the history is rebuilt from the saved transcript. If the relaunch fails, the editor stays open with the text.
+  With Claude, the session is forked at its last entry before that message (`resumeSessionAt` + `forkSession`: the
+  original session stays, so an earlier rewind still works). agy can neither cut nor fork a conversation: Antigravity
+  starts a new one, whose first message tells the earlier exchanges (`recapOf` in `src/agent/rebuild.ts`: messages,
+  answers, tool calls and their results, without reasoning nor sub-agents); so does Claude when no fork point is known
+  (conversations from before). "Resume from here" on an action stays with Poney's harness.
 - **Resume from here** (on hover over an action): the agent goes back to just after the message that asked for that
   action, runs it again (with the rest of its batch; results of the batch's earlier actions are kept) and goes on.
   Useful after a stop or a failure (slow Tor, missing file…). A group of sub-agents restarts as a whole.

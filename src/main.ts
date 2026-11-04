@@ -20,7 +20,7 @@ import { isGithub, tokenUrl } from './remote-url.ts';
 import { appsToOpen, bringInto, freeName, imagePath, listDir, openWith, readFileForViewer, readImage, type OpeningApp } from './files.ts';
 import { resolveInside } from './agent/tools.ts';
 import { credentialEnv, gitClone, type RemoteToken, gitFileStates, gitBranches, gitSwitch, gitCreateBranch, createGithubRepo, findGh, GITHUB_TOKEN_PAGE, gitChangeRemote, githubAccount, gitStatus, gitConnect, gitDiff, gitFetch, gitRemote, gitRemoveRemote, gitSync, readyGh } from './git.ts';
-import { migrateLegacy, rebuildHistory, rebuildForAction } from './agent/rebuild.ts';
+import { migrateLegacy, rebuildHistory, rebuildForAction, recapOf } from './agent/rebuild.ts';
 import { checkTor, torStatus, newCircuits, findTorProxy, requireTor, proxyEnv } from './agent/tor.ts';
 import { errorMessage, isBoolean, isNumber, isRecord, isString, isStringArray, list, parseJson, rec, str } from './unknown.ts';
 import type { AntigravityStatus, AppAlert, Args, Channel, ClaudeAccount, ClaudeUsage, Reply, SessionView } from './ipc.ts';
@@ -336,7 +336,10 @@ class Session {
     if (agent?.harness === 'claude') {
       conv.claudeSession = agent.sessionId;
       conv.claudeContext = agent.context;
+      conv.claudeLast = agent.lastUuid;
+      conv.claudeForkAt = agent.forkAt;
     }
+    if (agent?.harness === 'claude' || agent?.harness === 'antigravity') conv.preamble = agent.preamble;
     if (agent?.harness === 'antigravity') {
       conv.agySession = agent.sessionId;
       conv.agyContext = agent.context;
@@ -765,21 +768,25 @@ handle('agent:send', [isString, optional(isString), optional((v): v is Viewing |
 });
 // Restart the conversation from an earlier user message (edited by the user):
 // the agent goes back to its state before that message, and the transcript is cut there.
+// Claude: its session forked before that message; Antigravity: a new conversation told the earlier exchanges.
 handle('agent:rewind', [isString], (turnId) => {
   const s = current();
-  const a = s.localAgent();
+  const a = s.getAgent();
   if (a.running) throw new Error('L’agent est en cours d’exécution.');
   const { conv } = s;
   if (!conv) throw new Error('Aucune conversation ouverte.');
   const at = conv.events.findIndex((e) => e.type === 'user_message' && e.turnId === turnId);
   if (at < 0) throw new Error('Message introuvable dans cette conversation.');
-  const cp = a.checkpoints.find((c) => c.turnId === turnId);
-  // No exact rewind point (lost in a crash, old conversation): rebuild from the transcript.
   const before = conv.events.slice(0, at);
-  a.rewind(turnId, !cp || cp.rebuild ? {
-    rebuilt: rebuildHistory(before),
-    keepTurnIds: new Set(before.flatMap((e) => (e.type === 'user_message' && e.turnId ? [e.turnId] : []))),
-  } : {});
+  if (a.harness !== 'local') a.rewind(turnId, recapOf(before));
+  else {
+    const cp = a.checkpoints.find((c) => c.turnId === turnId);
+    // No exact rewind point (lost in a crash, old conversation): rebuild from the transcript.
+    a.rewind(turnId, !cp || cp.rebuild ? {
+      rebuilt: rebuildHistory(before),
+      keepTurnIds: new Set(before.flatMap((e) => (e.type === 'user_message' && e.turnId ? [e.turnId] : []))),
+    } : {});
+  }
   conv.events = conv.events.slice(0, at);
   s.save();
   return { events: conv.events };
@@ -1056,7 +1063,10 @@ handle('conversations:open', [isString], (id) => {
   if (a.harness === 'claude') {
     a.sessionId = loaded.claudeSession ?? null;
     a.context = loaded.claudeContext ?? null;
+    a.lastUuid = loaded.claudeLast ?? null;
+    a.forkAt = loaded.claudeForkAt ?? null;
   }
+  if (a.harness === 'claude' || a.harness === 'antigravity') a.preamble = loaded.preamble ?? null;
   if (a.harness === 'antigravity') {
     a.sessionId = loaded.agySession ?? null;
     a.context = loaded.agyContext ?? null;

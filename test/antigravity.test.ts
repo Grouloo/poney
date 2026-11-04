@@ -293,3 +293,22 @@ test('an image the agent shows is read by the app: local files only', async () =
   assert.equal(await readImage(null, path.join(dir, 'gone.png')), null);
   assert.equal(await readImage(null, 'https://example.com/a.png'), null);
 });
+
+test('rewinding: a new conversation, told the earlier exchanges (agy cannot cut one)', async () => {
+  const { agent, script, args } = await fakeAgy();
+  await script({ stdout: [result({ conversation_id: 'c1', status: 'SUCCESS', response: 'ok' })] });
+  await agent.send('un', { turnId: 't1' });
+  await agent.send('deux', { turnId: 't2' });
+  assert.deepEqual(agent.checkpoints.map((c) => [c.turnId, c.session]), [['t1', null], ['t2', 'c1']]);
+  agent.rewind('t2', 'RECAP\n\n');
+  assert.deepEqual([agent.sessionId, agent.preamble, agent.checkpoints.length], [null, 'RECAP\n\n', 1]);
+  await script({ stdout: [result({ conversation_id: 'c2', status: 'SUCCESS', response: 'ok' })] });
+  await agent.send('deux bis', { turnId: 't3' });
+  const a = await args();
+  assert.equal(a[a.indexOf('-p') + 1], 'RECAP\n\ndeux bis');
+  assert.ok(!a.includes('--conversation'));
+  assert.deepEqual([agent.sessionId, agent.preamble], ['c2', null]);
+  // Back to the first message: nothing to tell.
+  agent.rewind('t1', 'RECAP\n\n');
+  assert.deepEqual([agent.sessionId, agent.preamble], [null, null]);
+});

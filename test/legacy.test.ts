@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { rebuildHistory, migrateLegacy, actionTag } from '../src/agent/rebuild.ts';
+import { rebuildHistory, migrateLegacy, actionTag, recapOf } from '../src/agent/rebuild.ts';
 import { parseActions } from '../src/agent/protocol.ts';
 import { Agent } from '../src/agent/agent.ts';
 import type { AgentEvent, Checkpoint, ConversationFile, ToolArgs } from '../src/types.ts';
@@ -186,4 +186,24 @@ test('an old failed action is re-run and the agent goes on', async () => {
   assert.equal((evs.find((e) => e.type === 'final'))!.text, 'Contenu : A');
   assert.deepEqual(requests[0].messages.slice(1).map((m) => m.role), ['user', 'assistant', 'user']);
   assert.doesNotMatch(JSON.stringify(requests[0].messages), /does not exist/);
+});
+
+test('the recap of a conversation, for a harness that restarts it in a new session', () => {
+  const events: AgentEvent[] = [
+    { type: 'user_message', text: 'lis a.js', turnId: 't1' },
+    { type: 'assistant_end', id: 1, text: 'Je lis.', thinking: 'secret reasoning', hasActions: true },
+    { type: 'action_start', id: 2, tool: 'read', args: { path: 'a.js' } },
+    { type: 'action_end', id: 2, ok: true, output: 'contenu' },
+    { type: 'action_start', id: 3, tool: 'run', args: { command: 'ls' }, agentId: 2 } as AgentEvent,
+    { type: 'assistant_end', id: 4, text: 'C’est lu.', thinking: '', hasActions: false },
+  ];
+  const r = recapOf(events);
+  assert.match(r, /^<earlier_conversation>\n/);
+  assert.match(r, /\[User\]\nlis a\.js/);
+  assert.match(r, /\[You\]\nJe lis\.\n<read path="a\.js" \/>/);
+  assert.match(r, /contenu/);
+  assert.match(r, /C’est lu\./);
+  assert.doesNotMatch(r, /secret reasoning|<run>/); // (no reasoning, no sub-agent step)
+  assert.match(r, /<\/earlier_conversation>\n\n$/);
+  assert.equal(recapOf([]), '');
 });

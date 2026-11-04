@@ -1,6 +1,7 @@
 // Gives old conversations (saved before rewind points existed) the ability to be
 // edited and relaunched from any user message.
 import { formatResult, withReasoning } from './protocol.ts';
+import { truncateMiddle } from './tools.ts';
 import { SOURCE_TOOLS, triageBlock, triageOfEvent } from './triage.ts';
 import type { Action, AgentEvent, Checkpoint, ConversationFile, EventOf, Message, RebuiltAction, ToolArgs } from '../types.ts';
 
@@ -119,6 +120,22 @@ export function rebuildHistory(events: AgentEvent[], { maxReasoningChars }: { ma
     else merged.push({ ...m });
   }
   return merged;
+}
+
+/**
+ * The conversation before a message, for a harness whose session cannot be cut there
+ * (Antigravity, a Claude session without a point to fork from): told at the start of the
+ * first message of a new one. Without the sub-agents' steps, the reasoning, nor long outputs.
+ */
+export function recapOf(events: AgentEvent[], maxChars = 60_000): string {
+  const own: AgentEvent[] = [];
+  for (const e of events) {
+    if ('agentId' in e && e.agentId !== undefined) continue; // (a sub-agent's step)
+    own.push(e.type === 'assistant_end' ? { ...e, thinking: '' } : e);
+  }
+  const parts = rebuildHistory(own).map((m) => `[${m.role === 'user' ? 'User' : 'You'}]\n${truncateMiddle(m.content, 6000)}`);
+  if (!parts.length) return '';
+  return `<earlier_conversation>\nThis conversation restarts from an earlier point, in a new session. What was said and done before, as a record (your tool calls as tags, with their results; what they changed in the files is still there):\n\n${truncateMiddle(parts.join('\n\n'), maxChars)}\n</earlier_conversation>\n\n`;
 }
 
 function resultText(a: Replayed): string {

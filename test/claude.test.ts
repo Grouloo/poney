@@ -354,3 +354,41 @@ test('the files attached: Claude may read the conversation\'s private folder, on
   await a.send('b');
   assert.deepEqual(calls[1].options.additionalDirectories, [a.attachDir]);
 });
+
+test('rewinding forks the session at its last entry before that message, the original kept', async () => {
+  const assistant = (uuid: string, parent: string | null = null) => ({ type: 'assistant', uuid, parent_tool_use_id: parent, message: { content: [] } });
+  let turn = 0;
+  const { a, calls } = agent(async () => {
+    turn++;
+    const id = turn === 1 ? 's1' : turn === 2 ? 's1' : 's2';
+    return [{ ...init, session_id: id }, assistant(`u${turn}`), assistant(`sub${turn}`, 'task'), done];
+  });
+  await a.send('un', { turnId: 't1' });
+  await a.send('deux', { turnId: 't2' });
+  assert.deepEqual(a.checkpoints.map((c) => [c.turnId, c.session, c.at]), [['t1', null, null], ['t2', 's1', 'u1']]); // (a sub-agent's entries are not the session's)
+  a.rewind('t2', '<earlier_conversation>…');
+  assert.deepEqual([a.sessionId, a.forkAt, a.preamble, a.checkpoints.length], ['s1', 'u1', null, 1]);
+  await a.send('deux bis', { turnId: 't3' });
+  const o = calls[2].options;
+  assert.deepEqual([o.resume, o.resumeSessionAt, o.forkSession, calls[2].prompt], ['s1', 'u1', true, 'deux bis']);
+  assert.deepEqual([a.sessionId, a.forkAt], ['s2', null]);
+  assert.deepEqual([a.checkpoints.at(-1)!.session, a.checkpoints.at(-1)!.at], ['s1', 'u1']); // (the old session: still there to go back to)
+  await a.send('trois');
+  assert.equal(calls[3].options.forkSession, undefined);
+  // Back to the first message: a new session, nothing told.
+  a.rewind('t1', '<earlier_conversation>…');
+  assert.deepEqual([a.sessionId, a.forkAt, a.preamble, a.checkpoints.length], [null, null, null, 0]);
+});
+
+test('rewinding without a point to fork from: a new session, told the earlier exchanges', async () => {
+  const { a, calls } = agent([init, done]);
+  a.sessionId = 'old'; // (a conversation from before rewind points: no last entry known)
+  await a.send('deux', { turnId: 't2' });
+  a.rewind('t2', 'RECAP\n\n');
+  assert.deepEqual([a.sessionId, a.preamble], [null, 'RECAP\n\n']);
+  await a.send('deux bis', { turnId: 't3' });
+  assert.equal(calls[1].prompt, 'RECAP\n\ndeux bis');
+  assert.equal(calls[1].options.resume, undefined);
+  assert.equal(a.preamble, null);
+  assert.equal(a.checkpoints.at(-1)!.session, undefined); // (going back there: told again, not "nothing before")
+});

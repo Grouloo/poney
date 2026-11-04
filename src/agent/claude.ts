@@ -313,6 +313,9 @@ export class ClaudeAgent extends EventEmitter<{ event: [AgentEvent] }> {
   systemPrompt: string | null;
   checkpoints: Checkpoint[];
   archives: (Message[] | null)[];
+  lastUuid: string | null;
+  forkAt: string | null;
+  preamble: string | null;
 
   constructor({ cwd, executable, configDir = null, approve, skillsDir = null, query = null, attachDir = null }: { cwd: string; executable: string | null; configDir?: string | null; approve: Approve; skillsDir?: string | null; query?: ClaudeRun | null; attachDir?: string | null }) {
     super();
@@ -341,9 +344,30 @@ export class ClaudeAgent extends EventEmitter<{ event: [AgentEvent] }> {
     this.systemPrompt = null;
     this.checkpoints = [];
     this.archives = [];
+    // Rewinding: the session's last entry when each message is sent (a point to fork it from),
+    // the entry the next message forks from, or the earlier exchanges told when there is none.
+    this.lastUuid = null;
+    this.forkAt = null;
+    this.preamble = null;
   }
 
   get running() { return Boolean(this.controller); }
+
+  /**
+   * Back to before a message: the session is forked at its last entry then (the original
+   * stays as it was), or, without that point, a new one starts with the earlier exchanges told.
+   */
+  rewind(turnId: string, recap: string): void {
+    const i = this.checkpoints.findIndex((c) => c.turnId === turnId);
+    const cp = i >= 0 ? this.checkpoints[i] : null;
+    if (cp && cp.session === null) [this.sessionId, this.forkAt, this.preamble] = [null, null, null]; // (the first message: nothing before)
+    else if (cp?.session && cp.at) [this.sessionId, this.forkAt, this.preamble] = [cp.session, cp.at, null];
+    else [this.sessionId, this.forkAt, this.preamble] = [null, null, recap || null];
+    this.lastUuid = this.forkAt;
+    if (cp?.length !== undefined) this.messages = this.messages.slice(0, cp.length);
+    this.checkpoints = i >= 0 ? this.checkpoints.slice(0, i) : this.checkpoints.filter((c) => c.turnId !== turnId);
+    this.context = null;
+  }
 
   stop() { this.controller?.abort(); }
   reset() { this.stop(); }
@@ -370,7 +394,8 @@ export class ClaudeAgent extends EventEmitter<{ event: [AgentEvent] }> {
     let stats: TurnStats | null = null;
     let reason = 'done';
     try {
-      const content = this.prompt(text, turnId);
+      if (turnId) this.checkpoints.push({ turnId, session: this.preamble ? undefined : this.sessionId, at: this.sessionId ? (this.forkAt ?? this.lastUuid) : null, length: this.messages.length });
+      const content = (this.preamble ?? '') + this.prompt(text, turnId);
       this.messages.push({ role: 'user', content });
       const run: ClaudeRun = this.runQuery ?? (await sdk()).query;
       // (the account changed since the last message: the session comes along)
@@ -394,6 +419,8 @@ export class ClaudeAgent extends EventEmitter<{ event: [AgentEvent] }> {
           env: claudeEnv(process.env, this.configDir),
           abortController: controller,
           ...(this.sessionId ? { resume: this.sessionId } : {}),
+          // (rewound: a new session from that entry of the old one, which stays as it was)
+          ...(this.sessionId && this.forkAt ? { resumeSessionAt: this.forkAt, forkSession: true } : {}),
       };
       const q = run({ prompt: content, options });
       // The plan's session used before and after: what this answer cost of it (0 to 100).
@@ -401,6 +428,7 @@ export class ClaudeAgent extends EventEmitter<{ event: [AgentEvent] }> {
       let before: number | null = null;
       for await (const message of q) {
         if (rec(message).type === 'system' && rec(message).subtype === 'init') {
+          [this.forkAt, this.preamble] = [null, null]; // (the session has them now)
           await this.readContext(q);
           before = await used();
         }
@@ -474,6 +502,7 @@ export class ClaudeAgent extends EventEmitter<{ event: [AgentEvent] }> {
     const m = rec(message);
     const parent = typeof m.parent_tool_use_id === 'string' ? m.parent_tool_use_id : null;
     const content = rec(m.message).content;
+    if ((m.type === 'assistant' || m.type === 'user') && !parent && str(m.uuid)) this.lastUuid = str(m.uuid); // (an entry of the session)
     switch (m.type) {
       case 'system':
         if (m.subtype === 'init') this.sessionId = str(m.session_id);

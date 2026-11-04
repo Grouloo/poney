@@ -218,6 +218,7 @@ export class AntigravityAgent extends EventEmitter<{ event: [AgentEvent] }> {
   systemPrompt: string | null;
   checkpoints: Checkpoint[];
   archives: (Message[] | null)[];
+  preamble: string | null;
 
   constructor({ cwd, executable, skillsDir = null, brain = agyBrain(), attachDir = null }: { cwd: string; executable: string | null; skillsDir?: string | null; brain?: string; attachDir?: string | null }) {
     super();
@@ -242,9 +243,24 @@ export class AntigravityAgent extends EventEmitter<{ event: [AgentEvent] }> {
     this.systemPrompt = null;
     this.checkpoints = [];
     this.archives = [];
+    this.preamble = null; // rewound: the earlier exchanges, told in the next message
   }
 
   get running() { return Boolean(this.child); }
+
+  /**
+   * Back to before a message. agy can neither cut nor fork a conversation: a new one
+   * starts, told the earlier exchanges (none before the first message).
+   */
+  rewind(turnId: string, recap: string): void {
+    const i = this.checkpoints.findIndex((c) => c.turnId === turnId);
+    const cp = i >= 0 ? this.checkpoints[i] : null;
+    this.sessionId = null;
+    this.preamble = cp && cp.session === null ? null : recap || null;
+    if (cp?.length !== undefined) this.messages = this.messages.slice(0, cp.length);
+    this.checkpoints = i >= 0 ? this.checkpoints.slice(0, i) : this.checkpoints.filter((c) => c.turnId !== turnId);
+    this.context = null;
+  }
 
   stop() {
     if (!this.child) return;
@@ -294,7 +310,8 @@ export class AntigravityAgent extends EventEmitter<{ event: [AgentEvent] }> {
     const started = Date.now();
     try {
       if (!this.executable) throw new Error('Antigravity n’est pas installé sur cette machine (programme « agy »).');
-      const content = this.prompt(text, turnId);
+      if (turnId) this.checkpoints.push({ turnId, session: this.preamble ? undefined : this.sessionId, length: this.messages.length });
+      const content = (this.preamble ?? '') + this.prompt(text, turnId);
       this.messages.push({ role: 'user', content });
       if (this.sessionId) this.track(state, this.sessionId, true);
       const child = spawn(this.executable, this.args(content), { cwd: this.cwd, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -370,7 +387,7 @@ export class AntigravityAgent extends EventEmitter<{ event: [AgentEvent] }> {
     }
     if (kind !== 'result') return null;
     const conversation = str(p.conversation_id);
-    if (conversation) this.sessionId = conversation;
+    if (conversation) [this.sessionId, this.preamble] = [conversation, null]; // (the conversation has it now)
     const ok = str(p.status, 'SUCCESS') === 'SUCCESS';
     const response = str(p.response);
     if (ok && response) {
