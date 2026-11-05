@@ -46,6 +46,8 @@ interface Bubble {
   ended?: boolean;
   pieces?: number;
   firstAt?: number;
+  shown?: number; // how much of its text is drawn, in characters
+  arrivals?: { from: number; at: number }[]; // where each recent piece of it starts, and when it came
 }
 
 interface Shortcut {
@@ -286,6 +288,7 @@ function add<T extends HTMLElement>(el: T): T {
     $('empty').remove();
     chat.classList.remove('fresh');
   }
+  if (!replaying && el.classList.contains('card')) el.classList.add('entering'); // (a step that comes during a turn)
   if (target) {
     // Inside a sub-agent's view: the side panel follows it when it shows it and is at the end.
     const panel = $('agentPanelBody');
@@ -1206,6 +1209,7 @@ function addUserMessage(text: string, turnId?: string) {
   }
   add(m);
   scrollDown(true); // (the user's own message: to its answer)
+  return m;
 }
 
 /** Inline editor on a previous user message; "Relancer" restarts the conversation from it. */
@@ -1643,7 +1647,9 @@ async function sendMessage(text: string) {
   rememberProject();
   const startsHere = chat.classList.contains('fresh');
   const top = composer.getBoundingClientRect().top;
-  addUserMessage(text, turnId);
+  const sent = addUserMessage(text, turnId);
+  // (it rises from the input, from its right corner)
+  if (!calm) sent.querySelector('.bubble')?.animate([{ opacity: 0, transform: 'translateY(18px) scale(0.97)', transformOrigin: 'right bottom' }, { opacity: 1, transform: 'none', transformOrigin: 'right bottom' }], { duration: 340, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' });
   if (startsHere) { // (from the middle of the page to its place at the bottom)
     const from = `translateY(${top - composer.getBoundingClientRect().top}px)`;
     if (!calm) composer.animate([{ transform: from }, { transform: 'none' }], { duration: 420, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' });
@@ -2150,11 +2156,55 @@ function drawStreaming() {
     const live = b.live ? liveCard(b) : '';
     b.bubble.innerHTML = markdown(text) + (live || (pending || b.toolPending ? `<p class="muted"><span class="spin">◌</span> prépare une action${tool}…</p>` : ''));
     showImages(b.bubble);
+    fadeInText(b);
     if (liveBubble === b) renderLivePanel();
   }
   dirty.clear();
   drawCost = performance.now() - t0;
   forPanes(() => scrollDown());
+}
+
+// The text of an answer comes in at each redraw: its new pieces fade in. The bubble is drawn
+// again from scratch at each one, so a piece still fading is wrapped again, its animation
+// set back by its age to go on where it was.
+const TEXT_FADE = 360;
+function fadeInText(b: Bubble) {
+  if (calm) return;
+  const now = performance.now();
+  const nodes: Text[] = [];
+  const walker = document.createTreeWalker(b.bubble, NodeFilter.SHOW_TEXT, {
+    acceptNode: (n) => n.parentElement?.closest('.muted, .live-action, pre') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
+  });
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) nodes.push(n as Text);
+  const length = nodes.reduce((sum, n) => sum + n.data.length, 0);
+  const shown = Math.min(b.shown ?? 0, length); // (a piece of markdown that closes may shorten the text)
+  b.arrivals = (b.arrivals ?? []).filter((a) => a.from < shown);
+  if (length > shown) b.arrivals.push({ from: shown, at: now });
+  b.shown = length;
+  // (the oldest piece still fading starts the zone to wrap; before it, all is in place)
+  const recent = b.arrivals.findIndex((a) => now - a.at < TEXT_FADE);
+  b.arrivals = recent < 0 ? [] : b.arrivals.slice(Math.max(0, recent - 1));
+  const live = b.arrivals.filter((a) => now - a.at < TEXT_FADE);
+  if (!live.length) return;
+  let offset = 0;
+  for (const node of nodes) {
+    const start = offset;
+    offset += node.data.length;
+    if (offset <= live[0].from) continue;
+    // Cut the node at each piece's start, from its end (the offsets before stay right).
+    const cuts = live.filter((a) => a.from < offset).map((a) => ({ ...a, from: Math.max(a.from, start) }));
+    let rest: Text = node;
+    for (let i = cuts.length - 1; i >= 0; i--) {
+      const piece = cuts[i].from > start ? rest.splitText(cuts[i].from - start) : rest;
+      if (!piece.data) continue;
+      const span = document.createElement('span');
+      span.className = 'fresh';
+      span.style.animationDelay = `${-Math.round(now - cuts[i].at)}ms`;
+      piece.replaceWith(span);
+      span.appendChild(piece);
+      if (piece === rest) break;
+    }
+  }
 }
 
 // ---------- images the agent shows ----------
@@ -2416,6 +2466,7 @@ function onEvent(ev: SessionEvent) {
       if (ev.text) {
         b.bubble.innerHTML = markdown(ev.text);
         showImages(b.bubble);
+        fadeInText(b); // (its last piece goes on fading)
       } else b.el.remove(); // (its reasoning, if any, is a step before it)
       break;
     }
