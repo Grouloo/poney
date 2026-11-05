@@ -48,6 +48,7 @@ interface Bubble {
   firstAt?: number;
   shown?: number; // how much of its text is drawn, in characters
   arrivals?: { from: number; at: number }[]; // where each recent piece of it starts, and when it came
+  drawnBefore?: boolean; // its text so far was written before it was shown (a conversation shown again): no fade
 }
 
 interface Shortcut {
@@ -2206,6 +2207,8 @@ function drawStreaming() {
 const TEXT_FADE = 360;
 function fadeInText(b: Bubble) {
   if (calm) return;
+  const settled = replaying || b.drawnBefore;
+  b.drawnBefore = false;
   const now = performance.now();
   const nodes: Text[] = [];
   const walker = document.createTreeWalker(b.bubble, NodeFilter.SHOW_TEXT, {
@@ -2213,6 +2216,11 @@ function fadeInText(b: Bubble) {
   });
   for (let n = walker.nextNode(); n; n = walker.nextNode()) nodes.push(n as Text);
   const length = nodes.reduce((sum, n) => sum + n.data.length, 0);
+  if (settled) { // (only what comes from now on fades)
+    b.shown = length;
+    b.arrivals = [];
+    return;
+  }
   const shown = Math.min(b.shown ?? 0, length); // (a piece of markdown that closes may shorten the text)
   b.arrivals = (b.arrivals ?? []).filter((a) => a.from < shown);
   if (length > shown) b.arrivals.push({ from: shown, at: now });
@@ -4126,6 +4134,8 @@ function showSession(view: SessionView) {
     if (!bubbles.has(p.id)) onEvent({ type: 'assistant_start', id: p.id }); // (the replay may have started it)
     if (p.thinking) onEvent({ type: 'delta', id: p.id, kind: 'thinking', text: p.thinking });
     if (p.text) onEvent({ type: 'delta', id: p.id, kind: 'text', text: p.text });
+    const b = bubbles.get(p.id);
+    if (b) b.drawnBefore = true; // (written while another conversation was shown)
   }
   setRunning(Boolean(view.running));
   if (view.askDraft) askDrafts.set(view.askDraft.key, view.askDraft);
