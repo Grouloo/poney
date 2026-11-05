@@ -2069,6 +2069,42 @@ function stepHead(kind: string, title: string, path = '') {
   return `<span class="step-icon">${stepIconSvg(kind, path)}</span><div class="card-head"><span class="tool">${esc(title)}</span><span class="summary"></span></div>`;
 }
 /** A row that opens on a click on its head (not when text of it is being selected). */
+/** A warning of the app (what it did when the model went wrong): a row of the steps, under the one it is about. */
+function noteRow(text: string) {
+  const el = div('card step note');
+  el.innerHTML = `${stepHead('note', '')}`;
+  const line = el.querySelector<HTMLElement>('.tool')!;
+  line.textContent = text;
+  if (!replaying) line.classList.add('fresh');
+  return el;
+}
+/** Warnings about the action that comes next, held until its row is drawn (or the turn moves on). */
+let heldNotes: string[] = [];
+function addHeldNotes() {
+  const notes = heldNotes;
+  heldNotes = [];
+  for (const text of notes) add(noteRow(text));
+}
+/** The row of a step under way (one of a kind at a time), replaced by its result where it was. */
+function pendingStep(kind: string) {
+  const rows = [...(target ?? transcript).querySelectorAll<HTMLElement>(`.${kind}.pending`)];
+  for (const r of rows.slice(1)) r.remove();
+  return rows[0] ?? null;
+}
+function placeStep<T extends HTMLElement>(pending: HTMLElement | null, el: T): T {
+  if (!pending && replaying) {
+    // (a conversation drawn again has no rows under way: the step goes above the warnings of its attempts)
+    let first: Element | null = null;
+    for (let n = (target ?? transcript).lastElementChild; n?.classList.contains('note'); n = n.previousElementSibling) first = n;
+    if (first) {
+      first.before(el);
+      return el;
+    }
+  }
+  if (!pending) return add(el);
+  pending.replaceWith(el); // (the warnings drawn while it ran stay under it)
+  return el;
+}
 function stepRow(className: string, kind: string, title: string, body = '') {
   const el = div(`card step ${className}`);
   el.innerHTML = `${stepHead(kind, title)}<div class="card-body">${body}</div>`;
@@ -2402,6 +2438,8 @@ function onEvent(ev: SessionEvent) {
     }
     return;
   }
+  // (warnings held for an action that did not come: where they are)
+  if (heldNotes.length && ['assistant_start', 'error', 'turn_end', 'user_message'].includes(ev.type)) addHeldNotes();
   switch (ev.type) {
     case 'assistant_start': {
       const el = div('msg assistant');
@@ -2514,6 +2552,7 @@ function onEvent(ev: SessionEvent) {
       cards.set(ev.id, card);
       if (ev.tool === 'plan' && !target) startPlanBlock(card);
       else add(card);
+      addHeldNotes();
       break;
     }
     case 'action_output': {
@@ -2573,7 +2612,8 @@ function onEvent(ev: SessionEvent) {
       break;
     }
     case 'notice':
-      add(div('notice', esc(ev.text)));
+      if (ev.about === 'next') heldNotes.push(ev.text); // (under the action that comes next)
+      else add(noteRow(ev.text));
       break;
     case 'plan':
       renderPlan(ev.tasks);
@@ -2586,7 +2626,7 @@ function onEvent(ev: SessionEvent) {
         // The step asked first, shown under the user message.
         const msg = [...(target || transcript).querySelectorAll<HTMLElement>('.msg.user')].pop();
         if (msg) msg.appendChild(div('fetched', `⤷ étape avant de répondre : ${esc(ev.text)}`));
-      } else add(div('notice', `Étape avant de conclure : ${esc(ev.text)}`));
+      } else add(noteRow(`Étape avant de conclure : ${ev.text}`));
       break;
     }
     case 'triage_start': {
@@ -2598,9 +2638,9 @@ function onEvent(ev: SessionEvent) {
       // The assessment before acting, under the user message (its updates after outside
       // results, where they were made): what the model knows, doubts and does not know,
       // and the route the app chose.
-      (target || transcript).querySelectorAll<HTMLElement>('.triage.pending').forEach((p) => p.remove());
+      const pendingTriage = pendingStep('triage');
       if (ev.failed) {
-        const f = add(stepRow('triage fail', 'triage', ev.update ? 'Mise à jour du bilan illisible' : 'Bilan illisible'));
+        const f = placeStep(pendingTriage, stepRow('triage fail', 'triage', ev.update ? 'Mise à jour du bilan illisible' : 'Bilan illisible'));
         f.querySelector<HTMLElement>('.summary')!.textContent = ev.update ? 'le bilan précédent reste en vigueur' : 'l’agent devra vérifier au moins une source avant de répondre';
         break;
       }
@@ -2612,7 +2652,7 @@ function onEvent(ev: SessionEvent) {
       if (ev.questions?.length) parts.push(count(ev.questions.length, 'question', 'questions'));
       const d = stepRow(`triage ok route-${ev.route}`, 'triage', ev.update ? 'Bilan mis à jour' : 'Bilan', `<div class="triage-body">${list('Sait', ev.known)}${list('Doute', ev.doubts)}${list('Ignore', ev.unknowns)}${list('À demander', ev.questions)}</div>`);
       d.querySelector<HTMLElement>('.summary')!.textContent = `${parts.length ? `${parts.join(', ')} ` : ''}→ ${route}`;
-      add(d);
+      placeStep(pendingTriage, d);
       break;
     }
     case 'fetching':
@@ -2702,23 +2742,24 @@ function onEvent(ev: SessionEvent) {
       (target ?? transcript).querySelector<HTMLElement>('.compaction.pending')?.remove();
       add(stepRow('compaction pending running', 'compaction', 'Avant le compactage : ce qui mérite d’être retenu…'));
       break;
-    case 'kept':
-      (target ?? transcript).querySelector<HTMLElement>('.compaction.pending')?.remove();
-      if (ev.memory.length || ev.project.length || ev.update) add(keptCard(ev));
+    case 'kept': {
+      const pendingKeep = pendingStep('compaction');
+      if (ev.memory.length || ev.project.length || ev.update) placeStep(pendingKeep, keptCard(ev));
       // (nothing kept: said all the same, so the review is not taken for one that did not run)
-      else add(div('notice', esc(ev.failed ? `🧠 Bilan avant le compactage impossible : ${ev.failed}.` : `🧠 Avant le compactage : rien de nouveau à retenir${ev.dropped ? ` (${ev.dropped} proposition${ev.dropped > 1 ? 's' : ''} écartée${ev.dropped > 1 ? 's' : ''} : déjà en mémoire ou trop vague${ev.dropped > 1 ? 's' : ''})` : ''}.`)));
+      else placeStep(pendingKeep, noteRow(ev.failed ? `Bilan avant le compactage impossible : ${ev.failed}.` : `Avant le compactage : rien de nouveau à retenir${ev.dropped ? ` (${ev.dropped} proposition${ev.dropped > 1 ? 's' : ''} écartée${ev.dropped > 1 ? 's' : ''} : déjà en mémoire ou trop vague${ev.dropped > 1 ? 's' : ''})` : ''}.`));
       break;
+    }
     case 'compaction_start':
       (target ?? transcript).querySelector<HTMLElement>('.compaction.pending')?.remove();
       add(stepRow('compaction pending running', 'compaction', 'Compactage du contexte : résumé des anciens messages…'));
       break;
     case 'compaction': {
       if (promptProgress?.id === 'compaction') promptProgress = null;
-      (target ?? transcript).querySelector<HTMLElement>('.compaction.pending')?.remove();
+      const pendingCompaction = pendingStep('compaction');
       const d = stepRow('compaction ok', 'compaction', 'Contexte compacté', `${ev.fallback ? `<p class="compaction-why">Le modèle n’a pas pu écrire le résumé (${esc(ev.failure || 'raison inconnue')}) : un résumé de secours a été construit à partir des demandes, du résumé précédent et des dernières notes de l’agent.</p>` : ''}<pre></pre>`);
       d.querySelector<HTMLElement>('.summary')!.textContent = `${fmtTokens(ev.before)} → ${fmtTokens(ev.after)} tokens (${ev.removed} messages résumés)${ev.fallback ? ' · résumé de secours' : ''}`;
       d.querySelector<HTMLElement>('pre')!.textContent = ev.summary;
-      add(d);
+      placeStep(pendingCompaction, d);
       break;
     }
     case 'error':

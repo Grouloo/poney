@@ -34,13 +34,13 @@ test('long text after an action is cut: the action runs, the invented text is dr
   const f = await fake([`<write path="stats.py">\ndef mean(x):\n    return sum(x) / len(x)\n</write>\n${invented}`, 'Done.']);
   const agent = new Agent({ cwd, config: cfg({ baseUrl: f.url, model: 'm', shellEnabled: false }) });
   const notices: string[] = [];
-  agent.on('event', (e) => e.type === 'notice' && notices.push(e.text));
+  agent.on('event', (e) => e.type === 'notice' && notices.push(`${e.about ?? ''}:${e.text}`));
   await agent.send('create stats.py');
   f.server.close();
   assert.match(await fs.readFile(path.join(cwd, 'stats.py'), 'utf8'), /def mean/);
   assert.match(agent.messages[1].content, /<\/write>$/);
   assert.doesNotMatch(JSON.stringify(f.requests[1].messages), /testées/);
-  assert.ok(notices.some((n) => /continuait à écrire/.test(n)));
+  assert.ok(notices.some((n) => /^next:.*continuait à écrire/.test(n))); // (shown under the action it let through)
 });
 
 test('short text between two actions is kept, and both actions run', async () => {

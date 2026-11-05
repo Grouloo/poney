@@ -290,7 +290,7 @@ export type AgentEvent = Scoped & (
   | { type: 'step'; phase: 'before' | 'after'; turnId?: string; text: string }
   | { type: 'final'; text: string }
   | { type: 'error'; message: string }
-  | { type: 'notice'; text: string }
+  | { type: 'notice'; text: string; about?: 'next' } // (about: the action that comes next, run after it)
   | { type: 'triage_start'; turnId?: string; update?: boolean }
   | ({ type: 'triage'; turnId?: string; update?: boolean; failed?: boolean } & Partial<Triage>)
   | { type: 'compaction_start' }

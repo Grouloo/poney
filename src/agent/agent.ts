@@ -1227,7 +1227,7 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
       for (const a of rest.reverse()) visible = visible.slice(0, a.start) + visible.slice(a.end);
       thinking = leaked.thinking;
       visible = `${leaked.text}\n${visible.trim()}`.trim();
-      this.emit('event', { type: 'notice', text: 'Le modèle a écrit ses appels dans sa réflexion (après une fausse fin de réflexion) : ils sont exécutés.' });
+      this.emit('event', { type: 'notice', about: 'next', text: 'Le modèle a écrit ses appels dans sa réflexion (après une fausse fin de réflexion) : ils sont exécutés.' });
     }
     // After a stall, the call ending the reasoning; at a normal end, only if the
     // model wrote no real answer (a call left at the end of a plan is not run).
@@ -1238,11 +1238,11 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
       // came out after it): that call is what the model meant to do.
       thinking = endCall.before;
       visible = `${visible.trim()}\n${endCall.raw}`.trim();
-      this.emit('event', { type: 'notice', text: stall.happened
+      this.emit('event', { type: 'notice', about: 'next', text: stall.happened
         ? 'Le modèle a appelé un outil à la fin de sa réflexion puis n’a plus rien produit : génération arrêtée, l’appel est exécuté.'
         : 'Appel d’outil à la fin de la réflexion du modèle : il est exécuté.' });
     } else if (stall.happened) {
-      this.emit('event', { type: 'notice', text: 'Plus rien ne sortait après l’action : génération arrêtée, l’action est exécutée.' });
+      this.emit('event', { type: 'notice', about: 'next', text: 'Plus rien ne sortait après l’action : génération arrêtée, l’action est exécutée.' });
     } else if (!earlyEdit && !parseActions(visible).actions.length) {
       // Gemma sometimes makes its tool call inside its reasoning: if the answer has
       // no action, use the first complete native call found there.
@@ -1251,16 +1251,16 @@ export class Agent extends EventEmitter<{ event: [AgentEvent]; sub_turn: [SubTur
       const action = first?.start === 0 ? first : null; // the native call itself, not a tag mentioned later
       if (action?.complete) {
         visible = `${visible.trim()}\n${action.raw}`.trim();
-        this.emit('event', { type: 'notice', text: 'Appel d’outil trouvé dans la réflexion du modèle : il est exécuté.' });
+        this.emit('event', { type: 'notice', about: 'next', text: 'Appel d’outil trouvé dans la réflexion du modèle : il est exécuté.' });
       }
     }
     // Cut by the length limit (not by us): the end of the answer is missing.
     const truncated = cutAt < 0 && (doneReason === 'length' || Boolean(streamError));
     if (streamError) {
-      this.emit('event', { type: 'notice', text: `Le serveur a coupé la génération (${errorMessage(streamError)}) : ce qui était déjà écrit est conservé, les actions complètes sont exécutées.` });
+      this.emit('event', { type: 'notice', about: 'next', text: `Le serveur a coupé la génération (${errorMessage(streamError)}) : ce qui était déjà écrit est conservé, les actions complètes sont exécutées.` });
     }
     const stats = generationStats({ t0, tFirst, tEnd: Date.now(), usage, est: this.est, text: text + thinking });
-    if (narrationCut) this.emit('event', { type: 'notice', text: 'Le modèle continuait à écrire après son action au lieu d’attendre le résultat : génération arrêtée, l’action est exécutée.' });
+    if (narrationCut) this.emit('event', { type: 'notice', about: 'next', text: 'Le modèle continuait à écrire après son action au lieu d’attendre le résultat : génération arrêtée, l’action est exécutée.' });
     if (looped) this.emit('event', { type: 'notice', text: 'Le modèle répétait le même passage en boucle : génération arrêtée, la répétition est retirée.' });
     return { id, text: visible, thinking, truncated, looped, earlyEdit, contextLimited: truncated && !streamError && maxTokens < this.config.maxTokens, stats, invisible, origins, ...rawOf() };
   }

@@ -222,6 +222,9 @@ body:has(dialog[open]) .topbar { -webkit-app-region: no-drag; }
 .step.running > .step-icon { color: var(--accent-2); animation: step-shimmer 1.4s ease-in-out infinite; }
 .step.waiting > .step-icon, .step:has(.approval, .ask-wait) > .step-icon { color: var(--warn); animation: none; }
 .step.fail > .step-icon { color: var(--err); }
+.step.note > .step-icon { color: var(--warn); }
+.step.note > .card-head { cursor: default; }
+.step.note .tool { color: var(--warn); font-weight: 400; font-size: 13.5px; }
 .step.fail .tool { color: var(--err); }
 @keyframes step-shimmer {
   0%, 100% { opacity: 1; filter: drop-shadow(0 0 0 transparent); }
@@ -311,8 +314,6 @@ body:has(dialog[open]) .topbar { -webkit-app-region: no-drag; }
 .q-nav button:disabled { opacity: 0.35; cursor: default; pointer-events: none; }
 .card[data-tool=ask] .card-body:has(> pre:empty), .card[data-tool=ask]:has(.ask-wait) .card-body { display: none; }
 
-.notice { color: var(--warn); font-size: 13.5px; margin: 6px auto; }
-.notice::before { content: '• '; }
 .error { color: var(--err); background: var(--del-bg); border-radius: 8px; padding: 8px 12px !important; margin: 10px auto; }
 
 /* ---------- composer ---------- */
@@ -1166,7 +1167,7 @@ fieldset label.check input { width: auto; }
 /* The conversation (and a sub-agent's, in its panel) in --chat; the file viewer,
    the settings and the code keep theirs. */
 #transcript, .agent-panel-body, #input { font-family: var(--chat); font-size: 16px; line-height: 1.6; }
-.card, .statusline, .notice, .plan-panel, .memory-panel { font-family: var(--ui); font-size: 14.5px; line-height: 1.55; }
+.card, .statusline, .plan-panel, .memory-panel { font-family: var(--ui); font-size: 14.5px; line-height: 1.55; }
 .empty h1 { font-family: var(--chat); font-weight: 500; letter-spacing: 0.2px; }
 
 /* ---------- liquid glass ---------- */
