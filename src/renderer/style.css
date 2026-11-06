@@ -3,8 +3,8 @@
   --panel: #1a1b21;
   --panel-2: #23242c;
   --border: #2e2f39;
-  --text: #e7e5e1;
-  --muted: #8f8e99;
+  --text: #f0eeea;
+  --muted: #a6a5b0; /* (secondary text, at least 7:1 on the background) */
   --accent: #7fb2ff;
   --accent-2: #3576d9;
   --ok: #4cc38a;
@@ -44,8 +44,8 @@
 @media (prefers-color-scheme: light) {
   :root {
     --bg: #f5f3ef; --panel: #fbfaf8; --panel-2: #eeebe6; --border: #dedad3;
-    --text: #22201d; --muted: #75716b; --accent: #1f6fd1; --accent-2: #1a5fb8;
-    --ok: #15803d; --err: #c62828; --warn: #a16207;
+    --text: #1a1815; --muted: #5d5953; --accent: #1f6fd1; --accent-2: #1a5fb8;
+    --ok: #15803d; --err: #c62828; --warn: #8a5600;
     --add-bg: rgba(21, 128, 61, 0.1); --del-bg: rgba(198, 40, 40, 0.1);
     --surface: rgba(255, 254, 251, 0.6); --surface-2: rgba(232, 228, 221, 0.6);
     --glow-1: rgba(70, 135, 235, 0.10); --glow-2: rgba(240, 160, 110, 0.12); --glow-3: rgba(90, 180, 170, 0.07);
@@ -85,6 +85,7 @@ body {
   flex-direction: column;
 }
 button, input, select, textarea { font: inherit; color: inherit; }
+::placeholder { color: var(--muted); opacity: 1; } /* (the browser's own is too faint on the dark theme) */
 input[type=checkbox], input[type=radio] { accent-color: var(--accent-2); }
 button { cursor: pointer; }
 
