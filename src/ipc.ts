@@ -207,6 +207,8 @@ export interface Channels {
   'files:openExternal': [[rel: string], string];
   'files:reveal': [[rel: string], void];
   'files:mkdir': [[rel: string], string];
+  'files:create': [[rel: string], string];
+  'files:write': [[rel: string, text: string], void];
   'files:attach': [[paths: string[], rels: string[]], Attached[]];
   'files:all': [[], string[]];
   'files:attachPick': [[], Attached[]];

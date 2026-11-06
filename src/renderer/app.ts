@@ -135,6 +135,9 @@ function makePane(root: HTMLElement): Pane {
     askDrafts: new Map(), askAnswers: new Map(), askSaveTimer: undefined,
   };
 }
+// Whether a transcript follows the answer being written: it stops at the user's first move up, and
+// starts again at the very end (a band of a few lines kept pulling back whoever tried to leave it).
+const following = new WeakMap<HTMLElement, boolean>();
 const panes = [makePane(firstChat), makePane(secondChat)];
 // Away from the end of the conversation: a round ↓ above the input brings it back, scrolling.
 for (const p of panes) {
@@ -158,9 +161,12 @@ for (const p of panes) {
   let atEnd = true;
   p.transcript.addEventListener('scroll', () => {
     const t = p.transcript;
-    atEnd = t.scrollHeight - t.scrollTop - t.clientHeight < 40;
+    const gap = t.scrollHeight - t.scrollTop - t.clientHeight;
+    atEnd = gap < 40;
+    following.set(t, gap < 8);
     update();
   }, { passive: true });
+  p.transcript.addEventListener('wheel', (e) => { if (e.deltaY < 0) following.set(p.transcript, false); }, { passive: true });
   p.transcript.addEventListener('load', () => {
     if (atEnd) p.transcript.scrollTop = p.transcript.scrollHeight;
     update();
@@ -277,8 +283,9 @@ document.addEventListener('click', (e) => {
 // ---------- helpers ----------
 function scrollDown(force?: boolean) {
   if (replaying) return; // (a conversation is drawn at once, and placed once at the end)
-  const nearBottom = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 160;
-  if (force || nearBottom) transcript.scrollTop = transcript.scrollHeight;
+  if (!force && following.get(transcript) === false) return;
+  transcript.scrollTop = transcript.scrollHeight;
+  following.set(transcript, true);
 }
 
 // Where new elements go: the transcript, or a sub-agent's card while its events are drawn.
@@ -4617,6 +4624,7 @@ async function renderDir(rel: string, ul: HTMLElement) {
         ev.preventDefault();
         ev.stopPropagation(); // (not the sidebar's menu)
         showContextMenu(ev.clientX, ev.clientY, esc(e.name), [
+          { glyph: 'newFile', label: 'Nouveau fichier', run: () => newFileIn(e.path) },
           { glyph: 'newFolder', label: 'Nouveau dossier', run: () => newFolderIn(e.path) },
           '-',
           { glyph: 'rename', label: 'Renommer…', run: () => startFileRename(node.querySelector<HTMLElement>('.name')!, e.path, null) },
@@ -4635,6 +4643,9 @@ async function renderDir(rel: string, ul: HTMLElement) {
         showContextMenu(ev.clientX, ev.clientY, esc(e.name), [
           { glyph: 'open', label: 'Ouvrir', run: () => openFile(e.path) },
           { glyph: 'openWith', label: 'Ouvrir avec…', run: () => openWithMenu(e.path, null, ev.clientX, ev.clientY) },
+          { glyph: 'edit', label: 'Modifier', run: () => openFile(e.path, { edit: true }) },
+          '-',
+          { glyph: 'newFile', label: 'Nouveau fichier à côté', run: () => newFileIn(e.path.includes('/') ? e.path.slice(0, e.path.lastIndexOf('/')) : '.') },
           '-',
           { glyph: 'rename', label: 'Renommer…', run: () => startFileRename(node.querySelector<HTMLElement>('.name')!, e.path, null) },
           { glyph: 'reveal', label: `Afficher dans ${FILE_MANAGER}`, run: () => window.api.revealFile(e.path) },
@@ -4655,6 +4666,16 @@ async function renderDir(rel: string, ul: HTMLElement) {
   if (!entries.length && rel === '.') ul.innerHTML = '<li class="node muted">Dossier vide</li>';
 }
 
+/** A new file in a folder of the tree: named at once in the tree, and open in the viewer to be written. */
+async function newFileIn(dir: string) {
+  let rel: string;
+  try { rel = await window.api.makeFile(dir); } catch (e) { return alert(errorText(e)); }
+  if (dir !== '.') expanded.add(dir);
+  await refreshTree();
+  await openFile(rel, { edit: true });
+  const name = $('fileTree').querySelector<HTMLElement>(`.node[data-path="${CSS.escape(rel)}"] .name`);
+  if (name) startFileRename(name, rel, null);
+}
 /** A new folder in a folder of the tree, shown and named at once. */
 async function newFolderIn(dir: string) {
   let rel: string;
@@ -4670,6 +4691,7 @@ $('filesPane').addEventListener('contextmenu', (ev) => {
   ev.stopPropagation(); // (not the sidebar's menu)
   if (!viewDir()) return;
   showContextMenu(ev.clientX, ev.clientY, null, [
+    { glyph: 'newFile', label: 'Nouveau fichier', run: () => newFileIn('.') },
     { glyph: 'newFolder', label: 'Nouveau dossier', run: () => newFolderIn('.') },
     { glyph: 'reveal', label: `Ouvrir le dossier ${viewOff() ? 'de la conversation' : 'du projet'} dans ${FILE_MANAGER}`, run: () => window.api.openFileExternal('.') },
   ]);
@@ -5372,7 +5394,7 @@ function renderTabs() {
 
 function closeTab(path: string) {
   const at = viewerTabs.findIndex((t) => t.path === path);
-  if (at < 0) return;
+  if (at < 0 || (path === openPath && !leaveEditor(null))) return;
   viewerTabs.splice(at, 1);
   if (!viewerTabs.length) return closeViewer();
   if (path === openPath) openFile(viewerTabs[Math.min(at, viewerTabs.length - 1)].path);
@@ -5391,6 +5413,7 @@ function closeTabsOf(p: Pane) {
 }
 
 function closeViewer() {
+  if (!leaveEditor(null)) return;
   closeDiffPanel();
   viewerSelection = null;
   openPath = null;
@@ -5401,7 +5424,8 @@ function closeViewer() {
 }
 
 /** Opens a file in the viewer: in place of the one shown, or in a tab of its own beside it. */
-async function openFile(rel: string, { keepScroll = false, over, tab = false }: { keepScroll?: boolean; over?: Pane; tab?: boolean } = {}) {
+async function openFile(rel: string, { keepScroll = false, over, tab = false, edit = false }: { keepScroll?: boolean; over?: Pane; tab?: boolean; edit?: boolean } = {}) {
+  if (!leaveEditor(rel)) return;
   const body = $('viewerBody');
   const shown = $('viewer').classList.contains('hidden') ? null : openPath;
   const current = viewerTabs.find((t) => t.path === shown);
@@ -5441,6 +5465,11 @@ async function openFile(rel: string, { keepScroll = false, over, tab = false }: 
   if (f.path !== shown) showOpeners(f.path);
   document.querySelectorAll<HTMLElement>('.tree .node').forEach((n) => n.classList.toggle('active', n.dataset.path === f.path));
 
+  const editable = f.kind === 'text' && !f.truncated;
+  $<HTMLButtonElement>('viewerEdit').classList.toggle('hidden', !editable);
+  if (editor?.path === f.path) return; // (being edited: the text typed stays, the file on disk is not drawn over it)
+  showEditing(false);
+  if (edit && editable) return startEditing(f.path, f.content);
   const markdownFile = f.kind === 'text' && /\.(md|markdown|mdx)$/i.test(f.path);
   const proseFile = f.kind === 'text' && /\.txt$/i.test(f.path);
   $<HTMLButtonElement>('viewerMode').classList.toggle('hidden', !markdownFile && !proseFile);
@@ -5478,6 +5507,70 @@ async function openFile(rel: string, { keepScroll = false, over, tab = false }: 
   }
   body.scrollTop = scroll;
 }
+
+// ---------- editing a text file in the viewer ----------
+let editor: { path: string; area: HTMLTextAreaElement; saved: string } | null = null;
+const editorDirty = () => Boolean(editor && editor.area.value !== editor.saved);
+/** Before the viewer shows something else than the file edited (rel; null: nothing): its changes are not lost unasked. */
+function leaveEditor(rel: string | null) {
+  if (!editor || editor.path === rel) return true;
+  if (editorDirty() && !confirm(`Abandonner les modifications de « ${editor.path.split('/').pop()} » ?`)) return false;
+  editor = null;
+  showEditing(false);
+  return true;
+}
+function showEditing(on: boolean) {
+  $('viewer').classList.toggle('editing', on);
+  // (an icon when it only opens the editor: the head is narrow, the file's path comes first)
+  if (on) $<HTMLButtonElement>('viewerEdit').textContent = 'Enregistrer';
+  else $<HTMLButtonElement>('viewerEdit').innerHTML = menuIconSvg('edit');
+  $<HTMLButtonElement>('viewerEdit').classList.toggle('primary', on);
+  $<HTMLButtonElement>('viewerEdit').classList.toggle('icon', !on);
+  $<HTMLButtonElement>('viewerEdit').dataset.tip = on ? `Enregistrer (${MAC ? '⌘S' : 'Ctrl+S'})` : 'Modifier ce fichier';
+  $<HTMLButtonElement>('viewerCancel').classList.toggle('hidden', !on);
+}
+function startEditing(path: string, text: string) {
+  const body = $('viewerBody');
+  const area = document.createElement('textarea');
+  area.className = 'file-editor';
+  area.spellcheck = false;
+  area.value = text;
+  body.replaceChildren(area);
+  editor = { path, area, saved: text };
+  showEditing(true);
+  area.addEventListener('keydown', (e) => {
+    if ((MAC ? e.metaKey : e.ctrlKey) && e.key.toLowerCase() === 's') {
+      e.preventDefault();
+      void saveEditor();
+    } else if (e.key === 'Tab' && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
+      e.preventDefault();
+      document.execCommand('insertText', false, '\t'); // (kept in the undo history)
+    }
+  });
+  area.focus();
+  area.setSelectionRange(0, 0);
+}
+async function saveEditor() {
+  if (!editor) return;
+  const { path, area } = editor;
+  try {
+    await inPane(viewerPane ?? focused, () => window.api.writeFile(path, area.value));
+  } catch (e) {
+    return alert(errorText(e));
+  }
+  editor = null;
+  await openFile(path, { keepScroll: true });
+}
+$<HTMLButtonElement>('viewerEdit').onclick = () => {
+  if (editor) return void saveEditor();
+  if (openPath) void openFile(openPath, { keepScroll: true, edit: true });
+};
+$<HTMLButtonElement>('viewerCancel').onclick = () => {
+  if (!editor || (editorDirty() && !confirm('Abandonner les modifications ?'))) return;
+  const path = editor.path;
+  editor = null;
+  void openFile(path, { keepScroll: true });
+};
 
 // ---------- Markdown documents: formatted view by default, code view on demand ----------
 let mdView = 'preview';
@@ -5639,6 +5732,7 @@ async function renameFile(rel: string, name: string, p: Pane | null) {
     return renderTabs();
   }
   for (const t of viewerTabs) if (t.path === rel) t.path = to;
+  if (editor?.path === rel) editor.path = to; // (a file renamed while edited: still edited, under its name)
   if (openPath === rel) {
     openPath = to;
     openFile(to, { keepScroll: true });

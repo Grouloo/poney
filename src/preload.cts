@@ -109,6 +109,8 @@ const api = {
   openFileExternal: call('files:openExternal'),
   revealFile: call('files:reveal'),
   makeFolder: call('files:mkdir'),
+  makeFile: call('files:create'),
+  writeFile: call('files:write'),
   attachFiles: call('files:attach'),
   projectFiles: call('files:all'),
   attachPick: call('files:attachPick'),

@@ -1097,6 +1097,13 @@ fieldset label.check input { width: auto; }
 .md-doc .math { display: block; overflow-x: auto; overflow-y: hidden; margin: 6px 0; }
 .md-doc .katex { position: relative; }
 #viewerMode.hidden { display: none; }
+#viewerEdit.hidden, #viewerCancel.hidden { display: none; }
+.viewer.editing #viewerMode { display: none; } /* (the text is edited as it is written) */
+.file-editor {
+  display: block; width: 100%; height: 100%; box-sizing: border-box; margin: 0; padding: 10px 14px; resize: none;
+  border: none; outline: none; background: transparent; color: var(--text); tab-size: 4;
+  font: 13px/1.5 var(--mono); white-space: pre; overflow: auto;
+}
 
 /* ---------- quoting a passage ---------- */
 .quote-btn {

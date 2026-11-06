@@ -1382,6 +1382,17 @@ handle('files:mkdir', [isString], async (rel) => {
   await fs.promises.mkdir(path.join(dir.abs, name));
   return joinRel(dir.rel, name);
 });
+// A new empty file in a folder of the project, under a free name: the renderer has it renamed next.
+handle('files:create', [isString], async (rel) => {
+  const dir = intoFolder(rel);
+  const name = await freeName(dir.abs, 'nouveau fichier.txt');
+  await fs.promises.writeFile(path.join(dir.abs, name), '', { flag: 'wx' });
+  return joinRel(dir.rel, name);
+});
+// A text file edited in the viewer.
+handle('files:write', [isString, isString], async (rel, text) => {
+  await fs.promises.writeFile(resolveInside(viewCwd(), rel, viewScratch()).abs, text);
+});
 handle('files:trash', [isString], (rel) => shell.trashItem(resolveInside(viewCwd(), rel, viewScratch()).abs));
 handle('app:desktop', [], () => app.getPath('desktop'));
 const openerIcons = new Map<string, Promise<string>>();
