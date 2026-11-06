@@ -352,7 +352,10 @@ const viewOff = () => (observed ? observed === OFF_KEY : offMode());
 function renderSettings() {
   syncView();
   forPanes(renderPaneSettings);
-  const config: Record<string, unknown> = { ...settings.config };
+  const root = document.documentElement;
+  root.dataset.chatFont = settings.config.chatFont ?? 'seravek';
+  root.classList.toggle('high-contrast', settings.config.highContrast === true);
+  const config: Record<string, unknown> = { chatFont: 'seravek', highContrast: false, ...settings.config };
   for (const el of [...$<HTMLFormElement>('settingsForm').elements] as HTMLInputElement[]) {
     if (!el.name || config[el.name] === undefined) continue;
     if (el.type === 'checkbox') el.checked = Boolean(config[el.name]);

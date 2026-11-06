@@ -10,6 +10,7 @@ export interface Message {
 }
 
 export type Theme = 'system' | 'light' | 'dark';
+export type ChatFont = 'seravek' | 'system';
 
 export interface Config {
   autoSkills: boolean;
@@ -39,6 +40,10 @@ export interface Config {
   memoryEnabled?: boolean;
   autoRecall?: boolean;
   notifications?: boolean;
+  /** The conversations' typeface: Seravek (the default) or the system's, heavier. */
+  chatFont?: ChatFont;
+  /** Opaque panes, no grain or glow, stronger secondary text and borders. */
+  highContrast?: boolean;
 }
 
 export type EngineName = 'local' | 'claude' | 'antigravity';
