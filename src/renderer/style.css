@@ -1175,6 +1175,9 @@ fieldset label.check input { width: auto; }
 /* The conversation (and a sub-agent's, in its panel) in --chat; the file viewer,
    the settings and the code keep theirs. */
 #transcript, .agent-panel-body, #input { font-family: var(--chat); font-size: 16px; line-height: 1.6; }
+/* Seravek Regular draws thin strokes, and its Medium is nearly bold: a hairline outline thickens
+   the messages and the input by a fraction of a weight. */
+.bubble, #input { -webkit-text-stroke: 0.3px currentColor; }
 .card, .statusline, .plan-panel, .memory-panel { font-family: var(--ui); font-size: 14.5px; line-height: 1.55; }
 .empty h1 { font-family: var(--chat); font-weight: 500; letter-spacing: 0.2px; }
 
