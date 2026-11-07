@@ -1,353 +1,333 @@
 # Poney
 
-A desktop coding agent (in the spirit of Claude Code / Codex) built for **small local models**:
-Ollama, LM Studio, llama.cpp server, vLLM. The interface is in French.
+A desktop coding agent (in the spirit of Claude Code / Codex) built for **small local models**: Ollama, LM Studio,
+llama.cpp server, vLLM, or Poney's own engine. The interface is in French.
 
 ![A conversation: the agent edits the code, runs the tests and sums up](docs/screenshots/conversation.png)
 
+- [Getting started](#getting-started)
+- [Models](#models)
+- [Using the app](#using-the-app)
+- [The harness: what is done for small models](#the-harness-what-is-done-for-small-models)
+- [Command line](#command-line)
+- [Development](#development)
+- [Releases](#releases)
+- [Platforms, Bun and Tor](#platforms-bun-and-tor)
+
+## Getting started
+
+Node 24 or later, and a model: a server (Ollama, LM Studio, llama.cpp server, vLLM, anything OpenAI compatible), a GGUF
+file for Poney's engine, or a Claude or Antigravity login on the machine.
+
 ```bash
 npm install
-npm start            # desktop app
-npm test             # unit tests
-node src/cli.ts --cwd ./my-project --model qwen2.5:14b "task"   # headless mode
+npm start                                                    # build to dist/ and run the app
+node src/cli.ts --cwd ./my-project --model qwen2.5:14b "task"  # headless
 ```
 
-## What is done for small models
+Settings, conversations and logs live in `~/Library/Application Support/poney/` (`PONEY_DATA` points elsewhere).
 
-- **Short system prompt** (~1,100 tokens) with a few examples, instead of several thousand. It includes rules for
-  talking with the user, against the habits of small fine-tuned models: answer first and briefly, no restating the
-  user, no filler; read irony and sarcasm as such; ask one question when the request is unclear instead of guessing.
-  It also tells the model to search the web (with an example) when the user mentions something it does not know or
-  that may have changed, instead of guessing.
-- **Date and time on each message** (`[Thu 2026-10-22 14:05] …`): the model knows when it is, and how much time
-  passed between two messages. Added to the message, not to the system prompt, so the server cache is never lost.
-- **The model's own temperature** by default (left to the server and the model's preset); a value can still be set.
-  A forced low temperature (0.2, the old default) made answers flat and loops likelier.
-- **Tools as text tags**, not JSON: `<write path="a.py">…</write>`, `<run>…</run>`.
-  Code does not need escaping. The parser is lenient: aliases (`bash`, `read_file`…),
-  arguments as attributes or child tags, optional quotes, ``` fences removed.
-- **Only 8 tools**: list, read, search, write, edit, run, web_search, fetch (plus `plan`, `agent`, `remember`,
-  `forget`, `recall`).
-- **Project search like a web search** (`<search>keywords</search>`): files ranked by relevance (rare words weigh
-  more, words in the path and definitions that contain them count more, tests after the code), each with its best
-  lines and their numbers, then the agent reads only those lines. Whole words, identifiers split the code way
-  (`loadConfig`, `load_config` → load, config), word roots match; git's file list when there is one (respects
-  .gitignore). The prompt asks to search first instead of reading files one by one. `pattern="regex"` still lists
-  every matching line. About 1 s for 3,000 files, less once cached.
-- **Lenient editing**: `<old>` may have the wrong indentation (re-indented automatically),
-  and on failure the agent gets the closest lines of the file.
-- **Syntax check** after every write (.py, .js, .json).
-- **`<old>` checked while it is written**: as soon as an edit's `<old>` block is closed, it is looked for in the file
-  (as the edit would); not found or found several times, the generation stops there and the model gets the error
-  at once, instead of writing its whole `<new>` first. Tags and Gemma's native calls alike.
-- **Follow a write or an edit live**: while the model writes a file, a card in its answer opens a panel on the right
-  with the content growing; for an edit, the file with the block to replace struck out once found, and the new text
-  under it as it is written.
-- **Guard against rewrites from memory**: `<write>` on an existing file is refused if its content is not
-  visible in the history (read with `<read>` or written by the model, and not removed by a compaction).
-  A large shrink of a file (more than half of its lines) triggers a warning.
-- **Test gate**: the agent cannot finish while code it modified during the turn has not run successfully.
-  If a *test command* is configured, it runs automatically and must pass. Documentation and data/config files
-  (Markdown, text, JSON, YAML, TOML…) do not count: there is nothing to run.
-- **Early stop** of the generation as soon as an action needs a result (no invented results).
-- **Context management**: bounded tool outputs, adjustable `num_ctx` (native Ollama), and **compaction**:
-  as late as possible, when the next call would no longer fit in the window (minimal answer + estimation
-  margin, ~80-84 % of a 16k window), old messages are replaced by a summary (written by the model, validated,
-  with a fallback) plus facts extracted mechanically (modified files, last commands). Compacting rarely but a lot
-  keeps the start of the prompt stable, so the server cache stays usable. Token estimates are calibrated on the
-  real counts returned by the server. The context size actually loaded by the server (LM Studio, llama.cpp server,
-  vLLM) is detected and caps the setting. If the model cannot write the summary, a fallback summary is built
-  (requests, previous summary, last notes) and the reason is shown. The requested answer size adapts to the room
-  left (never past the window); an answer cut by the limit never runs an unfinished action, and if the cut comes
-  from a lack of room, the context is compacted and the step retried.
-- **Context hints, only when they help**: with a message, the files changed in the project since the last answer
-  (not by the agent) and the file open in the viewer (the lines on screen, or the selection); in results, the
-  closest existing paths when one does not exist, and the lines a failed command's output points at. A read or a
-  lookup done again while its result is still in view and nothing changed is not run again: the model is pointed
-  at it. Five steps before the limit, the model is told to finish.
-- **What to keep, before a compaction**: one constrained-JSON call on the cached conversation tells the model which
-  messages are about to leave its view and asks what, in the whole conversation, must not be lost (3 items at
-  most, restatements and banal items rejected). The app writes them where the model says: the conversation's
-  memory, or, for lasting facts about the project, its notes file (AGENTS.md), at the end of the section the model
-  names among the file's headings (a new one if none fits). A doc of the project to update is left to a
-  sub-agent, run before the summary: its task is written while the model still sees the details, and it starts
-  with an empty window, with room to read the file and edit it. Its report is noted in the summary.
-- **Reasoning kept as a short note**: the end of the model's reasoning (~600 characters, whole sentences, each
-  sentence once) is given back in a `<reasoning>` block before its messages, so it does not start over after each
-  tool result. Not the whole reasoning: with Gemma, that made the model produce only invisible tokens. Not a prose
-  line either: an earlier "(My notes: …)" form was copied by the model into its answers. Older conversations are
-  converted when opened (one full prompt read).
-- **Loop detection**: Gemma reopening its reasoning channel (`<|channel>thought`) a third time while reasoning, or a
-  passage repeated three times in a row (in the reasoning or the answer, not inside a file
-  being written) stops the generation; one copy is kept. Without an action, the model is told to act instead of
-  restating its plan (twice, then the turn stops).
-- **Tools declared natively** to the LM Studio models that support it (`tool_use`).
-- **Raw mode for Gemma in LM Studio**: the prompt is formatted with the model's template (SDK) and generated through
-  `/v1/completions`, which returns every token. LM Studio's chat endpoint held back everything after the start of a
-  tool call (sometimes opened inside the reasoning): generation went on with nothing coming out. The reasoning
-  (`<|channel>thought…<channel|>`) is split by the app.
-- **Call at the end of the reasoning, then silence**: if the model ends its reasoning (or its answer) with a complete
-  call and nothing visible comes out for 10 s, the generation is stopped and the call runs. A plan that mentions a
-  command and goes on is not interrupted.
-- **Invisible-output guard**: if the model generates without producing anything visible, the app notices (45 s
-  after the prompt is read) and retries without the reasoning notes.
-- **Server cache preserved**: the start of the prompt never changes from one call to the next (except at
-  compaction), so the server only reads the new tokens. The compaction summary is requested as a continuation of
-  the conversation already in cache (seconds instead of minutes of re-reading on modest hardware).
-- Nudge when the model pastes code instead of writing it to a file.
-- Project notes read from `AGENTS.md` / `PONEY.md` / `CLAUDE.md`. The prompt asks the agent to add there, one short
-  line at a time, what it learns about working on the project and will need again (how to test, conventions, pitfalls,
-  steps the user wants each time); `AGENTS.md` is created if there is none. Not for sub-agents nor outside a project.
+## Models
 
-## Interface
+**Providers** (Réglages › Fournisseurs): where models come from. Each one has a switch, and each of its models too: a
+model switched off leaves the model menu, except for the conversation using it. Servers are added and removed freely.
+The model menu shows Poney's models, then each server's (LM Studio's with its logo), then Claude's and Antigravity's;
+the gear on a section's title opens that provider's card. A conversation keeps its provider and model; if the provider
+is off or gone, the conversation stays readable and sending asks for another model.
 
-- **Steps as a stepper**: reasoning, assessments, compactions and tool calls are rows of one design, an icon then a
-  title (a brain for reasoning; a file's own icon for reading or writing it, as in the attachments). Rows that follow
-  each other are linked from icon to icon. The icon is blue and shimmering while the step runs, yellow while it waits
-  for the user, red when it failed, grey when done; a click on the row opens what it read and wrote
-  (`src/renderer/step-icons.ts`).
+**Poney's engine** runs GGUF models without any other app. `llama-server` (a pinned llama.cpp build, downloaded on
+first use and checked against its digest) runs as a separate process on 127.0.0.1, one per model. Models come from
+`<data>/models` (a button in the provider's settings opens it) and, read only, `~/.lmstudio/models`; a file both can
+run shows under Poney only, and a file added to these folders shows at once. A message loads its model; an idle one
+goes after 15 minutes. The context is set per model (a change reloads at the next message), and the prompt cache
+survives unloading, on disk, up to 10 GB, the unused going first.
+
+**One queue for local calls**: conversations and sub-agents alike go through "Inférences en même temps" (1 by default,
+0 for no limit). Calls for the loaded model go first, past an older one at most 3 times. Memory comes before the
+limit: idle models go, then calls wait. Claude's and Antigravity's models are not counted.
+
+**Claude models**: when `claude` is installed and logged in, its models appear in the model menu. Poney then only
+displays the work of the Claude harness (through the Agent SDK): its own harness is off, apart from the skills, and
+the tool switches give way to the effort and the mode (Auto, Manuel, Plan). When Claude ends its turn to wait for a
+background task, its conversation moves to **En veille** until the task brings it back. Beside the context gauge, the
+session gauge shows how much of the 5-hour session is used; its tooltip gives the date of the next reset. Réglages ›
+Fournisseurs shows each account's session and week. **This uses the machine's own Claude login, for personal use:
+Anthropic does not allow third-party products to offer that login without its approval, so a public release must use
+an API key or get that approval.**
+
+**Antigravity models**: when Google's `agy` is installed and logged in, its models come last in the model menu. As
+with Claude, Poney only displays the work of that harness: each message runs `agy -p … --output-format stream-json`
+in the project, resumed with `--conversation`. The stream carries neither reasoning nor sub-agents, so Poney also
+reads agy's logs (`~/.gemini/antigravity-cli/brain/<conversation>/.system_generated/`) while it runs. The context
+gauge gives the tokens the last call used, the session gauge the quota left of the model's group (read by
+`agy -p /usage`, no model runs). Headless, agy cannot ask for a permission: **Auto** approves everything, **Manuel**
+keeps agy's own rules, **Plan** plans first. `PONEY_AGY` and `PONEY_AGY_BRAIN` name another `agy` and logs folder,
+to try it without an account. Same note as Claude: the machine's own Google login, for personal use
+(`src/agent/antigravity.ts`).
+
+**Prompt reading progress** (LM Studio): percentage and time left before the first token. LM Studio is detected behind
+"OpenAI compatible": the prompt is read through its SDK, which reports progress, then the answer is generated over
+HTTP reusing that cache (the SDK cuts generations after ~5 min). Other servers do not expose this.
+
+## Using the app
+
+### Conversations
+
+- **Sidebar by state**: *Brouillons* (typed, not sent), *Erreur* (a turn ended by an error: red outline, and a red
+  pill counting the messages to read), *Terminé* (answers not read yet), *En veille* (waiting for a background task),
+  *Action demandée* (an approval or a question waiting), *En cours* and *Archivées* (foldable). Each card has its
+  title, project and date, and a pill for what waits (orange for approvals, blue for answers to read). ⇧⌘S folds the
+  sidebars.
+- **Several at once**: switching conversation does not stop the one shown; it goes on in the background and comes
+  back as it is now, at the same reading position. Idle ones stay in memory (8 at most). Generations at the same time
+  share the GPU.
+- **Drafts**: a conversation becomes a draft at the first key typed; a new one takes its title from the text as it is
+  typed. The text is kept when you leave or quit, and hovering a draft's card shows it in a tooltip.
+- **Saved and renamable** (✎ or double-click), saved during a turn too: a crash only loses a few seconds, and an
+  interrupted turn is flagged on reopening. A crashed window reloads by itself; errors go to `logs/main.log`.
+  Right click on a card: mark as read, rename, delete.
 - **Edit a previous message and relaunch** ("✎ Modifier" on hover): the agent goes back to its state before that
-  message, even across a compaction (the replaced history is archived), and what follows is removed. Files already
-  modified by the agent are not restored. When the exact state is gone (old conversations, a resume point lost in a
-  crash), the history is rebuilt from the saved transcript. If the relaunch fails, the editor stays open with the text.
-  With Claude, the session is forked at its last entry before that message (`resumeSessionAt` + `forkSession`: the
-  original session stays, so an earlier rewind still works). agy can neither cut nor fork a conversation: Antigravity
-  starts a new one, whose first message tells the earlier exchanges (`recapOf` in `src/agent/rebuild.ts`: messages,
-  answers, tool calls and their results, without reasoning nor sub-agents); so does Claude when no fork point is known
-  (conversations from before). "Resume from here" on an action stays with Poney's harness.
-- **Resume from here** (on hover over an action): the agent goes back to just after the message that asked for that
-  action, runs it again (with the rest of its batch; results of the batch's earlier actions are kept) and goes on.
-  Useful after a stop or a failure (slow Tor, missing file…). A group of sub-agents restarts as a whole.
-  Works for actions of old conversations too: the state is then rebuilt from the transcript.
-- **Saved, renamable conversations** (✎ or double-click), per project folder
-  (`~/Library/Application Support/poney/conversations/`): they can be reopened after a restart, and the agent
-  resumes with its history. Saved during a turn too (at every answer and action): a crash or a Ctrl-C only loses a few
-  seconds, and a turn that was interrupted is flagged when the conversation is reopened. If the window crashes, it
-  reloads by itself and the agent goes on; errors go to `logs/main.log`.
-- **Quote a passage**: select text in the conversation, a "❝ Citer" button appears; it adds the passage to the
-  input as a quote (`> …`, formulas as their LaTeX source). Quotes show as quotes in the sent message.
-- **Several conversations at once**: switching conversation does not stop the one shown; it goes on in the
-  background (its events are recorded, not drawn). Coming back shows it as it is now, the answer being written
-  included, at the same reading position (or following the end if you were there). Idle conversations stay in
-  memory (8 at most) for a quick return. Generations at the same time share the GPU.
-- **Sidebar by state**: the conversations are sorted into *Terminé* (answers not read yet), *En veille* (Claude waits for a
-  background task), *Action demandée* (waiting for an approval), *En cours* (generating) and *Archivées* (done and read; foldable). Each is a card with its
-  title, project and date, and a pill counting the approvals waiting (orange) or the answers to read (blue). The
-  unread count is saved with the conversation.
-- **Projects**: a picker at the top of the sidebar lists one project's conversations, all of them ("Tous", the
-  default) or those outside projects; a two-finger horizontal swipe goes to the next or previous project (past the ends, it rounds to the other), and dots
-  at the bottom show where you are. A project can have an emoji, an icon in a color (a picker with a search, in its settings) or a small picture: it
-  replaces the folder icon on its cards and its dot. "Ajouter un projet…" in the picker's menu. The button beside
-  the picker opens "Paramètres des projets", one dialog with every project on its left, at the project listed.
-  There projects are put in order by dragging them, which also orders the dots, menus and ⌘1 to ⌘9. A project can be
-  renamed (its folder stays as it is) and hidden with the eye beside it: it leaves the
-  sidebar with its conversations, nothing is removed, and the eye or choosing its folder again brings it back.
-- **Right click on the sidebar** (or on a project's dot, or a conversation's card): for that project, a new
-  conversation (⌘N, or ⌘T), mark its conversations as read (⇧⌘U), its settings (⇧⌘P: emoji or picture,
-  delete the project from the app: its conversations go, its folder and files stay), add a project (⇧⌘O).
-  The shortcuts act on the project listed in the sidebar (Ctrl instead of ⌘ outside macOS). ⌘1 to ⌘9 go to the project at that place among the dots. ⇧⌘E swaps the
-  conversations and the files.
-- **File tree colors**: names and folders take their git state: orange changed, green new, red in conflict.
-- **Git**, the second section of the files' card (selector at the top, icons at the bottom, a two-finger swipe, or ⇧⌘F for the files and ⇧⌘G for Git):
-  "Synchroniser" with what goes up and down (fast-forward only: a diverged branch is refused; a branch without
-  upstream is published; without a remote, the button sets one: an existing repository, whose branch is then followed
-  and to which nothing is sent unless it is empty, or a new one on GitHub, private by default, through `gh` or a token,
-  a GitHub one of Réglages › Dépôts distants (a button opens GitHub's form, filled in), or one given for that time; the address can be changed or
-  removed in the project's settings, once the new one answers), the staged files, the tracked changes, recent commits. A click on a file opens its diff
-  in a side panel. The remote is fetched at most every 5 minutes while this section is shown, or on ↻; through
-  Tor when commands are.
-- **Remote tokens** (Réglages › Dépôts distants): tokens for any service, each for an address (`https://gitlab.com`,
-  `https://github.com/mon-org`), encrypted by the system. Git gets them through a credential helper of its command line for
-  fetch, sync and clone; the most precise address wins. GitHub tokens are checked with GitHub.
-- **Add from a remote repository** (project menus): a URL and a location; the clone goes to a folder named after the
-  repository, shown before it starts, then opens in a new conversation.
-- **Right click on a conversation's card**: mark it as read, rename it, delete it.
-- **Right click on text**: on a selection of the conversation, copy and "Citer dans le message"; in the input (and
-  the other fields), undo, cut, copy, paste, select all, and the spelling checker's suggestions (or "Ajouter au
-  dictionnaire") on a misspelled word.
-- **New conversation** ("＋ Nouvelle conversation", ⌘N or ⌘T): the same page as at launch, with the input in the
-  upper part of the window until the conversation starts, and a picker for the project it will work in. By
-  default: the project listed in the sidebar, else that of the last conversation looked at, else outside projects.
+  message, even across a compaction, and what follows is removed. Files already modified are not restored. Without
+  the exact state (old conversations, a crash), the history is rebuilt from the transcript. With Claude, the session
+  is forked at its last entry before that message; agy cannot fork, so a new conversation starts, told the earlier
+  exchanges (`recapOf` in `src/agent/rebuild.ts`).
+- **Resume from here** (on hover over an action): back to just after the message that asked for it, the action runs
+  again with the rest of its batch, and the agent goes on. A turn ended by an error offers "Reprendre".
+- **Quote a passage**: select text, "❝ Citer" adds it to the input as a quote (formulas as their LaTeX source).
+- **Notifications** when a conversation finishes, fails or asks for something: from the system when Poney is not in
+  front, a tooltip in the window when the conversation is in the background.
+
+### Projects and files
+
+- **Projects**: the picker at the top of the sidebar lists one project's conversations, all of them ("Tous") or those
+  outside projects. A two-finger horizontal swipe goes to the next project, dots at the bottom show where you are,
+  ⌘1 to ⌘9 jump to one. A project can have an emoji, a colored icon or a picture. "Paramètres des projets" (⇧⌘P) puts
+  them in order by dragging, renames them (the folder stays), hides them (nothing removed) or removes them from the
+  app (the folder stays).
+- **Right click on the sidebar**, a dot or a card: new conversation (⌘N or ⌘T), mark as read (⇧⌘U), project settings,
+  add a project (⇧⌘O). The shortcuts act on the project listed (Ctrl outside macOS).
+- **New conversation**: the input in the upper part of the window and a picker for its project (by default the one
+  listed, else that of the last conversation looked at, else outside projects).
 
 ![New conversation page, light theme: the project picker](docs/screenshots/new-conversation-light.png)
 
-- **Conversations outside any project** ("Hors projet"): same tools, but the agent works in a folder of
-  the conversation's own (`~/Library/Application Support/poney/off-project/<id>/`), shown in the file browser.
-  Deleting one deletes its folder; a new one abandoned before its first message leaves nothing behind.
-- **A private folder per conversation**: Poney's models name it `.poney/`, for its notes and
-  scratch files. It lives in `~/Library/Application Support/poney/scratch/<id>/`, outside the project and Git;
-  commands reach it as `.poney/` or `$PONEY_TMP`. It shows first in the file browser once used, and goes
-  with its conversation.
-- **Markdown answers**: full GitHub Markdown (the same engine as the document viewer): italics, bold, quotes (`>`),
-  numbered and nested lists, headings, links (opened in the browser), tables (GitHub style, with alignment), code;
-  a single line break is kept. LaTeX formulas rendered by KaTeX (`$…$`, `\(…\)` inline; `$$…$$`, `\[…\]` as
-  blocks); prices like "$5 and $10" stay text. Raw HTML in an answer is shown as text.
-- **Providers** (Réglages › Fournisseurs): where models come from, each one on or off, the servers added or removed
-  freely (the red bin removes one). Each provider's card has a switch to turn it on or off, and lists its models with a switch each: one switched off leaves the model menu (except for the conversation using it). The model menu shows Poney's own models, then each server's (LM Studio's with its logo), then Claude's; the gear on a section's title opens that provider's card in the settings. A
-  conversation keeps its provider and model; if its provider is off or gone, it stays readable and sending asks for
-  another model.
-- **Poney's engine**: GGUF models run without any other app. `llama-server` (a pinned llama.cpp build, downloaded on
-  first use and checked against its digest) runs as a separate process on 127.0.0.1, per model. Models come from
-  `<data>/models` (a button in the provider's settings opens it) and, read only, `~/.lmstudio/models`; a file both can run shows under Poney only. A file added to these folders shows at once. A message loads
-  its model; an idle one goes after 15 minutes. The context is set per model (a change reloads at the next message)
-  and the prompt cache survives unloading, on disk, up to 10 GB, the unused going first.
-- **Calls to local models** go through one queue ("Inférences en même temps", 0 for no limit), conversations and
-  sub-agents alike, one call at a time. Calls for the loaded model go first, past an older one at most 3 times.
-  Memory comes before the limit: idle models go, then calls wait. Claude's models are not counted.
-- **Claude models**: when `claude` is installed and logged in on the machine, its models appear in the model menu, after the local ones. Poney then only displays the work of the Claude harness (through the Agent SDK): its own harness is off, apart from the skills, and the tool switches give way to the effort and the mode (Auto, Manuel, Plan). Each conversation keeps its model. **This uses the machine's own Claude login, for personal use: Anthropic does not allow third-party products to offer that login without its approval, so a public release must use an API key or get that approval.**
-  When Claude ends its turn to wait for a background task, its conversation moves to **En veille**, with an orange clock, until the task brings it back.
-- **Antigravity models**: when Google's `agy` command line is installed and logged in on the machine, its models come last in the model menu (Réglages › Fournisseurs can turn them off). As with Claude, Poney only displays the work of the Antigravity harness: each message runs `agy -p … --output-format stream-json` in the project, resumed with `--conversation`, and its steps become Poney's cards. The stream carries neither reasoning nor sub-agents, so Poney also reads agy's own logs (`~/.gemini/antigravity-cli/brain/<conversation>/.system_generated/`) while it runs: the reasoning shows in "Réflexion" blocks, and each sub-agent's reasoning and actions go in its card. Under the input, the context gauge gives the tokens the last call used (agy says no window size, and compacts by itself), and the session gauge the quota left of the model's group, read by agy's `-p /usage` (no model runs). To try it without an account, `PONEY_AGY` names another `agy` and `PONEY_AGY_BRAIN` another logs folder. Headless, agy cannot ask for a permission: **Auto** approves everything, **Manuel** keeps agy's own rules (edits in the project, no command without a rule in its settings; what it refused is said under the answer), **Plan** plans first. This uses the machine's own Google login, for personal use (see `src/agent/antigravity.ts`).
-- **Images in answers**: an image the agent shows (`![…](path)`, such as one Antigravity generates) appears in its answer, and a click shows it full size. Its button in the top-right corner saves it (in Downloads by default), and dragging it onto the files panel copies it into the project, or into the folder dropped on. The app reads it (an absolute path, `file://`, or a path in the project; images only, up to 10 MB), never the page; a web address stays a link, and a missing file shows its name.
-- **Skills**: instructions added to a message only when it needs them, so they cost nothing the rest of the time. Attach one with the paperclip ("Un skill…") or with `/` in the input (the command leaves the text, the skill shows as a chip, then as a pill under the message; one typed in full is attached when sent), or let Poney add one when a message contains one of its trigger phrases (it says so under the message; this can be turned off in the settings). Eleven come with the app, in `src/skills/`: one for syntheses, the others adapted for small models from [Matt Pocock](https://github.com/mattpocock/skills), [Anthropic](https://github.com/anthropics/skills) and [Cursor](https://github.com/cursor/plugins). Add your own in `.poney/skills/<name>.md` for a project, or in the app's data folder under `skills/`: a project skill replaces a skill of the same name. `/skill-creator` writes one with you.
-- **Drafts**: text typed but not sent is kept with its conversation when you leave it or quit, even if nothing was sent yet; the conversation waits under "Brouillons", at the top of the sidebar.
-- **Light or dark theme**, or the system's, in the settings (Apparence).
-- **File browser** stacked with the conversations like a deck of two cards (the button at the top right of the card, its edge behind, or a two-finger swipe outside the card in front, brings it to the front; three fingers too on macOS), that updates when the agent
-  writes, and reveals the modified file. Files dragged from the Finder onto it move into the project, or into the folder
-  dropped on (a name already taken gets a number); a file or folder of the tree dragged onto a folder moves into it.
-  Right-click: a new folder, and the project's folder opened in the Finder.
-- **Files attached** to a message: the round paperclip of the input ("Un fichier…"), `@` in the input (the project's
-  files complete as you type, git's list when there is one; the file is attached and `@path` stays in the text, so the
-  request can speak of it; a path typed in full is attached when sent), or files dropped on it from the Finder or the files
-  panel. The message ends with `Skills : /name …` then `Fichiers joints :` and the list (`src/agent/message-parts.ts`,
-  read by the interface too). Images attached show as thumbnails, on a line of their own (above the chips in the
-  input, below the pills in a message). A pasted image becomes a file attached, and so does a pasted text over 4,000 characters or 80 lines. A
-  file of the project is named where it is; one from elsewhere is copied into the conversation's private folder (a
-  link would break when the original moves, and the agent could change the original through it). Each shows as a
-  chip above the text, opened in the viewer by a click. The message ends with their paths, `.poney/…` for the private
-  folder, shown as pills under its text (a click opens the file; the title leaves them out). Claude and Antigravity
-  get the absolute path, the folder being added to what they may read (`additionalDirectories`, `--add-dir`), and
-  their cards name it `.poney/…` again (`src/agent/attached.ts`).
-- **Tool switches** in the input box, as icons (Web, Tor, Sous-agents, Terminal, sans confirmation; green when on,
-  their names in instant tooltips), on one row with the model picker and the send button (`--no-web` /
-  `--no-shell` in the CLI): a disabled tool disappears from the system prompt (shorter prompt) and is refused if
-  the model uses it anyway.
-- **System prompt editable per conversation** ("Paramètres de la conversation" button, "Prompt système" category): see the generated prompt, edit it, and it is
-  saved with the conversation. A "modifié" badge marks a custom prompt.
-- **Steps before and after each answer, per conversation** ("Paramètres de la conversation" button, "Étapes" category): a step to do first (e.g. "check what
-  changed in the project since your last answer") goes with every message; a step to do before finishing (e.g.
-  "document what you did in CHANGELOG.md") is asked once per turn, before the final answer, optionally only when
-  files were changed during the turn. Both show as a line in the conversation; saved with it.
-- **Assessment before acting** (on by default, can be turned off per conversation in the "Étapes" category): before the model
-  may use its tools on a message, a dedicated call (on the cached prompt, JSON-only output when the server supports
-  structured output, temperature 0.1) asks it to list the facts its answer or work will rely on, and to grade each
-  one (known, doubt, unknown) with why: about its knowledge, not about the request (an assessment that only restates
-  the request is not one). A reply that cannot be read or used is asked again, up to 3 times (with a reminder, more room and a little more temperature;
-  the room includes the model's reasoning). If none can be read, the route is "check" all the same: failing the
-  assessment is never a way around it.
-  The app, not the
-  model, picks the route: nothing lacking, act directly; a doubt, check it with one lookup; something unknown, read
-  at least two sources (files, project search, commands, web pages, sub-agents) before concluding. A web search
-  does not count: its snippets are not pages read, and in an update a detail (number, date, name) only a snippet gives
-  stays a doubt until a fetched page confirms it; an answer from the web ends with its sources, the pages opened apart from those only seen in search results. A final answer
-  given before that is refused (once for a doubt, twice for an unknown, then let through), and what is still to
-  check is recalled with each result until it is. Shown under the user message ("🧭 Bilan").
-  Outside information can change it: after a web search, a page or a command with a real output (300 characters or
-  more), the assessment is asked again, about the current task only (a point the results settled moves to "known";
-  something interesting but not needed for the task is left out, not chased). The update replaces the previous
-  assessment and its route counts the sources read from then on. Against detours: at most 3 updates and 3 refused
-  answers per turn, 3 items per list. Shown where it was made ("🧭 Bilan mis à jour").
-  Sub-agents (`<agent>` and plan tasks) do the same on their own task, when their conversation has it on; in a
-  plan, the update names the sub-agent's own task, not the context it was given. Shown in the sub-agent's panel.
-- **Command approval** (unless "sans confirmation" is on): Exécuter, Toujours autoriser, or Refuser, with an
-  optional reason that is passed on to the model, so it can change its approach.
+- **Outside any project** ("Hors projet"): same tools, in a folder of the conversation's own
+  (`<data>/off-project/<id>/`), deleted with it.
+- **A private folder per conversation**, `.poney/` for the model (in `<data>/scratch/<id>/`, outside the project and
+  Git; `$PONEY_TMP` for commands), for its notes and scratch files.
+- **File browser**, stacked with the conversations like a deck of two cards (the button at the top right of the card,
+  its edge behind, a two-finger swipe, or ⇧⌘E). It updates when the agent writes, and colors names by their Git state.
+  Files dragged from the Finder move into the project or the folder dropped on; files of the tree move by dragging.
+  Right click: a new file, a new folder, the folder in the Finder.
+- **Viewer**: syntax highlighting, images, Markdown formatted (with a "Code" button for the source); paths in the
+  agent's actions are clickable. Text files can be edited there and saved.
+- **Git**, the second section of the files card (⇧⌘G, ⇧⌘F back to the files): "Synchroniser" (fast-forward only; a
+  branch without upstream is published; without a remote, the button sets one, an existing repository or a new one on
+  GitHub), staged files, changes, recent commits, a diff per file. The remote is fetched at most every 5 minutes while
+  shown, through Tor when commands are.
+- **Remote tokens** (Réglages › Dépôts distants), one per address, encrypted by the system, given to Git through a
+  credential helper. **Add from a remote repository** clones into a new project.
+
+### The input
+
+- **Attach files**: the paperclip, `@` (the project's files complete as you type; `@path` stays in the text), a drop
+  from the Finder or the files panel, or a paste (images, and texts over 4,000 characters or 80 lines). Images show
+  as thumbnails. A file from outside the project is copied into the private folder.
+- **Skills**: instructions added to a message only when it needs them. Attach one with the paperclip or `/`, or let
+  Poney add one when the message contains a trigger phrase (it says so; can be turned off). Eleven come with the app
+  (`src/skills/`): one for syntheses, the others adapted for small models from
+  [Matt Pocock](https://github.com/mattpocock/skills), [Anthropic](https://github.com/anthropics/skills) and
+  [Cursor](https://github.com/cursor/plugins). Add your own in `.poney/skills/<name>.md` for a project, or in the
+  data folder under `skills/`; `/skill-creator` writes one with you.
+- **Tool switches**, as icons: Web, Tor, Sous-agents, Terminal, sans confirmation. A tool turned off leaves the system
+  prompt and is refused if the model uses it anyway (`--no-web`, `--no-shell` in the CLI).
+- **Context gauge** under the input (the tick marks the compaction threshold); a click compacts. The 🧠 button shows
+  the conversation's memory, where notes can be added or removed.
+
+### While the agent works
+
+- **Steps as a stepper**: reasoning, assessments, compactions and tool calls are rows of one design, an icon then a
+  title, linked from icon to icon. The icon shimmers while the step runs, turns yellow while it waits for you, red
+  when it failed. A click opens what it read and wrote. The app's own warnings (an assessment it could not read, an
+  answer refused) are rows too, under the step they are about. Streamed text, new steps and the sent message fade in.
+- **Scrolling**: the view follows the answer until you scroll up once.
+- **Command approval** (unless "sans confirmation"): Exécuter, Toujours autoriser or Refuser, with an optional reason
+  passed on to the model.
 
 ![A command waiting for approval; the sidebar sorts the conversations by state](docs/screenshots/approval.png)
-- **A turn ended by an error** puts its conversation under "Erreur", with "Reprendre" in the transcript: the conversation goes on from where it stopped.
-- **Plan usage** beside the context gauge with a Claude model: how much of the session (5 hours) is used (the SDK marks this call
-  as experimental; without an answer the gauge does not show). Réglages › Fournisseurs shows each Claude account's
-  session and week, and each Antigravity group's (5 hours, week), with when they start again (read at most once a minute).
-- **Context gauge** under the input (the tick marks the compaction threshold); a click compacts on demand. With a
-  Claude model it shows the API's counts, from the first message on, and the Claude harness compacts by itself.
-  Each sub-agent has its own, on its card and in its panel (kept with its result).
-  Summaries appear in the transcript, expandable.
-- **Prompt reading progress** (LM Studio): percentage and estimated time left in the status bar before the first
-  token. LM Studio is detected automatically behind "OpenAI compatible": the prompt is read through its SDK (which
-  reports progress), then the answer is generated over HTTP reusing that cache. Generation does not go through the
-  SDK, which LM Studio cuts after ~5 min. Other servers do not expose this information.
-- **Stream cut by the server**: what was already written is kept and complete actions run.
-- **Native tool calls understood**: if the model uses its native format (Gemma `<|tool_call>…`, Hermes/Qwen
-  `<tool_call>{json}`, `tool_calls` fields of the OpenAI/Ollama APIs), the call is converted to our tags.
-- **Time and speed**: a timer in the status bar during the answer, then one line under the final answer:
-  total time, tokens and tokens/s over all the model calls (server counts, or estimates marked "≈").
-  Streaming redraws are batched (~10 per second), so long generations keep the window responsive.
-- **Tor (optional)**: web search and page fetching through Tor's SOCKS proxy (`tor` daemon on 9050 or Tor Browser
-  on 9150, detected automatically), names resolved by Tor (`socks5h`), search through DuckDuckGo's .onion service.
-  If Tor cannot be reached, the request is refused, never sent in the clear. Optionally, terminal commands get the
-  proxy variables (works for curl, git, wget… not a general guarantee). The local model server is not affected.
-  Test button (exit IP seen by check.torproject.org); CLI: `--tor`.
-  Live status next to the switch (green connected, orange "connexion 45 %", red stopped or blocked): through Tor's
-  control port (9051 / 9151, cookie authentication) when enabled, otherwise through a test connection at most every
-  30 s.
-- **Sub-agents**: the agent can delegate independent tasks (`<agent title="…">task</agent>`, several in a row, or a
-  `tasks` list in one native call); they run at the same time (2 by default, adjustable), each with its own history,
-  then the agent gets all the reports. No sub-sub-agents. Writing to a file modified by another agent since it was
-  read is refused (it must be read again), and writes to the same file are serialized. Each sub-agent works in its own
-  copy of the project (dependencies linked), merged back by the app when it stops, three ways, file by file (see
-  `src/agent/isolate.ts`): changes on one side are taken, changes in different lines of the same file merged. A deleted
-  file, a file cut to less than half its lines, or changes in the same lines are held for the main agent, told in the
-  sub-agent's result, with the sub-agent's version in `.poney/agents/<id>/`. One card per sub-agent in the
-  transcript (task, live log, report); "Sous-agents" switch.
+
+- **Questions** (`<ask>`): the model can ask a few questions, each with proposed answers and room for your own words;
+  the conversation waits under *Action demandée* like an approval.
+- **Plans and sub-agents**: for a request with several steps, the model writes a plan and each task goes to a
+  sub-agent, in order, `@parallel` tasks at the same time. A sub-agent's card stays compact; a click opens its whole
+  work in a panel on the right.
 
 ![A plan whose first three tasks run at the same time in sub-agents](docs/screenshots/plan.png)
 
-  One GPU: speed is shared; measured with gemma-4 on two modules + tests: 6 min 56 instead of 10 min 41.
-  "Lancer les sous-agents en parallèle" (settings, on by default): off, sub-agents run one at a time (`<agent>` groups
-  and `@parallel` plan tasks alike), and the prompt no longer offers parallel runs; on a modest machine, two
-  generations at once can be much slower than one. A sub-agent's card stays compact (its latest action, then the
-  start of its report); a click opens its whole work (task, live log, report) in a panel on the right. A command
-  waiting for approval opens that panel.
-- **Compaction summaries for conversations too**: about 4% of the window (~490 words for 16k), under the headings
-  Context / Discussion / Work done / Open, with the specifics kept (names, numbers, the user's wording); an earlier
-  summary is carried over, not dropped. The replaced history is always archived.
-- **`<recall>keywords</recall>`**: searches the part of the conversation no longer in view (the archives) and brings
-  back excerpts of the matching messages, in order (accents ignored, quoted phrases kept whole).
-- **Links read automatically**: public web pages linked in a user message (2 at most, not localhost nor the local
-  network, not files to download, not in code or quotes) are read by the app before the model answers, within 15 s,
-  through Tor when it is on, only when Web is on. Given at the end of the message as page content, marked as not
-  being the user's instructions, the beginning of each page only (~1,500 tokens). A line under the message says
-  what was read. Can be switched off in the settings.
-- **Automatic recall**: with each user message, the app searches what was said earlier and is no longer in view (the
-  user's messages and the agent's prose of the archived parts, not tool outputs) for the message's most distinctive
-  words (the rarest in the whole conversation); a passage with several of them (a good share), or a very rare one,
-  is attached to the message (2 at most, ~300 tokens), marked "maybe relevant", unless the same words are together
-  in a message still in view. Shown under the message. (An earlier version ignored every word still present
-  anywhere in view: with a long summary in view, it almost never fired.) The prompt also asks the model to
-  `<recall>` what it does not see, never to make up what was said or decided, with an example; the compaction
-  summary says the older details are not in view.
-- **Chapter index**: each compaction adds a line to the summary (dates from the message stamps, topics written by
-  the model, keywords of that part added when the line is vague), so the model knows what is out of view and what to
-  look for with `<recall>`. 15 lines at most (the oldest merged).
-- **Memory per conversation** (`<remember>` / `<forget>`): the agent notes what must not be lost in a long
-  conversation (goals, decisions, preferences, constraints), at most 20 short notes (~600 tokens). The notes go word
-  for word into compaction summaries, and come back with a user message when their last full view is more than a
-  third of the window behind, so they stay in view without costing room at every message. The 🧠 button under the
-  input shows them; you can add or remove notes (shown to the agent with your next message). Saved with the
-  conversation, restored by rewinds. Lasting instructions in the user's messages ("réponds toujours en anglais",
-  "from now on…", "tutoie-moi", "retiens que…") are noted by the app itself, in the user's words, and shown under
-  the message; when the model notes the same thing in its own words, its note replaces the app's. The prompt has an
-  example of noting a constraint before answering.
-- **Plan** (`<plan>`): for a request with several steps, the model only writes the list of tasks; each task is
-  carried out by a sub-agent, in order (consecutive `@parallel` tasks at the same time), and is done when its
-  sub-agent stops. The model never keeps its list up to date. Each sub-agent gets the request, what the main agent did
-  in the turn before its plan (its steps and their results: those that concern its task kept much longer, the
-  unrelated ones cut or left out first, a cut made in the middle so that a command's error stays; the budget follows
-  the window; every cut step is readable in full with `<read path="@turn/N" start=… end=… />`, as the cut itself
-  says), the plan with its task marked, the
-  reports of the tasks already done, and what the earlier sub-agents actually changed (files written or edited,
-  commands run), with the instruction to do only what is still missing (one may have gone beyond its task). A failed task stops the plan there; the model gets the reports
-  and may write a new plan, which runs only what is left. The plan is shown in the conversation, a click on a task shows the work of its sub-agent; a new message starts
-  without one. Without sub-agents, the plan is a list the model follows itself.
-- **Viewer** with syntax highlighting and image preview; paths in the agent's actions are clickable. Markdown
-  documents open formatted (GitHub Markdown, LaTeX formulas, highlighted code, project images; links to project
-  files open in the viewer, web links in the browser), with a "Code" button to see the source; the choice is
-  remembered. Raw HTML in a document is sanitized.
+- **Markdown answers**: GitHub Markdown, tables, code, LaTeX by KaTeX (`$…$`, `$$…$$`, `\(…\)`, `\[…\]`); raw HTML
+  shows as text. Images the agent shows (`![…](path)`) appear in the answer, can be saved or dragged into the project.
+- **Time and speed** under the final answer: total time, tokens, tokens/s (server counts, or estimates marked "≈").
 
-## Platforms
+### Settings
 
-Developed and tested on macOS. Windows is supported in the code but not tested on a real machine yet: commands run
-in `cmd.exe` (the model is told so), a stopped command kills its whole process tree (`taskkill /T`), files with
-Windows line endings (CRLF) can be edited and keep them, paths are shown with `/`, and the Python syntax check uses
-`py -3` or `python`. Linux should work like macOS.
+- **Apparence**: theme (system, light, dark); the conversations' typeface (Seravek, or the system's, heavier);
+  **Contraste élevé**, for both themes (opaque panes, no grain or glow, stronger secondary text and borders);
+  notifications.
+- **Per conversation** ("Paramètres de la conversation"): the system prompt, generated and editable (a "modifié" badge
+  marks a custom one); a step to do before each message and one before finishing (optionally only when files
+  changed); the assessment, on or off.
+
+## The harness: what is done for small models
+
+### Prompt and tools
+
+- **Short system prompt** (under 2,000 tokens) with a few examples, instead of several thousand: answer first and
+  briefly, read irony as such, ask one question when the request is unclear, search the web for what may have changed.
+  Every token of it is paid at each message, so what the app can do is not in it.
+- **Date and time on each message** (`[Thu 2026-10-22 14:05] …`), not in the system prompt, so the server cache is
+  never lost.
+- **The model's own temperature** by default; a forced low one made answers flat and loops likelier.
+- **Tools as text tags**, not JSON: `<write path="a.py">…</write>`, `<run>…</run>`. Code needs no escaping. The parser
+  is lenient: aliases (`bash`, `read_file`…), arguments as attributes or child tags, optional quotes, fences removed.
+  Native calls are understood too (Gemma `<|tool_call>`, Hermes/Qwen `<tool_call>`, `tool_calls` fields) and declared
+  natively to the LM Studio models that support it.
+- **A few tools**: list, read, search, write, edit, run, web_search, fetch, plus plan, agent, ask, remember, forget and
+  recall.
+- **Project search like a web search** (`<search>keywords</search>`): files ranked by relevance (rare words weigh
+  more, words in paths and definitions count more, tests after the code), each with its best lines, so the agent reads
+  only those. Identifiers are split the code way (`loadConfig` → load, config), roots match, `.gitignore` is respected.
+  `pattern="regex"` lists every matching line. About 1 s for 3,000 files.
+- **Raw mode for Gemma in LM Studio**: the prompt is formatted with the model's template and generated through
+  `/v1/completions`, which returns every token (the chat endpoint held back everything after a tool call started).
+- **Project notes** read from `AGENTS.md` / `PONEY.md` / `CLAUDE.md`; the agent adds there, one short line at a time,
+  what it will need again (created if missing).
+
+### Safeguards on edits
+
+- **Lenient editing**: a wrongly indented `<old>` is re-indented; on failure the agent gets the closest lines.
+- **`<old>` checked while it is written**: not found or ambiguous, the generation stops there and the model gets the
+  error at once, instead of writing its whole `<new>` first.
+- **Syntax check** after every write (.py, .js, .json).
+- **No rewrites from memory**: `<write>` on an existing file is refused unless its content is in view; a large shrink
+  triggers a warning.
+- **Test gate**: the agent cannot finish while code it modified has not run successfully (the configured test command
+  if any). Documentation and data files do not count.
+- **Follow a write live**: a card opens a panel with the file growing; for an edit, the block replaced struck out and
+  the new text under it.
+
+### Assessment before acting
+
+On by default, per conversation. Before the model may use its tools, one call on the cached prompt (JSON only when the
+server supports it) asks it to list the facts its answer will rely on, graded known, doubt or unknown. The app, not the
+model, picks the route: nothing lacking, act; a doubt, check it with one lookup; something unknown, read at least two
+sources first. A web search does not count as a source, only pages read. A final answer given too early is refused
+(once for a doubt, twice for an unknown), and what is left to check is recalled with each result. Pages, commands
+with real output and searches update the assessment, at most 3 times a turn. A reply that cannot be read is asked
+again up to 3 times; failing still means "check". Sub-agents assess their own task.
+
+### Context and memory
+
+- **Compaction as late as possible**, when the next call would no longer fit (~80-84 % of a 16k window): old messages
+  are replaced by a summary (Context / Discussion / Work done / Open, ~4 % of the window, written as a continuation of
+  the cached conversation) and facts extracted mechanically. Rare compactions keep the start of the prompt stable, so
+  the server cache stays usable. The replaced history is archived; a fallback summary is built if the model fails.
+- **Calibrated estimates**: token counts are calibrated on the server's real ones, and the context size actually loaded
+  by the server caps the setting. The answer size adapts to the room left; an answer cut short never runs an
+  unfinished action.
+- **What to keep, before a compaction**: one constrained call asks what must not be lost (3 items at most). The app
+  writes it to the conversation's memory or to the project's notes; a doc to update is left to a sub-agent that starts
+  with an empty window.
+- **Memory per conversation** (`<remember>`, `<forget>`): up to 20 short notes, copied into summaries and brought back
+  when they drift out of view. Lasting instructions in your messages ("tutoie-moi", "from now on…") are noted by the
+  app itself.
+- **Recall**: `<recall>keywords</recall>` searches the archived part; with each message, the app also attaches up to
+  2 earlier passages that share its rarest words. A chapter index in the summary says what is out of view.
+- **Context hints, only when they help**: files changed in the project since the last answer, the file open in the
+  viewer, the closest paths when one does not exist, the lines a failed command points at. A read repeated while its
+  result is in view is not run again.
+- **Reasoning kept as a short note**: the end of the model's reasoning (~600 characters) comes back in a `<reasoning>`
+  block, so it does not start over after each tool result.
+- **Links read automatically**: up to 2 public pages linked in a message are read before the model answers (15 s, the
+  start of each page, marked as not being instructions). Can be turned off.
+
+### Generation guards
+
+- **Early stop** as soon as an action needs a result: no invented results.
+- **Loops**: a passage repeated three times, or Gemma reopening its reasoning channel a third time, stops the
+  generation. Without an action, the model is told to act instead of restating its plan.
+- **A call at the end of the reasoning, then silence** for 10 s: the call runs.
+- **Invisible output**: 45 s of generation with nothing visible, and the app retries without the reasoning notes.
+- **Stream cut by the server**: what was written is kept and complete actions run.
+
+### Sub-agents and plans
+
+- **Sub-agents** (`<agent title="…">task</agent>`, or a list in one native call) work in their own copy of the
+  project (dependencies linked), merged back by the app three ways, file by file (`src/agent/isolate.ts`). Conflicts,
+  deletions and large cuts are held for the main agent, with the sub-agent's version in `.poney/agents/<id>/`. No
+  sub-sub-agents. They run at the same time when "Inférences en même temps" allows it; at 1, one at a time, and the
+  prompt stops offering parallel runs.
+- **Plans** (`<plan>`): the model only writes the tasks; each goes to a sub-agent, which gets the request, the turn
+  so far (steps that concern its task kept longer, cut ones readable with `<read path="@turn/N" />`), the plan, the
+  reports and changes of earlier tasks. A failed task stops the plan; the model may write a new one for what is left.
+  Without sub-agents, the plan is a list the model follows itself.
+
+## Command line
+
+`src/cli.ts` runs the harness without the app (`node src/cli.ts --help` lists everything). It can also let another
+program use the engine, without touching the app's data:
+
+```bash
+node src/cli.ts engine-serve --model ID --num-ctx 16384 --cache-dir DIR --engine-dir DIR   # prints {baseUrl, apiKey, pid, numCtx, memory, build}
+node src/cli.ts --provider poney --engine-url URL --engine-key-file FILE --json --yes "task"
+node src/cli.ts models --json --models-dir DIR
+node src/cli.ts version --json     # {commit, dirty, engineBuild, systemPromptHash}
+```
+
+- **`engine-serve`** keeps a model loaded until SIGTERM. `--engine-dir` is an installed engine, read only;
+  `--max-inferences` sets its slots. Do not point `--engine-dir` at the app's own folder while the app may start.
+- **`--provider poney`** goes through the same calls as the app. The key is read from a file and stays out of the
+  environment, which commands inherit.
+- **`--settings FILE`** applies `config` and `modelContexts` as the app does, read only; explicit options win.
+- **`--script FILE.json`** sends a list of messages in one conversation, stopping at the first turn that does not
+  finish.
+- **`--json`** writes every event as one line, sub-agents included. `assistant_end` gains `rawText` (the output before
+  parsing) and `action_start` gains `calledAs` (the name as written, or `gemma:`, `hermes:`, `tool_calls:`).
+- **Exit codes**: 0 finished, 2 `--max-steps` reached, 3 model or server error, 130 stopped, 1 wrong usage. Without a
+  terminal and without `--yes`, commands are refused.
+
+## Development
+
+Strict TypeScript, ES modules, no bundler: `tsc` builds `src/` to `dist/`, which Electron runs. Node runs the `.ts`
+files directly for the tests, the CLI and the scripts (erasable syntax only). `any` is forbidden in every form; data
+from outside is `unknown`, narrowed with `src/unknown.ts`. `AGENTS.md` has the rules.
+
+```bash
+npm run build        # dist/
+npm run typecheck    # src/, test/ and scripts/
+npm run lint         # fails on any `any`
+npm test             # all the tests, with fake model servers: no model needed
+```
+
+Never try the app on real data: start a separate instance with its own data folder, and a debugging port to drive it:
+
+```bash
+npm run build && PONEY_DATA=/tmp/poney-test npx electron . --remote-debugging-port=9335
+```
+
+Layout:
+
+- `src/agent/`: the harness, without UI. `protocol.ts` (system prompt, tool tags), `agent.ts` (the loop), `context.ts`
+  (compaction), `triage.ts` (assessment), `tools.ts`, `llm.ts`, `isolate.ts` (sub-agents' copies), `claude.ts` and
+  `antigravity.ts` (the other harnesses), `web.ts`, `tor.ts`.
+- `src/main.ts`, `src/preload.cts`, `src/ipc.ts` (the IPC calls, typed), `src/renderer/`: the Electron app.
+- `src/conversations.ts`, `src/files.ts`, `src/git.ts`, `src/providers.ts`: storage, files for the viewer, Git,
+  providers.
+- `src/engine/`: Poney's engine: `install.ts` (the pinned llama-server), `models.ts` and `gguf.ts`, `gate.ts` (the
+  queue), `engine.ts` (processes, memory, prompt cache).
+- `src/skills/`: the built-in skills. `src/cli.ts`: the command line.
+- `scripts/`: `build.ts`, `brand-electron.ts` (macOS: names the development bundle `Poney.app`, with its icon),
+  `compare-engine.ts` (the engine against LM Studio), `after-pack.ts` (packaging).
+- `docs/instances.md`: where Poney instances talking to each other would fit. `assets/`: the icon.
 
 ## Releases
 
@@ -358,26 +338,22 @@ git tag v0.2.0
 git push origin v0.2.0
 ```
 
-The tag is a version (`v` + semver): it becomes the app's version and the file names, and a tag with a `-`
-(`v0.2.0-beta.1`) makes a prerelease. The workflow builds macOS arm64 and x64 (`.dmg`, `.zip`), Windows x64 (NSIS
-installer `.exe`) and Linux x64 (`.AppImage`). If a build fails, the others still finish, but nothing is published.
-Locally, `npm run dist` packages for the current system into `release/`, and `npx electron-builder --mac --dir`
-gives just the `.app`. The configuration is the `build` field of `package.json`.
+The tag (`v` + semver) becomes the app's version; one with a `-` (`v0.2.0-beta.1`) makes a prerelease. The workflow
+builds macOS arm64 and x64 (`.dmg`, `.zip`), Windows x64 (NSIS `.exe`) and Linux x64 (`.AppImage`); if one fails,
+nothing is published. Locally, `npm run dist` packages for the current system into `release/`, and
+`npx electron-builder --mac --dir` gives just the `.app`. The configuration is the `build` field of `package.json`.
 
-What a release does not contain:
+Not in a release:
 
-- **The engine.** llama-server is fetched on first use and checked against the pinned digest (`src/engine/install.ts`),
-  and only for macOS arm64 so far. On the other builds, the Poney models are unavailable, and providers (Ollama,
-  LM Studio, llama.cpp server…) still work.
-- **Claude.** The Agent SDK's own `claude` binary (about 250 MB) is left out. Claude models use the `claude` installed
-  on the machine, as in development. They use that machine's own Claude login, for personal use only. A public release
-  must switch to an API key or get Anthropic's approval first.
+- **The engine**: llama-server is fetched on first use and checked against its pinned digest
+  (`src/engine/install.ts`), for macOS arm64 only so far. Elsewhere, servers still work.
+- **Claude**: the Agent SDK's own binary (about 250 MB) is left out; the `claude` installed on the machine is used,
+  with its own login, for personal use only.
 
-**Signing.** Without secrets, the builds are unsigned. On macOS they are signed ad hoc (`scripts/after-pack.ts`): Apple
-Silicon refuses an app whose signature does not match. A downloaded build is then blocked by Gatekeeper. To open it, allow
-it in System Settings › Privacy & Security after the first try, or run `xattr -dr com.apple.quarantine /Applications/Poney.app`. Windows SmartScreen
-warns before the first run. Signing turns on when these repository secrets exist (Settings › Secrets and variables ›
-Actions):
+**Signing.** Without secrets, builds are unsigned (ad hoc on macOS, `scripts/after-pack.ts`, since Apple Silicon
+refuses a mismatched signature). Gatekeeper then blocks a downloaded build: allow it in System Settings › Privacy &
+Security, or run `xattr -dr com.apple.quarantine /Applications/Poney.app`. SmartScreen warns on Windows. Signing turns
+on with these repository secrets:
 
 | Secret | For |
 |---|---|
@@ -385,68 +361,24 @@ Actions):
 | `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` | notarization, with the macOS certificate |
 | `WIN_CSC_LINK`, `WIN_CSC_KEY_PASSWORD` | Windows code-signing certificate (`.pfx`, base64) and its password |
 
-## Driving Poney from a program
+## Platforms, Bun and Tor
 
-`src/cli.ts` lets another program run the engine and the harness, as the app does, without touching the app's data
-(`node src/cli.ts --help` lists everything):
+**Platforms.** Developed and tested on macOS. Windows is supported in the code but not tested on a real machine yet:
+commands run in `cmd.exe` (the model is told so), a stopped command kills its process tree, CRLF files keep their line
+endings, and the Python syntax check uses `py -3` or `python`. Linux should work like macOS.
 
-```bash
-node src/cli.ts engine-serve --model ID --num-ctx 16384 --cache-dir DIR --engine-dir DIR   # prints {baseUrl, apiKey, pid, numCtx, memory, build}
-node src/cli.ts --provider poney --engine-url URL --engine-key-file FILE --json --yes "task"
-node src/cli.ts models --json --models-dir DIR
-node src/cli.ts version --json     # {commit, dirty, engineBuild, systemPromptHash}
-```
+**Bun.** `bun install`, `bun start` and `bun run test` work (the tests run with Node, and the app always runs in
+Electron). `bun test` only partly emulates `node:test`. `bun src/cli.ts` works, but refuses Tor: Bun's `node:http`
+ignores the SOCKS agent, so requests would go out in the clear.
 
-- **`engine-serve`** keeps a model loaded until SIGTERM. `--engine-dir` is an installed engine, used read only (nothing
-  is downloaded); `--models-dir` defaults to the app's folders, read only. `--max-inferences` sets its slots.
-  Do not point `--engine-dir` at the app's own folder while the app may start: at launch it kills whatever names that folder.
-- **`--provider poney`** goes through the same calls as the app (template and path chosen from the served model's
-  architecture, read from its file; the app's limit of calls). The window is the engine's, or smaller if asked. The key
-  is read from a file and stays out of the environment, which commands inherit.
-- **`--settings FILE`** applies `config` and `modelContexts` as the app does, read only. Explicit options win.
-- **`--script FILE.json`** sends a list of messages in one conversation, and stops at the first turn that does not finish.
-- **`--json`** writes every event as one line, sub-agents included (`agentId`; their `turn_start` and `turn_end` too).
-  `assistant_end` gains `rawText`, the output before parsing (with a raw completion, its channel markers and reasoning),
-  and `action_start` gains `calledAs`: the name for a tag (`read_file` for an alias), else `gemma:name`, `hermes:name` or
-  `tool_calls:name`. Actions run by the app itself have none. Only the command line asks for these two fields: the
-  app's transcripts stay as they were.
-- **Exit codes**: 0 turn finished, 2 `--max-steps` reached, 3 model or server error (a loop or silence included),
-  130 stopped, 1 wrong usage. Without a terminal on stdin and without `--yes`, commands are refused.
+**Tor** (optional, off by default): web search and fetching through Tor's SOCKS proxy (`tor` on 9050 or Tor Browser on
+9150, detected), names resolved by Tor, search through DuckDuckGo's .onion service. If Tor cannot be reached, requests
+are refused, never sent in the clear. Commands can get the proxy variables too (curl, git, wget…, not a guarantee). A
+dot beside the switch shows the state, through Tor's control port when enabled; a button tests the exit IP. CLI:
+`--tor`.
 
-## Bun
-
-`bun install`, `bun start` and `bun run test` work (the tests then run with Node). The app itself always runs in
-Electron, so its runtime is Node whatever starts it. Two limits when Bun is the runtime:
-
-- `bun test` (Bun's own test runner) only partly emulates `node:test`: use `bun run test`.
-- `bun src/cli.ts` works, but **Tor is refused** under Bun: its `node:http` ignores the SOCKS agent, so requests
-  would go out in the clear. Use `node src/cli.ts --tor` for Tor from the command line.
-
-## Without Tor
-
-Tor is off by default and optional: without it, web search and fetching go directly to the sites. If the Tor switch
-is turned on while Tor is not running, web requests are refused with an explanation (never sent in the clear), and
-the status dot is red.
-
-## Layout
-
-- `src/agent/` — core, independent of the UI (loop, protocol, tools, LLM client, web, Tor)
-- `src/main.ts`, `src/preload.cts`, `src/renderer/` — Electron app
-- `src/conversations.ts`, `src/files.ts` — conversation storage, file access for the viewer
-- `src/cli.ts` — command-line runner
-- `src/git.ts` — Git for the sidebar: status, diff, fetch, sync
-- `src/providers.ts` — the list of providers, and what a conversation's model calls
-- `src/engine/` — Poney's engine: `install.ts` (the pinned llama-server), `models.ts` and `gguf.ts` (the models here), `gate.ts` (the queue), `engine.ts` (processes, memory, prompt cache)
-- `scripts/compare-engine.ts` — compares the engine with LM Studio on the same prompts
-- `docs/instances.md` — where Poney instances talking to each other would fit
-- `scripts/brand-electron.ts` — macOS, development: renames the Electron bundle to `Poney.app` and gives it the app's icon, so the Dock shows them (run by `npm start`)
-- `scripts/after-pack.ts`, `.github/workflows/release.yml` — packaging and releases (see Releases)
-- `assets/` — app icon (`icon.svg` source; `icon.png` for the macOS Dock, `icon.icns` for the bundle, `icon-square.png` for the Windows/Linux taskbar)
-
-## Tor on a network that blocks Tor
-
-If the `tor` service stays stuck at 10 % ("Connecting to a relay"), the network blocks Tor relays: you need
-bridges. With Tor Browser installed, its transports and built-in bridges can be reused:
+If `tor` stays stuck at 10 % ("Connecting to a relay"), the network blocks relays and you need bridges. With Tor
+Browser installed, its transports can be reused:
 
 ```bash
 brew install tor
@@ -454,7 +386,7 @@ mkdir -p /opt/homebrew/etc/tor/pt
 ln -sf "/Applications/Tor Browser.app/Contents/MacOS/Tor/PluggableTransports/lyrebird" /opt/homebrew/etc/tor/pt/lyrebird
 ```
 
-Then, in `/opt/homebrew/etc/tor/torrc`: `ControlPort 127.0.0.1:9051` and `CookieAuthentication 1` (for the
-connection status in the app), `UseBridges 1`, the `ClientTransportPlugin … exec
-/opt/homebrew/etc/tor/pt/lyrebird` lines and the `Bridge …` lines (snowflake, obfs4) from Tor Browser
-(`chrome/toolkit/content/global/pt_config.json` inside `Contents/Resources/omni.ja`), then `brew services restart tor`.
+Then, in `/opt/homebrew/etc/tor/torrc`: `ControlPort 127.0.0.1:9051` and `CookieAuthentication 1` (for the status in
+the app), `UseBridges 1`, the `ClientTransportPlugin … exec /opt/homebrew/etc/tor/pt/lyrebird` lines and the
+`Bridge …` lines (snowflake, obfs4) from Tor Browser (`chrome/toolkit/content/global/pt_config.json` inside
+`Contents/Resources/omni.ja`), then `brew services restart tor`.
